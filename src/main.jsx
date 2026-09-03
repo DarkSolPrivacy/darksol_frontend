@@ -48,8 +48,8 @@ const SUB_SCORE_LABELS = {
 }
 const WINDOW_LABELS = { '1H': '5 minute units', '6H': '15 minute units', '1D': '1 hour units', '30D': '1 day units', '90D': '1 day units', '1Y': '2 week units' }
 const FLOW_TYPES = [
-  ['deposits', 'Deposits', '#b8ff39', 'Deposit'], ['withdrawals', 'Withdrawals', '#ff8066', 'Withdraw'],
-  ['swapIn', 'Swap in', '#54d6ff', 'SwapIn'], ['swapOut', 'Swap out', '#d698ff', 'SwapOut'],
+  ['deposits', 'Deposits', '#F0F0F0', 'Deposit', undefined], ['withdrawals', 'Withdrawals', '#3E3E3E', 'Withdraw', '8 4'],
+  ['swapIn', 'Swap in', '#A0A0A0', 'SwapIn', '2 3'], ['swapOut', 'Swap out', '#666666', 'SwapOut', '12 5 2 5'],
 ]
 const compact = (number, max = 2) => Intl.NumberFormat('en-US', { notation: Math.abs(number || 0) >= 10000 ? 'compact' : 'standard', maximumFractionDigits: max }).format(number || 0)
 const money = (number) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: Math.abs(number || 0) >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(number || 0)
@@ -220,6 +220,21 @@ function ProtocolLogo({ protocol, name }) {
   return logo
     ? <img className="protocolLogo" src={logo.src} alt={name} title={name} />
     : <span className="protocolLogo fallback" role="img" aria-label={name} title={name}>{String(name || '?').slice(0, 1)}</span>
+}
+
+function EclipseLogo() {
+  return <div className="brandLockup" aria-label="DarkSol">
+    <svg className="eclipseMark" viewBox="0 0 48 48" aria-hidden="true">
+      <defs><radialGradient id="eclipseCorona"><stop offset="52%" stopColor="#0A0A0A" /><stop offset="66%" stopColor="#E8D5B0" stopOpacity=".95" /><stop offset="78%" stopColor="#E8D5B0" stopOpacity=".16" /><stop offset="100%" stopColor="#E8D5B0" stopOpacity="0" /></radialGradient></defs>
+      <circle cx="24" cy="24" r="22" fill="url(#eclipseCorona)" />
+      <circle cx="24" cy="24" r="14.5" fill="#080808" stroke="#F0F0F0" strokeWidth=".8" />
+    </svg>
+    <span>DARKSOL<small>PRIVATE ANALYTICS</small></span>
+  </div>
+}
+
+function Sidebar({ open, view, onToggle, onHome, onAnalytics }) {
+  return <aside><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className="analyticsNav" href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><span className="systemStatus"><i /> SYSTEM OPERATIONAL</span><p>DarkSol intelligence layer</p><code>v1.0 / MAINNET</code></div></aside>
 }
 
 function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selected, suggested, onSelect, onOpenProtocol }) {
@@ -1058,14 +1073,14 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <section className="panel chartPanel">
       <div className="panelHead"><div><p>EXTERNAL FLOW</p><h2>{token} pool movements</h2></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div><div className="ranges">{['1Y','90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div></div>
       <div className="flowSummary">{FLOW_TYPES.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[range]}</small></div>
-      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#213128" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#718078', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' || range === '1Y' ? 4 : 3} /><YAxis axisLine={false} tickLine={false} tick={{ fill:'#718078', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix]) => <Area key={key} type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} fill="transparent" strokeWidth={2} />)}<Line type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="#e7eee9" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
+      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' || range === '1Y' ? 4 : 3} /><YAxis axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 2.4 : 1.8} />)}<Line type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="#E8D5B0" strokeWidth={2.75} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
 
     <div className="sectionTitle activityTitle"><div><p className="eyebrow">ACTIVITY</p><h2>Behavior inside this window</h2></div><span>{analytics.flowMethod}</span></div>
     <section className="activityMetrics"><Metric label="TX COUNT" value={compact(activity.txCount, 0)} /><Metric label="UNIQUE AMOUNTS" value={compact(activity.uniqueAmounts, 0)} /><Metric label="1H RECENT VOLUME" value={formatMetricMoney(activity.recentVolume?.oneHourUsd)} /><Metric label="24H RECENT VOLUME" value={formatMetricMoney(activity.recentVolume?.twentyFourHoursUsd)} /></section>
     <div className="analyticsRow">
-      <section className="panel distribution"><div className="panelHead"><div><p>AMOUNT DISTRIBUTION</p><h2>External flows by USD size</h2></div></div>{activity.usdValuationComplete === false ? <div className="empty smallEmpty">Stored USD prices are unavailable for part of this window.</div> : <div className="smallChart"><ResponsiveContainer><BarChart data={activity.amountDistribution}><CartesianGrid vertical={false} stroke="#213128" /><XAxis dataKey="label" tick={{ fill:'#718078', fontSize:9 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill:'#718078', fontSize:9 }} axisLine={false} tickLine={false} /><Bar dataKey="count" fill="#b8ff39" radius={[3,3,0,0]} /></BarChart></ResponsiveContainer></div>}</section>
-      <section className="panel distribution"><div className="panelHead"><div><p>TIME DISTRIBUTION</p><h2>Transactions by UTC hour</h2></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={activity.timeDistribution}><XAxis dataKey="hour" tick={{ fill:'#718078', fontSize:9 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" fill="#54d6ff" /></BarChart></ResponsiveContainer></div></section>
+      <section className="panel distribution"><div className="panelHead"><div><p>AMOUNT DISTRIBUTION</p><h2>External flows by USD size</h2></div></div>{activity.usdValuationComplete === false ? <div className="empty smallEmpty">Stored USD prices are unavailable for part of this window.</div> : <div className="smallChart"><ResponsiveContainer><BarChart data={activity.amountDistribution}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="label" tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} /><Bar dataKey="count" fill="#E8D5B0" radius={[1,1,0,0]} /></BarChart></ResponsiveContainer></div>}</section>
+      <section className="panel distribution"><div className="panelHead"><div><p>TIME DISTRIBUTION</p><h2>Transactions by UTC hour</h2></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={activity.timeDistribution}><XAxis dataKey="hour" tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" fill="#8A8A8A" /></BarChart></ResponsiveContainer></div></section>
     </div>
 
     <section className="panel recent"><div className="panelHead"><div><p>RECENT ACTIVITY</p><h2>Latest external flows</h2></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>TIME</span><span>PARTICIPANT</span><span>TYPE</span><span>AMOUNT</span><span>TRANSACTION</span></div>{!analytics.recent.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{analytics.recent.slice(0, 7).map((flow) => <div className="tr" key={flow.id}><span><Clock3 />{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{compact(flow.amount, flow.asset === 'SOL' ? 4 : 2)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div></section>
@@ -1091,7 +1106,7 @@ function App() {
   function openHome(event) { event.preventDefault(); navigate('/') }
   function openAnalyticsPage(event) { event.preventDefault(); openAnalytics(protocol) }
   if (view === 'analytics') return <div className="analyticsApp"><main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}`}><aside><div className="sideTop"><div className="brand"><div className="mark">D</div><span>DARKSOL<small>PRIVATE ROUTING</small></span></div><button className="sidebarToggle" type="button" aria-label={sidebarOpen ? 'Hide menu' : 'Show menu'} onClick={() => setSidebarOpen(!sidebarOpen)}><Menu /></button></div><nav><a className="active" href="/" onClick={openHome}><Home /><span>Home</span></a><a className="externalNav" href="/analytics" onClick={openAnalyticsPage}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav></aside><main><PrivacyHome /></main></div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}`}><Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onAnalytics={openAnalyticsPage} /><main><PrivacyHome /></main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
