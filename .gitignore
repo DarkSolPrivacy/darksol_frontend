@@ -1,0 +1,32 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+*.log
+npm-debug.log*
+
+# Local configuration and provider credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime state, databases, and test wallets
+data/
+test-wallets/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local tooling and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Separate sibling project; never include it in this repository
+qrc-crypto/

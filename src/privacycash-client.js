@@ -1,0 +1,100 @@
+import { Connection, PublicKey } from '@solana/web3.js'
+
+const MINTS = Object.freeze({
+  USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+})
+const SIGN_IN_MESSAGE = new TextEncoder().encode('Privacy Money account sign in')
+const CIRCUIT_BASE_PATH = '/circuit2/transaction2'
+
+function signatureBytes(value) {
+  const signature = value?.signature ?? value
+  if (!(signature instanceof Uint8Array)) throw new Error('Wallet returned an invalid message signature')
+  return signature
+}
+
+function encodeSignature(bytes) {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function decodeSignature(value) {
+  const binary = atob(value)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+async function encryptionForWallet(provider, publicKey, EncryptionService) {
+  if (typeof provider.signMessage !== 'function') throw new Error('This wallet does not support message signing')
+  const cacheKey = `privacycash-signature-${publicKey.toBase58()}`
+  let signature
+  const cached = localStorage.getItem(cacheKey)
+  if (cached) {
+    try { signature = decodeSignature(cached) } catch { localStorage.removeItem(cacheKey) }
+  }
+  if (!signature) {
+    signature = signatureBytes(await provider.signMessage(SIGN_IN_MESSAGE, 'utf8'))
+    if (String(provider.publicKey) !== publicKey.toBase58()) throw new Error('Wallet account changed while signing')
+    localStorage.setItem(cacheKey, encodeSignature(signature))
+  }
+  const encryptionService = new EncryptionService()
+  encryptionService.deriveEncryptionKeyFromSignature(signature)
+  return encryptionService
+}
+
+async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits) {
+  if (asset === 'SOL') {
+    const balance = BigInt(await connection.getBalance(publicKey, 'confirmed'))
+    if (balance < totalBaseUnits) throw new Error('Not enough SOL in the connected wallet')
+    return
+  }
+  const mintAddress = MINTS[asset]
+  if (!mintAddress) throw new Error('Unsupported asset')
+  const accounts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(mintAddress) }, 'confirmed')
+  const balance = accounts.value.reduce((sum, account) => {
+    const raw = account.account.data.parsed?.info?.tokenAmount?.amount
+    return sum + (typeof raw === 'string' ? BigInt(raw) : 0n)
+  }, 0n)
+  if (balance < totalBaseUnits) throw new Error(`Not enough ${asset} in the connected wallet`)
+  if (await connection.getBalance(publicKey, 'confirmed') === 0) throw new Error('A small SOL balance is required for network fees')
+}
+
+export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, onStatus = () => {} }) {
+  if (!provider?.publicKey || typeof provider.signTransaction !== 'function') throw new Error('Connect a compatible Solana wallet')
+  const publicKey = new PublicKey(String(provider.publicKey))
+  const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString()
+  const connection = new Connection(rpcUrl, 'confirmed')
+  onStatus('Checking balance…')
+  await assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
+  onStatus('Preparing privacy tools…')
+  const [{ WasmFactory }, privacyCash] = await Promise.all([
+    import('@lightprotocol/hasher.rs'),
+    import('privacycash/utils'),
+  ])
+  const lightWasm = await WasmFactory.getInstance()
+  const encryptionService = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
+  const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
+  const transactionSigner = (transaction) => provider.signTransaction(transaction)
+
+  onStatus('Approve deposit in your wallet…')
+  const deposit = asset === 'SOL'
+    ? await privacyCash.deposit({ ...common, amount_in_lamports: Number(totalBaseUnits), transactionSigner })
+    : await privacyCash.depositSPL({ ...common, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(totalBaseUnits), transactionSigner })
+
+  const receipt = { provider: 'privacycash', asset, depositSignature: deposit.tx, withdrawals: [] }
+  try {
+    for (let index = 0; index < recipients.length; index += 1) {
+      const recipient = recipients[index]
+      onStatus(`Sending ${index + 1} of ${recipients.length}…`)
+      const result = asset === 'SOL'
+        ? await privacyCash.withdraw({ ...common, recipient: recipient.publicKey, amount_in_lamports: Number(recipient.baseUnits) })
+        : await privacyCash.withdrawSPL({ ...common, recipient: recipient.publicKey, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(recipient.baseUnits) })
+      receipt.withdrawals.push(result)
+    }
+  } catch (error) {
+    const partialError = new Error(`Deposit succeeded, but withdrawal ${receipt.withdrawals.length + 1} failed: ${error instanceof Error ? error.message : String(error)}`)
+    partialError.receipt = receipt
+    throw partialError
+  }
+  return receipt
+}
