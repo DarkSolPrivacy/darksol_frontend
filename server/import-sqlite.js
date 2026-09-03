@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { db, skipPayloads } from './db.js'
+import { addFlowBaseline, db } from './db.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -13,29 +13,20 @@ export function localDatabasePath() {
   return resolve(root, process.env.DATABASE_PATH || 'data/cloak-analytics.sqlite')
 }
 
-// Ordered parent-first: pool_flows and deposits carry a foreign key onto
-// source_transactions.
+// Only the tables the Postgres schema still has. source_transactions and
+// deposits are deliberately absent: neither has a reader, and every amount they
+// held is already decoded into pool_flows.
 const TABLES = [
-  {
-    name: 'source_transactions',
-    conflict: ['signature'],
-    columns: ['signature', 'slot', 'block_time', 'status', 'payload_json', 'protocol', 'indexed_at'],
-    chunk: 200,
-  },
   {
     name: 'pool_flows',
     conflict: ['id'],
-    columns: ['id', 'signature', 'instruction_index', 'block_time', 'participant', 'direction', 'asset', 'amount_raw', 'decimals', 'amount', 'protocol', 'flow_type', 'counter_asset', 'linked_flow_id', 'indexed_at'],
-  },
-  {
-    name: 'deposits',
-    conflict: ['id'],
-    columns: ['id', 'signature', 'instruction_index', 'block_time', 'depositor', 'asset', 'amount_raw', 'decimals', 'amount', 'indexed_at'],
+    columns: ['id', 'signature', 'block_time', 'participant', 'direction', 'asset', 'amount_raw', 'amount', 'protocol', 'flow_type', 'counter_asset', 'linked_flow_id'],
+    retained: true,
   },
   {
     name: 'pool_snapshots',
     conflict: ['protocol', 'asset', 'block_time'],
-    columns: ['protocol', 'asset', 'block_time', 'amount_raw', 'decimals', 'amount', 'indexed_at'],
+    columns: ['protocol', 'asset', 'block_time', 'amount'],
   },
   {
     name: 'token_prices',
@@ -45,13 +36,14 @@ const TABLES = [
   {
     name: 'sync_state',
     conflict: ['source'],
-    columns: ['source', 'last_block_time', 'last_signature', 'backfilled_from', 'synced_through', 'history_complete', 'backfill_cursor', 'backfill_upper_bound', 'incremental_cursor', 'incremental_from', 'incremental_to', 'chain_cursor', 'source_identity', 'updated_at'],
+    columns: ['source', 'backfilled_from', 'synced_through', 'history_complete', 'backfill_cursor', 'backfill_upper_bound', 'incremental_cursor', 'incremental_from', 'incremental_to', 'chain_cursor', 'source_identity', 'updated_at'],
     // SQLite stores this flag as 0/1 against a Postgres boolean column.
     cast: { history_complete: (value) => Boolean(value) },
   },
 ]
 
 const DEFAULT_CHUNK = 500
+const RETENTION_DAYS = Number(process.env.FLOW_RETENTION_DAYS || 100)
 
 function upsertStatement(table) {
   const updates = table.columns
@@ -82,6 +74,7 @@ export async function importLocalSqlite({ resync = false, verbose = true, path =
     return { skipped: true, reason: 'no local SQLite database found', path }
   }
 
+  const cutoff = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400
   const sqlite = new DatabaseSync(path, { readOnly: true })
   try {
     const plan = []
@@ -91,29 +84,50 @@ export async function importLocalSqlite({ resync = false, verbose = true, path =
       // A column added by a later SQLite migration may be absent from an older
       // local file; import what is there and let Postgres defaults cover the rest.
       const columns = table.columns.filter((column) => available.has(column))
-      // Mirrors the indexer's own SUPABASE_SKIP_PAYLOADS behaviour so an
-      // imported row and a freshly indexed one hold the same thing.
-      const selects = columns.map((column) =>
-        column === 'payload_json' && skipPayloads() ? `'' AS payload_json` : column)
+      // The marker is keyed on the file's total row count, which does not move
+      // as the retention cutoff advances over a static local database.
       const local = sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table.name}`).get().count
-      plan.push({ ...table, columns, selects, local })
+      const where = table.retained ? `WHERE block_time >= ${cutoff}` : ''
+      const selected = table.retained
+        ? sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table.name} ${where}`).get().count
+        : local
+      plan.push({ ...table, columns, local, selected, where })
     }
     const counts = Object.fromEntries(plan.map(({ name, local }) => [name, local]))
+
+    // Everything older than the retention window is summarised into
+    // flow_baselines rather than copied, so the reconstructed pool balance stays
+    // exact while only the recent rows cross the wire.
+    const seedBaselines = async () => {
+      const totals = sqlite.prepare(`
+        SELECT protocol, asset,
+          SUM(CASE WHEN direction = 'deposit' THEN amount ELSE -amount END) AS net,
+          SUM(CASE WHEN direction = 'deposit' THEN amount ELSE 0 END) AS deposits,
+          SUM(CASE WHEN direction = 'withdraw' THEN amount ELSE 0 END) AS withdrawals,
+          COUNT(*) AS count,
+          MAX(block_time) AS latest
+        FROM pool_flows WHERE block_time < ?
+        GROUP BY protocol, asset
+      `).all(cutoff)
+      for (const { protocol, asset, ...row } of totals) await addFlowBaseline(protocol, asset, row)
+      return totals
+    }
 
     const marker = await db.get('SELECT row_counts AS "rowCounts", imported_at AS "importedAt" FROM local_import_state WHERE path = $1', [path])
     if (!resync && marker && sameCounts(marker.rowCounts, counts)) {
       return { skipped: true, reason: 'this local database has already been imported', path, importedAt: marker.importedAt, counts }
     }
 
+    const baselines = await seedBaselines()
     const imported = {}
     for (const table of plan) {
-      if (!table.local) { imported[table.name] = 0
+      if (!table.selected) { imported[table.name] = 0
         continue }
       const build = upsertStatement(table)
       const size = table.chunk || DEFAULT_CHUNK
-      // source_transactions alone holds every raw payload, so the rows are
-      // streamed a chunk at a time rather than materialised in memory.
-      const cursor = sqlite.prepare(`SELECT ${table.selects.join(', ')} FROM ${table.name}`).iterate()
+      // Streamed a chunk at a time: pool_flows runs to hundreds of thousands
+      // of rows.
+      const cursor = sqlite.prepare(`SELECT ${table.columns.join(', ')} FROM ${table.name} ${table.where}`).iterate()
       let written = 0
       let chunk = []
       const flush = async () => {
@@ -126,7 +140,7 @@ export async function importLocalSqlite({ resync = false, verbose = true, path =
         written += chunk.length
         chunk = []
         if (verbose && written % (size * 20) === 0) {
-          console.log(JSON.stringify({ phase: 'import', table: table.name, written, of: table.local }))
+          console.log(JSON.stringify({ phase: 'import', table: table.name, written, of: table.selected }))
         }
       }
       for (const row of cursor) {
@@ -144,7 +158,10 @@ export async function importLocalSqlite({ resync = false, verbose = true, path =
       VALUES ($1, $2, EXTRACT(EPOCH FROM now())::bigint)
       ON CONFLICT (path) DO UPDATE SET row_counts = excluded.row_counts, imported_at = excluded.imported_at
     `, [path, JSON.stringify(counts)])
-    return { skipped: false, path, imported }
+    return {
+      skipped: false, path, imported, retentionDays: RETENTION_DAYS, cutoff,
+      baselines: Object.fromEntries(baselines.map(({ protocol, asset, net, count }) => [`${protocol}:${asset}`, { net, prunedFlows: count }])),
+    }
   } finally {
     sqlite.close()
   }

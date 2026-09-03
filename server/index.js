@@ -4,7 +4,7 @@ import bs58 from 'bs58'
 import { PublicKey } from '@solana/web3.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { classifyPrivacyCashSwaps, databaseStats, getSyncState, readFlows, runMigrations, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
+import { classifyPrivacyCashSwaps, databaseStats, getSyncState, pruneFlows, readFlowBaseline, readFlows, runMigrations, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
 import { importLocalSqlite } from './import-sqlite.js'
 import { indexCurvy } from './curvy-indexer.js'
 
@@ -37,6 +37,9 @@ const PROTOCOLS = {
 }
 const PAGE_SIZE = 100
 const SYNC_OVERLAP_SECONDS = 300
+// The dashboard's longest range is 90 days; the extra days keep the oldest
+// bucket whole and leave room for a late-arriving backfill page.
+const RETENTION_DAYS = Number(process.env.FLOW_RETENTION_DAYS || 100)
 
 const HELIUS_ONLY_METHODS = new Set(['getAsset', 'getTransactionsForAddress'])
 
@@ -336,8 +339,11 @@ async function privacyCashPoolBalances() {
   }
 }
 
+// Retained flows only cover the recent window, so the running balance starts
+// from the baseline holding everything already pruned.
 async function indexedPoolBalances(protocol, now) {
-  const balances = { USDC: 0, SOL: 0, USDT: 0 }
+  const baseline = await readFlowBaseline(protocol)
+  const balances = Object.fromEntries(['USDC', 'SOL', 'USDT'].map((asset) => [asset, baseline[asset]?.net || 0]))
   for (const flow of await readFlows(protocol, 0, now)) {
     balances[flow.asset] += (flow.direction === 'deposit' ? 1 : -1) * flow.amount
   }
@@ -354,6 +360,9 @@ async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infin
     : { skipped: true, reason: 'historical backfill is incomplete' }
   const balances = protocol === 'privacycash' ? await privacyCashPoolBalances() : await indexedPoolBalances(protocol, now)
   await storePoolSnapshot(protocol, balances, now)
+  // Pruning follows the snapshot so the balance is banked before the rows
+  // behind it move into the baseline.
+  const pruned = await pruneFlows(protocol, now - RETENTION_DAYS * 86400)
   const state = await getSyncState(protocol)
   const storage = await databaseStats(protocol)
   return {
@@ -362,6 +371,7 @@ async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infin
       : 'incremental',
     backfill, incremental, historyComplete: Boolean(state?.historyComplete),
     syncedThrough: state?.syncedThrough, snapshot: balances,
+    retentionDays: RETENTION_DAYS, pruned: pruned.pruned,
     classifiedSwaps: storage.swaps, storage,
   }
 }

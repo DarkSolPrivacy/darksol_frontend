@@ -1,5 +1,5 @@
 import { Contract, Interface, JsonRpcProvider, formatUnits, toBeHex } from 'ethers'
-import { databaseStats, getSyncState, saveSyncState, storeIndexedData, storePoolSnapshot } from './db.js'
+import { databaseStats, getSyncState, pruneFlows, saveSyncState, storeIndexedData, storePoolSnapshot } from './db.js'
 
 export const CURVY = Object.freeze({
   id: 'curvy',
@@ -227,6 +227,9 @@ export async function indexCurvy() {
   const deploymentBlock = fullHistory ? await evm.getBlock(CURVY.deploymentBlock) : null
   const balances = await poolBalances(evm, toBlock)
   await storePoolSnapshot(CURVY.id, balances, safeBlock.timestamp)
+  // Same rolling window the Solana lane applies; Curvy's balances come from the
+  // chain, so this only trims the flow history behind the charts.
+  const pruned = await pruneFlows(CURVY.id, safeBlock.timestamp - Number(process.env.FLOW_RETENTION_DAYS || 100) * 86400)
   await saveSyncState(CURVY.id, {
     backfilledFrom: fullHistory ? deploymentBlock?.timestamp ?? safeBlock.timestamp : state?.backfilledFrom,
     syncedThrough: safeBlock.timestamp,
@@ -241,7 +244,7 @@ export async function indexCurvy() {
     candidateTransfers: transfers.length,
     transactions: indexed.transactions.length,
     flows: indexed.flows.length,
-    snapshot: balances,
+    snapshot: balances, pruned: pruned.pruned,
     storage: await databaseStats(CURVY.id),
   }
 }

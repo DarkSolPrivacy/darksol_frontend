@@ -57,11 +57,47 @@ file has been copied the import is recorded and later runs skip it, so the watch
 loop starts indexing immediately. Every table is upserted on its primary key, so
 an interrupted import is resumed rather than duplicated by the next run.
 
-Raw transaction payloads are roughly 95% of the dataset's bytes and nothing in
-the dashboard reads them back. Setting `SUPABASE_SKIP_PAYLOADS=1` stores an empty
-payload instead, on both the import and the live indexer. The trade-off is that
-the payload is the only re-decodable record of a transaction: with it discarded,
-a decoder change needs a full re-index from Helius rather than a local rebuild.
+Supabase stores only what the dashboard reads, over a rolling window, which
+makes it far smaller than the local SQLite database it came from — roughly
+96 MB against 2.7 GB, and flat over time rather than growing. Left behind:
+
+| dropped | why |
+| --- | --- |
+| `source_transactions` | its raw payload column had no reader and was ~95% of the dataset's bytes; the rest of the table served three aggregates `pool_flows` answers itself |
+| `deposits` | a cloakc-only mirror of deposit rows already in `pool_flows`, written every batch and never read |
+| `decimals` | every consumer derives decimals from the asset |
+| `instruction_index` | recoverable from `id`, which is `signature:index` |
+| `indexed_at` | never read on any row |
+| `sync_state.last_block_time`, `last_signature` | written by the old schema, read by nothing |
+| five `pool_flows` indexes | unreachable: nothing filters `block_time`, `asset` or `direction` without also filtering `protocol` |
+
+`pool_flows` keeps every column: `participant` drives PrivacyCash swap matching,
+`amount_raw` the distinct-amount metrics, `linked_flow_id` swap pairing and
+latency.
+
+`pool_flows` is also kept to a rolling window — `FLOW_RETENTION_DAYS`, 100 by
+default: the 90-day chart plus enough margin to keep its oldest bucket whole.
+Everything older is deleted after each indexing cycle.
+
+Deleting a flow would normally move Cloak's TVL, which is reconstructed by
+summing every flow since the pool opened. So nothing is deleted before its
+contribution is folded into `flow_baselines`, and the balance becomes that
+baseline plus the flows still present. The fold and the delete share one
+transaction, so a reconstructed balance is never missing a row nor counting one
+twice. PrivacyCash and Curvy read their balances from the chain and never
+depended on this, but the baseline is maintained for all three so the
+reconstructed figure stays available as a cross-check.
+
+The same window applies on the way in: `supabase:sync` summarises everything
+older than the cutoff into `flow_baselines` and copies only the recent rows, so
+the initial import never sends the full history over the wire.
+
+Two consequences worth knowing. A transaction that decoded no flow is no longer
+represented, so `storage.transactions` and the coverage bounds describe indexed
+analytics rather than every transaction that touched the program — about 0.6% of
+this history. And a raw payload was the only re-decodable record of a
+transaction, so a decoder change now needs a re-index from Helius rather than a
+local rebuild.
 
 ## Data pipeline
 
@@ -97,7 +133,7 @@ Curvy's current Vault balances come directly from ERC-20 `balanceOf` calls at th
 
 Deposit and withdrawal volume are scoped to the selected timeframe. Cloakc pool size is cumulative indexed deposits minus withdrawals. PrivacyCash current pool size is read directly from its on-chain SOL pool PDA and USDC/USDT token accounts; Curvy current pool size is read from its Arbitrum Vault. Each chart reconstructs the selected window from the closing balance where a direct snapshot exists.
 
-Fetched transactions and decoded flows are persisted by protocol in Supabase Postgres. Raw Solana transaction payloads and Arbitrum receipts are retained in `source_transactions` unless `SUPABASE_SKIP_PAYLOADS=1` is set; normalized external flows and their swap links are stored in `pool_flows`; current balances are stored in `pool_snapshots`; USD price snapshots are stored in `token_prices`. All tables and indexes are defined by versioned SQL files in `supabase/migrations/` and can be prepared explicitly with `npm run migrate`.
+Fetched transactions and decoded flows are persisted by protocol in Supabase Postgres. Normalized external flows and their swap links are stored in `pool_flows`; current balances are stored in `pool_snapshots`; USD price snapshots are stored in `token_prices`. All tables and indexes are defined by versioned SQL files in `supabase/migrations/` and can be prepared explicitly with `npm run migrate`.
 
 The dashboard API never calls Helius and never writes analytics data. On its first run, the independent indexer inspects `sync_state`. If history has not been verified, it streams the missing history in 100-transaction full-data pages, decodes only those pages, and persists the immutable query bound plus Helius pagination cursor after every successful page. An interrupted backfill resumes at that cursor.
 
@@ -114,7 +150,9 @@ After Solana history is complete, each cycle queries only from `synced_through -
 | 1D | 1 hour | 1 day |
 | 30D | 1 day | 30 days |
 | 90D | 1 day | 90 days |
-| 1Y | 2 weeks | 26 periods / 364 days |
+
+90 days is the longest range, and it is what sets the flow retention window
+below.
 
 The browser rereads Supabase through the API every 30 seconds. The Helius key and Alchemy RPC URL are required only by the backend indexer, remain server-side, and `.env.local` is ignored by Git.
 

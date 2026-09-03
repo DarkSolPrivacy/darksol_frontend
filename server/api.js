@@ -3,7 +3,7 @@ import dotenv from 'dotenv'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { databaseStats, getSyncState, readFlows, readLatestPoolSnapshot, readLatestTokenPrices } from './db.js'
+import { databaseStats, getSyncState, readFlowBaseline, readFlows, readLatestPoolSnapshot, readLatestTokenPrices } from './db.js'
 import { buildPlanningMetrics } from './planning-metrics.js'
 import {
   ESTIMATE_NOTICE, PROVIDER_CAPABILITIES, calculatePrivacyEstimate, estimateMultiReceiverPlan,
@@ -39,8 +39,9 @@ const INTERVALS = {
   '6h': { bucketSeconds: 900, bucketCount: 24 },
   '1d': { bucketSeconds: 3600, bucketCount: 24 },
   '30d': { bucketSeconds: 86400, bucketCount: 30 },
+  // 90 days is the longest range offered, and it is what sets the flow
+  // retention window the indexer prunes against.
   '90d': { bucketSeconds: 86400, bucketCount: 90 },
-  '1y': { bucketSeconds: 14 * 86400, bucketCount: 26 },
 }
 const TYPE_SUFFIX = { deposit: 'Deposit', withdraw: 'Withdraw', swap_in: 'SwapIn', swap_out: 'SwapOut' }
 const TYPE_GROUP = { deposit: 'deposits', withdraw: 'withdrawals', swap_in: 'swapIn', swap_out: 'swapOut' }
@@ -95,7 +96,7 @@ function activityFor(flows, tokenPrices, now) {
   }
 }
 
-function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poolSnapshot, tokenPrices, now) {
+function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poolSnapshot, tokenPrices, now, baseline = null) {
   const buckets = Array.from({ length: bucketCount }, (_, index) => {
     const bucket = { timestamp: from + index * bucketSeconds, count: 0 }
     for (const asset of ASSETS) for (const suffix of Object.values(TYPE_SUFFIX)) bucket[`${asset}${suffix}`] = 0
@@ -107,6 +108,9 @@ function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poo
     deposits: externalFlows.deposits, withdrawals: externalFlows.withdrawals, swapIn: externalFlows.swapIn, swapOut: externalFlows.swapOut,
     poolSize: blankAssets(), count: 0, counts: { deposit: 0, withdraw: 0, swap_in: 0, swap_out: 0, byAsset: blankAssets() },
   }
+  // Without a stored snapshot the pool is rebuilt from history, which after
+  // pruning is the baseline of removed flows plus the ones still retained.
+  if (baseline) for (const [asset, { net }] of Object.entries(baseline)) totals.poolSize[asset] += net
   for (const flow of historicalFlows) totals.poolSize[flow.asset] += (flow.direction === 'deposit' ? 1 : -1) * flow.amount
   const windowNet = blankAssets()
   for (const flow of flows) {
@@ -146,12 +150,10 @@ async function analytics(protocol, interval) {
   const protocolConfig = PROTOCOLS[protocol]
   const intervalConfig = INTERVALS[interval]
   if (!protocolConfig) throw new Error('protocol must be cloakc, privacycash, or curvy')
-  if (!intervalConfig) throw new Error('range must be 1h, 6h, 1d, 30d, 90d, or 1y')
+  if (!intervalConfig) throw new Error('range must be 1h, 6h, 1d, 30d, or 90d')
   const now = Math.floor(Date.now() / 1000)
   const currentBucket = Math.floor(now / intervalConfig.bucketSeconds) * intervalConfig.bucketSeconds
-  const from = interval === '1y'
-    ? now - intervalConfig.bucketCount * intervalConfig.bucketSeconds
-    : currentBucket - (intervalConfig.bucketCount - 1) * intervalConfig.bucketSeconds
+  const from = currentBucket - (intervalConfig.bucketCount - 1) * intervalConfig.bucketSeconds
   const [state, snapshot, windowFlows, tokenPrices, storage] = await Promise.all([
     getSyncState(protocol),
     readLatestPoolSnapshot(protocol),
@@ -160,6 +162,7 @@ async function analytics(protocol, interval) {
     databaseStats(protocol),
   ])
   const historicalFlows = snapshot ? [] : await readFlows(protocol, 0, from - 1)
+  const baseline = snapshot ? null : await readFlowBaseline(protocol)
   return {
     source: 'supabase', indexedVia: protocol === 'curvy' ? 'alchemy' : 'helius',
     chain: protocolConfig.chain || 'solana', chainId: protocolConfig.chainId || null,
@@ -173,7 +176,7 @@ async function analytics(protocol, interval) {
       backfilledFrom: state?.backfilledFrom ?? null, syncedThrough: state?.syncedThrough ?? null,
     },
     poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows', storage,
-    ...aggregate(windowFlows, historicalFlows, from, intervalConfig.bucketSeconds, intervalConfig.bucketCount, snapshot?.balances, tokenPrices, now),
+    ...aggregate(windowFlows, historicalFlows, from, intervalConfig.bucketSeconds, intervalConfig.bucketCount, snapshot?.balances, tokenPrices, now, baseline),
     recent: windowFlows.slice(0, 12),
     flowMethod: protocol === 'privacycash'
       ? 'Swaps inferred by one-to-one ephemeral-wallet links within 120 seconds.'

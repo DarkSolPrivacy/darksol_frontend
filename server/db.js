@@ -10,12 +10,46 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 pg.types.setTypeParser(pg.types.builtins.INT8, Number)
 pg.types.setTypeParser(pg.types.builtins.NUMERIC, Number)
 
-function connectionString() {
+// A Supabase database password is generated with punctuation, and pasting it
+// into the connection URI unencoded is the common way to get an unhelpful
+// "Invalid URL" out of pg: '#' opens a fragment and '^' is not legal in a URI
+// at all. If the string does not parse, percent-encode the credentials and try
+// again rather than making the reader work that out.
+function repairCredentials(url) {
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(url)
+  if (!scheme) return null
+  const rest = url.slice(scheme[0].length)
+  const authorityEnd = rest.search(/[/?]/)
+  const authority = authorityEnd === -1 ? rest : rest.slice(0, authorityEnd)
+  const tail = authorityEnd === -1 ? '' : rest.slice(authorityEnd)
+  const at = authority.lastIndexOf('@')
+  if (at === -1) return null
+  const credentials = authority.slice(0, at)
+  const host = authority.slice(at + 1)
+  const separator = credentials.indexOf(':')
+  const user = separator === -1 ? credentials : credentials.slice(0, separator)
+  const password = separator === -1 ? null : credentials.slice(separator + 1)
+  const encoded = password === null
+    ? encodeURIComponent(decodeURIComponent(user))
+    : `${encodeURIComponent(decodeURIComponent(user))}:${encodeURIComponent(password)}`
+  return `${scheme[0]}${encoded}@${host}${tail}`
+}
+
+export function resolveConnectionString() {
   const url = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL
   if (!url) {
-    throw new Error('SUPABASE_DB_URL is not configured. Copy the direct connection string from Supabase > Connect > Direct connection into .env.local and the Vercel project environment.')
+    throw new Error('SUPABASE_DB_URL is not configured. Copy the connection string from Supabase > Connect into .env.local and the Vercel project environment.')
   }
-  return url
+  try {
+    new URL(url)
+    return url
+  } catch {}
+  const repaired = repairCredentials(url)
+  try {
+    new URL(repaired)
+    return repaired
+  } catch {}
+  throw new Error('SUPABASE_DB_URL is not a valid connection URI. If the password contains "/" or "@", percent-encode it (encodeURIComponent) before putting it in the URL.')
 }
 
 // Built on first use rather than at import time: every entry point loads
@@ -23,7 +57,7 @@ function connectionString() {
 let poolInstance = null
 function pool() {
   if (!poolInstance) {
-    const url = connectionString()
+    const url = resolveConnectionString()
     poolInstance = new pg.Pool({
       connectionString: url,
       // Supabase terminates TLS with its own CA, which Node does not ship. A
@@ -114,113 +148,109 @@ export function readAppliedMigrations() {
   return db.all('SELECT name, applied_at AS "appliedAt" FROM schema_migrations ORDER BY name')
 }
 
-const UPSERT_TRANSACTION = `
-  INSERT INTO source_transactions (signature, slot, block_time, status, payload_json, protocol)
-  VALUES (@signature, @slot, @blockTime, 'succeeded', @payload, @protocol)
-  ON CONFLICT(signature) DO UPDATE SET
-    slot = excluded.slot,
-    block_time = excluded.block_time,
-    status = excluded.status,
-    payload_json = excluded.payload_json,
-    protocol = excluded.protocol,
-    indexed_at = EXTRACT(EPOCH FROM now())::bigint
-`
-
-const UPSERT_DEPOSIT = `
-  INSERT INTO deposits (id, signature, instruction_index, block_time, depositor, asset, amount_raw, decimals, amount)
-  VALUES (@id, @signature, @instructionIndex, @timestamp, @depositor, @asset, @amountRaw, @decimals, @amount)
-  ON CONFLICT(id) DO UPDATE SET
-    block_time = excluded.block_time,
-    depositor = excluded.depositor,
-    asset = excluded.asset,
-    amount_raw = excluded.amount_raw,
-    decimals = excluded.decimals,
-    amount = excluded.amount,
-    indexed_at = EXTRACT(EPOCH FROM now())::bigint
-`
-
 const UPSERT_FLOW = `
-  INSERT INTO pool_flows (id, signature, instruction_index, block_time, participant, direction, asset, amount_raw, decimals, amount, protocol, flow_type, counter_asset, linked_flow_id)
-  VALUES (@id, @signature, @instructionIndex, @timestamp, @participant, @direction, @asset, @amountRaw, @decimals, @amount, @protocol, @flowType, @counterAsset, @linkedFlowId)
+  INSERT INTO pool_flows (id, signature, block_time, participant, direction, asset, amount_raw, amount, protocol, flow_type, counter_asset, linked_flow_id)
+  VALUES (@id, @signature, @timestamp, @participant, @direction, @asset, @amountRaw, @amount, @protocol, @flowType, @counterAsset, @linkedFlowId)
   ON CONFLICT(id) DO UPDATE SET
     block_time = excluded.block_time,
     participant = excluded.participant,
     direction = excluded.direction,
     asset = excluded.asset,
     amount_raw = excluded.amount_raw,
-    decimals = excluded.decimals,
     amount = excluded.amount,
     protocol = excluded.protocol,
     flow_type = excluded.flow_type,
     counter_asset = excluded.counter_asset,
-    linked_flow_id = excluded.linked_flow_id,
-    indexed_at = EXTRACT(EPOCH FROM now())::bigint
+    linked_flow_id = excluded.linked_flow_id
 `
 
-// Shared by the live indexer and the one-time SQLite import so both write
-// through exactly the same upsert and replacement rules.
-export async function persistFlowBatch(tx, protocol, transactions, flows) {
-  for (const transaction of transactions) {
-    await tx.query(UPSERT_TRANSACTION, transaction)
-    await tx.query('DELETE FROM pool_flows WHERE protocol = @protocol AND signature = @signature', {
-      protocol, signature: transaction.signature,
-    })
-    if (protocol === 'cloakc') await tx.query('DELETE FROM deposits WHERE signature = $1', [transaction.signature])
+// Re-decoding a transaction must first clear the flows a previous decode
+// produced for it, hence the delete pass before the upserts.
+async function persistFlowBatch(tx, protocol, signatures, flows) {
+  for (const signature of signatures) {
+    await tx.query('DELETE FROM pool_flows WHERE protocol = @protocol AND signature = @signature', { protocol, signature })
   }
-  for (const flow of flows) {
-    await tx.query(UPSERT_FLOW, { ...flow, protocol })
-    if (protocol === 'cloakc' && flow.direction === 'deposit') {
-      await tx.query(UPSERT_DEPOSIT, {
-        id: flow.id,
-        signature: flow.signature,
-        instructionIndex: flow.instructionIndex,
-        timestamp: flow.timestamp,
-        depositor: flow.participant,
-        asset: flow.asset,
-        amountRaw: flow.amountRaw,
-        decimals: flow.decimals,
-        amount: flow.amount,
-      })
-    }
-  }
+  for (const flow of flows) await tx.query(UPSERT_FLOW, { ...flow, protocol })
 }
-
-// The raw payloads are ~95% of this dataset's bytes and nothing in the
-// dashboard reads them back, so they can be dropped to keep a hosted Postgres
-// small. Off by default: the payloads are the only re-decodable record of a
-// transaction, so discarding them means a decoder change needs a re-index.
-export const skipPayloads = () => process.env.SUPABASE_SKIP_PAYLOADS === '1'
 
 export async function storeIndexedData(protocol, transactions, flows) {
-  const rows = transactions
-    .map((transaction) => ({
-      signature: transaction.transaction?.signatures?.[0] || transaction.hash,
-      slot: transaction.slot ?? transaction.blockNumber,
-      blockTime: transaction.blockTime,
-      payload: skipPayloads() ? '' : JSON.stringify(transaction),
-      protocol,
-    }))
-    .filter(({ signature, blockTime }) => signature && blockTime)
-  if (!rows.length && !flows.length) return
-  await db.transaction((tx) => persistFlowBatch(tx, protocol, rows, flows))
+  const signatures = transactions
+    .filter(({ blockTime }) => blockTime)
+    .map((transaction) => transaction.transaction?.signatures?.[0] || transaction.hash)
+    .filter(Boolean)
+  if (!signatures.length && !flows.length) return
+  await db.transaction((tx) => persistFlowBatch(tx, protocol, signatures, flows))
 }
 
-export function readDeposits(from, to) {
-  return db.all(`
-    SELECT id, signature, instruction_index AS "instructionIndex", block_time AS timestamp,
-      depositor, asset, amount_raw AS "amountRaw", decimals, amount
-    FROM deposits
-    WHERE block_time >= $1 AND block_time <= $2
-    ORDER BY block_time DESC
-  `, [from, to])
+// Flows older than the retention window are folded into flow_baselines and
+// then deleted, both inside one transaction so a balance reconstructed from
+// baseline + remaining flows is never missing a row nor counting one twice.
+export async function pruneFlows(protocol, cutoff) {
+  return db.transaction(async (tx) => {
+    const totals = await tx.all(`
+      SELECT asset,
+        SUM(CASE WHEN direction = 'deposit' THEN amount ELSE -amount END) AS net,
+        SUM(CASE WHEN direction = 'deposit' THEN amount ELSE 0 END) AS deposits,
+        SUM(CASE WHEN direction = 'withdraw' THEN amount ELSE 0 END) AS withdrawals,
+        COUNT(*)::int AS count,
+        MAX(block_time) AS latest
+      FROM pool_flows
+      WHERE protocol = $1 AND block_time < $2
+      GROUP BY asset
+    `, [protocol, cutoff])
+    if (!totals.length) return { pruned: 0, assets: {} }
+    for (const row of totals) {
+      await tx.query(`
+        INSERT INTO flow_baselines (protocol, asset, net_amount, deposit_amount, withdraw_amount, flow_count, through_block_time)
+        VALUES (@protocol, @asset, @net, @deposits, @withdrawals, @count, @latest)
+        ON CONFLICT(protocol, asset) DO UPDATE SET
+          net_amount = flow_baselines.net_amount + excluded.net_amount,
+          deposit_amount = flow_baselines.deposit_amount + excluded.deposit_amount,
+          withdraw_amount = flow_baselines.withdraw_amount + excluded.withdraw_amount,
+          flow_count = flow_baselines.flow_count + excluded.flow_count,
+          through_block_time = GREATEST(flow_baselines.through_block_time, excluded.through_block_time)
+      `, { protocol, ...row })
+    }
+    const { rowCount } = await tx.query('DELETE FROM pool_flows WHERE protocol = $1 AND block_time < $2', [protocol, cutoff])
+    return {
+      pruned: rowCount,
+      assets: Object.fromEntries(totals.map(({ asset, net, count }) => [asset, { net, count }])),
+    }
+  })
+}
+
+// Seeds a baseline directly, for the import that never sends the old rows over
+// the wire in the first place. Additive, so a re-import after --resync of a
+// larger local database tops it up rather than double counting.
+export async function addFlowBaseline(protocol, asset, totals) {
+  await db.query(`
+    INSERT INTO flow_baselines (protocol, asset, net_amount, deposit_amount, withdraw_amount, flow_count, through_block_time)
+    VALUES (@protocol, @asset, @net, @deposits, @withdrawals, @count, @latest)
+    ON CONFLICT(protocol, asset) DO UPDATE SET
+      net_amount = excluded.net_amount,
+      deposit_amount = excluded.deposit_amount,
+      withdraw_amount = excluded.withdraw_amount,
+      flow_count = excluded.flow_count,
+      through_block_time = excluded.through_block_time
+  `, { protocol, asset, ...totals })
+}
+
+export async function readFlowBaseline(protocol) {
+  const rows = await db.all(`
+    SELECT asset, net_amount AS net, deposit_amount AS deposits,
+      withdraw_amount AS withdrawals, flow_count AS count,
+      through_block_time AS "throughBlockTime"
+    FROM flow_baselines WHERE protocol = $1
+  `, [protocol])
+  return Object.fromEntries(rows.map((row) => [row.asset, row]))
 }
 
 export function readFlows(protocol, from, to) {
   return db.all(`
-    SELECT id, signature, instruction_index AS "instructionIndex", block_time AS timestamp,
+    SELECT id, signature, block_time AS timestamp,
       participant, direction, COALESCE(flow_type, direction) AS "flowType",
       asset, counter_asset AS "counterAsset", linked_flow_id AS "linkedFlowId",
-      amount_raw AS "amountRaw", decimals, amount
+      amount_raw AS "amountRaw", amount
     FROM pool_flows
     WHERE protocol = $1 AND block_time >= $2 AND block_time <= $3
     ORDER BY block_time DESC
@@ -232,18 +262,21 @@ export function readPlanningFlows(protocol, asset, from, to) {
     SELECT id, signature, block_time AS timestamp, participant, direction,
       COALESCE(flow_type, direction) AS "flowType", asset,
       counter_asset AS "counterAsset", linked_flow_id AS "linkedFlowId",
-      amount_raw AS "amountRaw", decimals, amount
+      amount_raw AS "amountRaw", amount
     FROM pool_flows
     WHERE protocol = $1 AND asset = $2 AND block_time BETWEEN $3 AND $4
     ORDER BY block_time DESC
   `, [protocol, asset, from, to])
 }
 
+// Derived from pool_flows now that source_transactions is gone. A transaction
+// that decoded no flow is not represented, so these bounds describe the indexed
+// analytics rather than every transaction that touched the program.
 export function readProtocolHistoryBounds(protocol) {
   return db.get(`
     SELECT MIN(block_time) AS earliest, MAX(block_time) AS latest,
-      COUNT(*)::int AS "transactionCount"
-    FROM source_transactions
+      COUNT(DISTINCT signature)::int AS "transactionCount"
+    FROM pool_flows
     WHERE protocol = $1
   `, [protocol])
 }
@@ -322,30 +355,18 @@ export function classifyPrivacyCashSwaps(from = 0, to = Number.MAX_SAFE_INTEGER,
   })
 }
 
-export async function readSourceTransactions(protocol, from, to) {
-  const rows = await db.all(`
-    SELECT payload_json AS payload
-    FROM source_transactions
-    WHERE protocol = $1 AND block_time >= $2 AND block_time <= $3
-    ORDER BY block_time DESC
-  `, [protocol, from, to])
-  return rows.map(({ payload }) => JSON.parse(payload))
-}
-
 export async function databaseStats(protocol) {
-  const [transactions, flows] = await Promise.all([
-    db.get('SELECT COUNT(*)::int AS count FROM source_transactions WHERE protocol = $1', [protocol]),
-    db.get(`
-      SELECT
-        COUNT(*)::int AS flows,
-        COUNT(*) FILTER (WHERE direction = 'deposit')::int AS deposits,
-        COUNT(*) FILTER (WHERE direction = 'withdraw')::int AS withdrawals,
-        COUNT(*) FILTER (WHERE flow_type = 'swap_out')::int AS swaps
-      FROM pool_flows WHERE protocol = $1
-    `, [protocol]),
-  ])
+  const flows = await db.get(`
+    SELECT
+      COUNT(DISTINCT signature)::int AS transactions,
+      COUNT(*)::int AS flows,
+      COUNT(*) FILTER (WHERE direction = 'deposit')::int AS deposits,
+      COUNT(*) FILTER (WHERE direction = 'withdraw')::int AS withdrawals,
+      COUNT(*) FILTER (WHERE flow_type = 'swap_out')::int AS swaps
+    FROM pool_flows WHERE protocol = $1
+  `, [protocol])
   return {
-    transactions: transactions.count,
+    transactions: flows.transactions,
     deposits: flows.deposits,
     withdrawals: flows.withdrawals,
     flows: flows.flows,
@@ -377,22 +398,15 @@ export async function readLatestTokenPrices() {
 }
 
 const INSERT_POOL_SNAPSHOT = `
-  INSERT INTO pool_snapshots (protocol, asset, block_time, amount_raw, decimals, amount)
-  VALUES (@protocol, @asset, @blockTime, @amountRaw, @decimals, @amount)
-  ON CONFLICT(protocol, asset, block_time) DO UPDATE SET
-    amount_raw = excluded.amount_raw,
-    decimals = excluded.decimals,
-    amount = excluded.amount,
-    indexed_at = EXTRACT(EPOCH FROM now())::bigint
+  INSERT INTO pool_snapshots (protocol, asset, block_time, amount)
+  VALUES (@protocol, @asset, @blockTime, @amount)
+  ON CONFLICT(protocol, asset, block_time) DO UPDATE SET amount = excluded.amount
 `
 
 export async function storePoolSnapshot(protocol, balances, blockTime = Math.floor(Date.now() / 1000)) {
   await db.transaction(async (tx) => {
     for (const asset of ['USDC', 'SOL', 'USDT']) {
-      const decimals = asset === 'SOL' ? 9 : 6
-      const amount = Number(balances[asset] || 0)
-      const amountRaw = BigInt(Math.round(amount * (10 ** decimals))).toString()
-      await tx.query(INSERT_POOL_SNAPSHOT, { protocol, asset, blockTime, amountRaw, decimals, amount })
+      await tx.query(INSERT_POOL_SNAPSHOT, { protocol, asset, blockTime, amount: Number(balances[asset] || 0) })
     }
   })
 }
@@ -440,18 +454,17 @@ export async function saveSyncState(source, changes) {
   }
   await db.query(`
     INSERT INTO sync_state (
-      source, backfilled_from, synced_through, last_block_time, history_complete,
+      source, backfilled_from, synced_through, history_complete,
       backfill_cursor, backfill_upper_bound, incremental_cursor, incremental_from,
       incremental_to, chain_cursor, source_identity, updated_at
     ) VALUES (
-      @source, @backfilledFrom, @syncedThrough, @syncedThrough, @historyComplete,
+      @source, @backfilledFrom, @syncedThrough, @historyComplete,
       @backfillCursor, @backfillUpperBound, @incrementalCursor, @incrementalFrom,
       @incrementalTo, @chainCursor, @sourceIdentity, EXTRACT(EPOCH FROM now())::bigint
     )
     ON CONFLICT(source) DO UPDATE SET
       backfilled_from = excluded.backfilled_from,
       synced_through = excluded.synced_through,
-      last_block_time = excluded.last_block_time,
       history_complete = excluded.history_complete,
       backfill_cursor = excluded.backfill_cursor,
       backfill_upper_bound = excluded.backfill_upper_bound,
