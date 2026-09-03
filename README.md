@@ -11,27 +11,63 @@ Requires Node.js 24 or newer. The protocol SDK runner uses PrivacyCash and Curvy
 ```bash
 npm install
 cp .env.example .env.local
-# Add your Helius key and Arbitrum Alchemy RPC URL to .env.local
+# Add your Helius key, Arbitrum Alchemy RPC URL, and SUPABASE_DB_URL to .env.local
 npm run migrate
 ```
 
 Run the writer and dashboard as separate processes:
 
 ```bash
-# Console 1: backend writer (Helius + Alchemy -> SQLite)
+# Console 1: backend writer (Helius + Alchemy -> Supabase)
 npm run indexer:watch
 
 # Console 2: read-only dashboard API + Vite
 npm run dev
 ```
 
-`npm run indexer` performs one production-mode reconciliation/catch-up and exits. `npm run indexer:watch` runs the writer every five minutes. Each cycle runs an Alchemy/Arbitrum lane in parallel with a Helius/Solana lane, so a long Solana history backfill cannot delay Curvy refreshes. Cloak and PrivacyCash remain sequential inside the shared Helius lane to avoid competing for the same service. `npm run indexer:dev` enables verbose development mode and exits after one correct cycle; `npm run indexer:dev:watch` uses the same checkpoints with a 30-second development cadence. Development mode never truncates or resets history. For short local tests, `npm run indexer:dev -- --max-backfill-pages 1` processes one historical page and leaves the cursor ready to resume. `npm run dev` starts the SQLite-only API on port 8787 and Vite on port 5173.
+`npm run indexer` performs one production-mode reconciliation/catch-up and exits. `npm run indexer:watch` runs the writer every five minutes. Each cycle runs an Alchemy/Arbitrum lane in parallel with a Helius/Solana lane, so a long Solana history backfill cannot delay Curvy refreshes. Cloak and PrivacyCash remain sequential inside the shared Helius lane to avoid competing for the same service. `npm run indexer:dev` enables verbose development mode and exits after one correct cycle; `npm run indexer:dev:watch` uses the same checkpoints with a 30-second development cadence. Development mode never truncates or resets history. For short local tests, `npm run indexer:dev -- --max-backfill-pages 1` processes one historical page and leaves the cursor ready to resume. `npm run dev` starts the read-only API on port 8787 and Vite on port 5173.
+
+## Supabase
+
+Analytics live in Supabase Postgres. The server connects over the direct Postgres
+connection string, not PostgREST, so no anon, publishable or service-role key is
+involved and no RLS policy has to be opened up for the writer.
+
+Set one variable locally and in the Vercel project, from Supabase > Connect >
+Direct connection:
+
+```bash
+SUPABASE_DB_URL=postgresql://postgres:PASSWORD@db.PROJECT_REF.supabase.co:5432/postgres
+```
+
+The schema lives in [`supabase/migrations`](supabase/migrations); the SQLite
+lineage in [`migrations`](migrations) is kept only as the history the local
+database was built from.
+
+```bash
+npm run supabase:migrate   # apply pending schema changes
+npm run supabase:sync      # copy the local SQLite database into Supabase
+npm run supabase:resync    # copy it again, ignoring the completion marker
+```
+
+`npm run indexer:watch` does both of these itself before its first cycle: it
+applies pending migrations, copies anything the local SQLite database still
+holds, and then streams new transactions straight into Supabase. Once a local
+file has been copied the import is recorded and later runs skip it, so the watch
+loop starts indexing immediately. Every table is upserted on its primary key, so
+an interrupted import is resumed rather than duplicated by the next run.
+
+Raw transaction payloads are roughly 95% of the dataset's bytes and nothing in
+the dashboard reads them back. Setting `SUPABASE_SKIP_PAYLOADS=1` stores an empty
+payload instead, on both the import and the live indexer. The trade-off is that
+the payload is the only re-decodable record of a transaction: with it discarded,
+a decoder change needs a full re-index from Helius rather than a local rebuild.
 
 ## Data pipeline
 
 ```text
 Solana / Helius  --\
-                    backend indexer -> migrated SQLite database <- read-only API <- dashboard
+                    backend indexer -> Supabase Postgres <- read-only API <- dashboard
 Arbitrum / Alchemy-/
 ```
 
@@ -61,7 +97,7 @@ Curvy's current Vault balances come directly from ERC-20 `balanceOf` calls at th
 
 Deposit and withdrawal volume are scoped to the selected timeframe. Cloakc pool size is cumulative indexed deposits minus withdrawals. PrivacyCash current pool size is read directly from its on-chain SOL pool PDA and USDC/USDT token accounts; Curvy current pool size is read from its Arbitrum Vault. Each chart reconstructs the selected window from the closing balance where a direct snapshot exists.
 
-Fetched transactions and decoded flows are persisted by protocol in SQLite at `data/cloak-analytics.sqlite` by default. Raw Solana transaction payloads and Arbitrum receipts are retained in `source_transactions`; normalized external flows and their swap links are stored in `pool_flows`; current balances are stored in `pool_snapshots`; USD price snapshots are stored in `token_prices`. All tables and indexes are defined by versioned SQL files in `migrations/` and can be prepared explicitly with `npm run migrate`.
+Fetched transactions and decoded flows are persisted by protocol in Supabase Postgres. Raw Solana transaction payloads and Arbitrum receipts are retained in `source_transactions` unless `SUPABASE_SKIP_PAYLOADS=1` is set; normalized external flows and their swap links are stored in `pool_flows`; current balances are stored in `pool_snapshots`; USD price snapshots are stored in `token_prices`. All tables and indexes are defined by versioned SQL files in `supabase/migrations/` and can be prepared explicitly with `npm run migrate`.
 
 The dashboard API never calls Helius and never writes analytics data. On its first run, the independent indexer inspects `sync_state`. If history has not been verified, it streams the missing history in 100-transaction full-data pages, decodes only those pages, and persists the immutable query bound plus Helius pagination cursor after every successful page. An interrupted backfill resumes at that cursor.
 
@@ -80,7 +116,7 @@ After Solana history is complete, each cycle queries only from `synced_through -
 | 90D | 1 day | 90 days |
 | 1Y | 2 weeks | 26 periods / 364 days |
 
-The browser rereads SQLite through the API every 30 seconds. The Helius key and Alchemy RPC URL are required only by the backend indexer, remain server-side, and `.env.local` is ignored by Git.
+The browser rereads Supabase through the API every 30 seconds. The Helius key and Alchemy RPC URL are required only by the backend indexer, remain server-side, and `.env.local` is ignored by Git.
 
 ## Privacy planner
 
@@ -90,7 +126,7 @@ The estimate combines configurable pool-depth, relevant-cover, similar-size-flow
 
 PrivacyCash is configured for multiple receivers and charges its fixed component per recipient. Current Cloak mainnet and Curvy support are treated as single-recipient; they remain visible but disabled for a multiple-receiver plan. Curvy is labeled as Arbitrum One in comparisons while the other two protocols remain labeled Solana. Equal, tightly coordinated receiver legs receive an explicit coordination penalty.
 
-The planner reads only stored SQLite metrics. Missing prices, snapshots, or flow watermarks produce an unavailable result; stale or incomplete history lowers confidence. It does not substitute a `$1` stablecoin price or hardcode production activity. The deterministic scoring scenarios can be run with:
+The planner reads only stored Supabase metrics. Missing prices, snapshots, or flow watermarks produce an unavailable result; stale or incomplete history lowers confidence. It does not substitute a `$1` stablecoin price or hardcode production activity. The deterministic scoring scenarios can be run with:
 
 ```bash
 npm test

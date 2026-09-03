@@ -45,8 +45,8 @@ const INTERVALS = {
 const TYPE_SUFFIX = { deposit: 'Deposit', withdraw: 'Withdraw', swap_in: 'SwapIn', swap_out: 'SwapOut' }
 const TYPE_GROUP = { deposit: 'deposits', withdraw: 'withdrawals', swap_in: 'swapIn', swap_out: 'swapOut' }
 
-function prices() {
-  const stored = readLatestTokenPrices()
+async function prices() {
+  const stored = await readLatestTokenPrices()
   return Object.fromEntries(ASSETS.map((asset) => {
     const value = Number(stored[asset]?.usdPrice)
     return [asset, value > 0 ? value : null]
@@ -142,7 +142,7 @@ function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poo
   return { buckets, totals, externalFlows, poolState, activity: activityFor(flows, tokenPrices, now) }
 }
 
-function analytics(protocol, interval) {
+async function analytics(protocol, interval) {
   const protocolConfig = PROTOCOLS[protocol]
   const intervalConfig = INTERVALS[interval]
   if (!protocolConfig) throw new Error('protocol must be cloakc, privacycash, or curvy')
@@ -152,13 +152,16 @@ function analytics(protocol, interval) {
   const from = interval === '1y'
     ? now - intervalConfig.bucketCount * intervalConfig.bucketSeconds
     : currentBucket - (intervalConfig.bucketCount - 1) * intervalConfig.bucketSeconds
-  const state = getSyncState(protocol)
-  const snapshot = readLatestPoolSnapshot(protocol)
-  const windowFlows = readFlows(protocol, from, now)
-  const historicalFlows = snapshot ? [] : readFlows(protocol, 0, from - 1)
-  const tokenPrices = prices()
+  const [state, snapshot, windowFlows, tokenPrices, storage] = await Promise.all([
+    getSyncState(protocol),
+    readLatestPoolSnapshot(protocol),
+    readFlows(protocol, from, now),
+    prices(),
+    databaseStats(protocol),
+  ])
+  const historicalFlows = snapshot ? [] : await readFlows(protocol, 0, from - 1)
   return {
-    source: 'sqlite', indexedVia: protocol === 'curvy' ? 'alchemy' : 'helius',
+    source: 'supabase', indexedVia: protocol === 'curvy' ? 'alchemy' : 'helius',
     chain: protocolConfig.chain || 'solana', chainId: protocolConfig.chainId || null,
     protocol, protocolName: protocolConfig.name, programId: protocolConfig.programId,
     docs: protocolConfig.docs, feePolicy: protocolConfig.feePolicy, range: interval, bucketSeconds: intervalConfig.bucketSeconds,
@@ -169,7 +172,7 @@ function analytics(protocol, interval) {
       complete: Boolean(state?.historyComplete), historyComplete: Boolean(state?.historyComplete),
       backfilledFrom: state?.backfilledFrom ?? null, syncedThrough: state?.syncedThrough ?? null,
     },
-    poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows', storage: databaseStats(protocol),
+    poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows', storage,
     ...aggregate(windowFlows, historicalFlows, from, intervalConfig.bucketSeconds, intervalConfig.bucketCount, snapshot?.balances, tokenPrices, now),
     recent: windowFlows.slice(0, 12),
     flowMethod: protocol === 'privacycash'
@@ -371,12 +374,12 @@ function multiRanking(provider, request, metrics, tokenPrices, now) {
   }
 }
 
-function planningResult(body) {
+async function planningResult(body) {
   const request = validatePlanRequest(body)
   const now = Math.floor(Date.now() / 1000)
-  const tokenPrices = prices()
-  const rankings = Object.keys(PROTOCOLS).map((provider) => {
-    const metrics = buildPlanningMetrics(provider, request.asset, request.total.amount, now)
+  const tokenPrices = await prices()
+  const rankings = await Promise.all(Object.keys(PROTOCOLS).map(async (provider) => {
+    const metrics = await buildPlanningMetrics(provider, request.asset, request.total.amount, now)
     const ranking = request.strategy === 'multiple'
       ? multiRanking(provider, request, metrics, tokenPrices, now)
       : singleRanking(provider, request, metrics, tokenPrices, now)
@@ -394,7 +397,7 @@ function planningResult(body) {
         execution: route.capability?.execution || 'unavailable',
       },
     }
-  })
+  }))
   const target = getPrivacyTarget(request.privacyTarget)
   rankings.sort((a, b) => {
     if (a.available !== b.available) return a.available ? -1 : 1
@@ -408,7 +411,7 @@ function planningResult(body) {
     return (a.fee?.usd ?? Number.POSITIVE_INFINITY) - (b.fee?.usd ?? Number.POSITIVE_INFINITY)
   })
   return {
-    source: 'sqlite', indexedVia: ['helius', 'alchemy'], methodologyVersion: 'privacy-planner-v1', computedAt: now,
+    source: 'supabase', indexedVia: ['helius', 'alchemy'], methodologyVersion: 'privacy-planner-v1', computedAt: now,
     disclaimer: ESTIMATE_NOTICE, asset: request.asset, destinationAsset: request.destinationAsset,
     kind: request.asset === request.destinationAsset ? 'transfer' : 'swap', amount: request.total.amount,
     strategy: request.strategy, receiverAmounts: request.receivers.map(({ amount }) => amount),
@@ -477,21 +480,21 @@ app.post('/api/solana-rpc', async (request, response) => {
     response.status(502).json({ jsonrpc: '2.0', id: request.body?.id ?? null, error: { code: -32000, message: `Solana RPC unavailable: ${error.message}` } })
   }
 })
-app.get('/api/health', (_request, response) => response.json({ ok: true, source: 'sqlite', protocols: Object.values(PROTOCOLS).map(({ id, name, programId, chain = 'solana', chainId = null }) => ({ id, name, programId, chain, chainId })) }))
-app.get('/api/analytics', (request, response) => {
-  try { response.json(analytics(String(request.query.protocol || 'cloakc').toLowerCase(), String(request.query.interval || '1h').toLowerCase())) }
+app.get('/api/health', (_request, response) => response.json({ ok: true, source: 'supabase', protocols: Object.values(PROTOCOLS).map(({ id, name, programId, chain = 'solana', chainId = null }) => ({ id, name, programId, chain, chainId })) }))
+app.get('/api/analytics', async (request, response) => {
+  try { response.json(await analytics(String(request.query.protocol || 'cloakc').toLowerCase(), String(request.query.interval || '1h').toLowerCase())) }
   catch (error) { response.status(400).json({ error: 'Unable to read analytics', detail: error.message }) }
 })
-app.get('/api/compare', (request, response) => {
-  try { response.json(planningResult({ asset: request.query.asset || 'USDC', amount: request.query.amount || '10000', strategy: 'single', privacyTarget: request.query.privacyTarget || 'balanced' })) }
+app.get('/api/compare', async (request, response) => {
+  try { response.json(await planningResult({ asset: request.query.asset || 'USDC', amount: request.query.amount || '10000', strategy: 'single', privacyTarget: request.query.privacyTarget || 'balanced' })) }
   catch (error) { response.status(400).json({ error: 'Unable to compare pools', detail: error.message }) }
 })
-app.post('/api/plan', (request, response) => {
-  try { response.json(planningResult(request.body)) }
+app.post('/api/plan', async (request, response) => {
+  try { response.json(await planningResult(request.body)) }
   catch (error) { response.status(400).json({ error: 'Unable to build privacy plan', detail: error.message }) }
 })
 
 const dist = resolve(root, 'dist')
 if (existsSync(dist)) { app.use(express.static(dist)); app.get('*path', (_request, response) => response.sendFile(resolve(dist, 'index.html'))) }
 const port = Number(process.env.PORT || 8787)
-app.listen(port, '127.0.0.1', () => console.log(`Dashboard API reading SQLite on http://127.0.0.1:${port}`))
+app.listen(port, '127.0.0.1', () => console.log(`Dashboard API reading Supabase on http://127.0.0.1:${port}`))

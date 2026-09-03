@@ -209,7 +209,7 @@ export async function indexCurvy() {
   if (Number(network.chainId) !== CURVY.chainId) throw new Error(`ARBITRUM_RPC_URL returned chain ${network.chainId}, expected 42161`)
   const latest = await evm.getBlockNumber()
   const toBlock = Math.max(CURVY.deploymentBlock, latest - CURVY.confirmations)
-  const state = getSyncState(CURVY.id)
+  const state = await getSyncState(CURVY.id)
   const previousCursor = Number(state?.chainCursor)
   const sourceIdentity = `${CURVY.chainId}:${CURVY.vault.toLowerCase()}`
   const fullHistory = state?.sourceIdentity !== sourceIdentity || !state?.historyComplete || !Number.isInteger(previousCursor)
@@ -221,13 +221,13 @@ export async function indexCurvy() {
   const transfers = [...incoming.transfers, ...outgoing.transfers]
   const receipts = await receiptsFor(transfers)
   const indexed = indexedRecords(transfers, receipts)
-  storeIndexedData(CURVY.id, indexed.transactions, indexed.flows)
+  await storeIndexedData(CURVY.id, indexed.transactions, indexed.flows)
   const safeBlock = await evm.getBlock(toBlock)
   if (!safeBlock?.timestamp) throw new Error('Unable to read the confirmed Arbitrum block timestamp')
   const deploymentBlock = fullHistory ? await evm.getBlock(CURVY.deploymentBlock) : null
   const balances = await poolBalances(evm, toBlock)
-  storePoolSnapshot(CURVY.id, balances, safeBlock.timestamp)
-  saveSyncState(CURVY.id, {
+  await storePoolSnapshot(CURVY.id, balances, safeBlock.timestamp)
+  await saveSyncState(CURVY.id, {
     backfilledFrom: fullHistory ? deploymentBlock?.timestamp ?? safeBlock.timestamp : state?.backfilledFrom,
     syncedThrough: safeBlock.timestamp,
     historyComplete: true,
@@ -242,6 +242,6 @@ export async function indexCurvy() {
     transactions: indexed.transactions.length,
     flows: indexed.flows.length,
     snapshot: balances,
-    storage: databaseStats(CURVY.id),
+    storage: await databaseStats(CURVY.id),
   }
 }

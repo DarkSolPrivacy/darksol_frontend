@@ -110,14 +110,16 @@ function zeroFilledBins(flows, now, seconds, bucketSeconds) {
 
 function sourceAge(now, timestamp) { return timestamp == null ? null : Math.max(0, now - timestamp) }
 
-export function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.floor(Date.now() / 1000)) {
-  const priceRows = readLatestTokenPrices()
+export async function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.floor(Date.now() / 1000)) {
+  const priceRows = await readLatestTokenPrices()
   const priceRow = priceRows[asset]
   const price = Number(priceRow?.usdPrice) > 0 ? Number(priceRow.usdPrice) : null
-  const snapshot = readLatestPoolSnapshot(protocol)
-  const state = getSyncState(protocol)
-  const history = readProtocolHistoryBounds(protocol)
-  const flows = readPlanningFlows(protocol, asset, now - WINDOW_SECONDS['7d'], now)
+  const [snapshot, state, history, flows] = await Promise.all([
+    readLatestPoolSnapshot(protocol),
+    getSyncState(protocol),
+    readProtocolHistoryBounds(protocol),
+    readPlanningFlows(protocol, asset, now - WINDOW_SECONDS['7d'], now),
+  ])
   const publicFlows = flows.map((flow) => ({ ...flow, amountUsd: price ? flow.amount * price : null }))
   const activity = Object.fromEntries(Object.keys(WINDOW_SECONDS).map((window) => [window, emptyWindow(price)]))
   const operationSets = Object.fromEntries(Object.keys(WINDOW_SECONDS).map((window) => [window, new Set()]))
@@ -155,7 +157,7 @@ export function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.f
   const timeDistribution1h7d = zeroFilledBins(publicFlows, now, 604800, 3600)
   const recentTimes = publicFlows.filter(({ timestamp }) => timestamp >= now - 86400).map(({ timestamp }) => timestamp).sort((a, b) => a - b)
   const gaps = recentTimes.slice(1).map((timestamp, index) => timestamp - recentTimes[index])
-  const observedSwapGaps = readLinkedFlowLatencies(protocol, now - 30 * 86400, now).sort((a, b) => a - b)
+  const observedSwapGaps = (await readLinkedFlowLatencies(protocol, now - 30 * 86400, now)).sort((a, b) => a - b)
   const balance = snapshot?.balances?.[asset] ?? null
   const tvl = balance !== null && price ? Math.max(0, balance * price) : null
   const amountUsd = price ? targetAmount * price : null

@@ -4,7 +4,8 @@ import bs58 from 'bs58'
 import { PublicKey } from '@solana/web3.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { classifyPrivacyCashSwaps, databaseStats, getSyncState, readFlows, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
+import { classifyPrivacyCashSwaps, databaseStats, getSyncState, readFlows, runMigrations, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
+import { importLocalSqlite } from './import-sqlite.js'
 import { indexCurvy } from './curvy-indexer.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -228,23 +229,23 @@ function flowsFromTransaction(protocol, tx) {
   return flows
 }
 
-function persistTransactionPage(protocol, transactions) {
+async function persistTransactionPage(protocol, transactions) {
   if (!transactions.length) return { transactions: 0, flows: 0, earliest: null, latest: null, matchedSwaps: 0 }
   const decodedFlows = transactions.flatMap((transaction) => flowsFromTransaction(protocol, transaction))
-  storeIndexedData(protocol, transactions, decodedFlows)
+  await storeIndexedData(protocol, transactions, decodedFlows)
   const times = transactions.map(({ blockTime }) => blockTime).filter(Number.isFinite)
   const earliest = times.length ? Math.min(...times) : null
   const latest = times.length ? Math.max(...times) : null
   const matchedSwaps = protocol === 'privacycash' && earliest !== null
-    ? classifyPrivacyCashSwaps(earliest, latest)
+    ? await classifyPrivacyCashSwaps(earliest, latest)
     : 0
   return { transactions: transactions.length, flows: decodedFlows.length, earliest, latest, matchedSwaps }
 }
 
 async function ensureCompleteHistory(protocol, now, verbose = false, maxPages = Infinity) {
   const config = PROTOCOLS[protocol]
-  let state = getSyncState(protocol)
-  if (state?.historyComplete && databaseStats(protocol).transactions > 0) {
+  let state = await getSyncState(protocol)
+  if (state?.historyComplete && (await databaseStats(protocol)).transactions > 0) {
     return { pages: 0, transactions: 0, flows: 0, resumed: false, complete: true }
   }
 
@@ -261,13 +262,13 @@ async function ensureCompleteHistory(protocol, now, verbose = false, maxPages = 
 
   do {
     const page = await getTransactionPage(config.programId, 0, upperBound, paginationToken)
-    const stored = persistTransactionPage(protocol, page.transactions)
+    const stored = await persistTransactionPage(protocol, page.transactions)
     pages += 1
     transactions += stored.transactions
     flows += stored.flows
     if (stored.earliest !== null) earliest = Math.min(earliest, stored.earliest)
     paginationToken = page.paginationToken
-    state = saveSyncState(protocol, {
+    state = await saveSyncState(protocol, {
       backfilledFrom: paginationToken ? earliest : 0,
       syncedThrough: state?.syncedThrough ?? now,
       historyComplete: !paginationToken,
@@ -285,7 +286,7 @@ async function ensureCompleteHistory(protocol, now, verbose = false, maxPages = 
 
 async function catchUp(protocol, now) {
   const config = PROTOCOLS[protocol]
-  const state = getSyncState(protocol)
+  const state = await getSyncState(protocol)
   const resuming = Boolean(state?.incrementalCursor && state?.incrementalFrom !== null && state?.incrementalTo !== null)
   const from = resuming ? state.incrementalFrom : Math.max(0, (state?.syncedThrough ?? now) - SYNC_OVERLAP_SECONDS)
   const to = resuming ? state.incrementalTo : now
@@ -295,12 +296,12 @@ async function catchUp(protocol, now) {
   let flows = 0
   do {
     const page = await getTransactionPage(config.programId, from, to, paginationToken)
-    const stored = persistTransactionPage(protocol, page.transactions)
+    const stored = await persistTransactionPage(protocol, page.transactions)
     pages += 1
     transactions += stored.transactions
     flows += stored.flows
     paginationToken = page.paginationToken
-    saveSyncState(protocol, paginationToken ? {
+    await saveSyncState(protocol, paginationToken ? {
       incrementalCursor: paginationToken, incrementalFrom: from, incrementalTo: to,
     } : {
       syncedThrough: to, incrementalCursor: null, incrementalFrom: null, incrementalTo: null,
@@ -335,9 +336,9 @@ async function privacyCashPoolBalances() {
   }
 }
 
-function indexedPoolBalances(protocol, now) {
+async function indexedPoolBalances(protocol, now) {
   const balances = { USDC: 0, SOL: 0, USDT: 0 }
-  for (const flow of readFlows(protocol, 0, now)) {
+  for (const flow of await readFlows(protocol, 0, now)) {
     balances[flow.asset] += (flow.direction === 'deposit' ? 1 : -1) * flow.amount
   }
   return balances
@@ -347,14 +348,14 @@ async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infin
   if (!PROTOCOLS[protocol]) throw new Error('protocol must be cloakc or privacycash')
   const now = Math.floor(Date.now() / 1000)
   const backfill = await ensureCompleteHistory(protocol, now, verbose, maxBackfillPages)
-  const stateAfterBackfill = getSyncState(protocol)
+  const stateAfterBackfill = await getSyncState(protocol)
   const incremental = stateAfterBackfill?.historyComplete
     ? await catchUp(protocol, Math.floor(Date.now() / 1000))
     : { skipped: true, reason: 'historical backfill is incomplete' }
-  const balances = protocol === 'privacycash' ? await privacyCashPoolBalances() : indexedPoolBalances(protocol, now)
-  storePoolSnapshot(protocol, balances, now)
-  const state = getSyncState(protocol)
-  const storage = databaseStats(protocol)
+  const balances = protocol === 'privacycash' ? await privacyCashPoolBalances() : await indexedPoolBalances(protocol, now)
+  await storePoolSnapshot(protocol, balances, now)
+  const state = await getSyncState(protocol)
+  const storage = await databaseStats(protocol)
   return {
     protocol, mode: backfill.pages
       ? (state?.historyComplete ? 'backfill+incremental' : 'backfill')
@@ -376,7 +377,7 @@ async function updateTokenPrices() {
       console.warn(`Price unavailable for ${asset.symbol}: ${error.message}`)
     }
   }
-  storeTokenPrices(prices)
+  await storeTokenPrices(prices)
   return prices
 }
 
@@ -418,6 +419,16 @@ async function runCycle() {
 }
 
 console.log(JSON.stringify({ indexerMode: devMode ? 'development' : 'production', watchSeconds, protocols: selectedProtocols }))
+
+// Bring Supabase up to date before the first cycle: apply any pending schema
+// change, then copy across whatever the local SQLite database still holds that
+// Supabase does not. Both steps are no-ops once the two are level, so the watch
+// loop starts streaming immediately on every later run.
+const migrated = await runMigrations({ verbose: devMode })
+if (migrated.length) console.log(JSON.stringify({ phase: 'migrate', applied: migrated }))
+const imported = await importLocalSqlite({ resync: process.argv.includes('--resync'), verbose: true })
+console.log(JSON.stringify({ phase: 'local_sync', ...imported }))
+
 do {
   try {
     await runCycle()
