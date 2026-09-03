@@ -59,6 +59,8 @@ const pickNumber = (...values) => values.map(finite).find((value) => value !== n
 const scoreText = (value) => finite(value) === null ? '—' : `${Math.round(Number(value))}/100`
 const bandClass = (value) => String(value || '').toLowerCase().replace(/\s+/g, '-')
 const displayBand = (value) => value ? String(value).replaceAll('_', ' ').toUpperCase() : 'UNAVAILABLE'
+const explanationText = (entry) => typeof entry === 'string' ? entry : entry?.text || entry?.message || entry?.label
+const explanationTone = (entry, text) => entry && typeof entry === 'object' ? entry.type || entry.tone || entry.impact : String(text).trim().startsWith('-') ? 'negative' : 'positive'
 const formatMetricMoney = (value) => finite(value) === null ? 'Unavailable' : money(Number(value))
 const formatPercent = (value) => finite(value) === null ? 'Unavailable' : `${compact(Number(value) * 100, Number(value) < .001 ? 3 : 2)}%`
 const rawTokenAmount = (value, asset) => {
@@ -233,8 +235,12 @@ function EclipseLogo() {
   </div>
 }
 
-function Sidebar({ open, view, onToggle, onHome, onAnalytics }) {
-  return <aside><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className="analyticsNav" href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code></div></aside>
+function MobileBar({ onOpen }) {
+  return <div className="mobileBar"><button className="mobile" type="button" aria-label="Open navigation" aria-controls="primaryNav" onClick={onOpen}><Menu /></button><EclipseLogo /></div>
+}
+
+function Sidebar({ open, view, onToggle, onHome, onAnalytics, onClose }) {
+  return <aside id="primaryNav"><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button><button className="drawerClose" type="button" aria-label="Close navigation" onClick={onClose}><X /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className={view === 'analytics' ? 'analyticsNav active' : 'analyticsNav'} href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code></div></aside>
 }
 
 function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selected, suggested, onSelect, onOpenProtocol }) {
@@ -260,6 +266,42 @@ function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selecte
   </article>
 }
 
+function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open, onToggle }) {
+  const metrics = estimate.poolMetrics || {}
+  const fee = feeDisplay(estimate.fee || estimate.estimatedFee, asset)
+  const targetWait = estimate.recommendedWait ?? estimate.estimatedTimeToTarget
+  const rivals = alternatives.filter((item) => item.available && finite(item.score) !== null)
+  const runnerUp = rivals.reduce((best, item) => !best || item.score > best.score ? item : best, null)
+  const margin = runnerUp && finite(estimate.score) !== null ? estimate.score - runnerUp.score : null
+  const planAmount = finite(amount)
+  const leadReason = !runnerUp
+    ? 'Only pool able to route this transfer right now'
+    : margin > 0 ? `${compact(margin, 1)} points ahead of ${runnerUp.protocolName} (${scoreText(runnerUp.score)})`
+    : `Level with ${runnerUp.protocolName} on score, ahead on pool depth`
+  return <section className={`routeDetails ${open ? 'open' : ''}`}>
+    <button type="button" className="routeDetailsToggle" aria-expanded={open} onClick={onToggle}>Details <ChevronDown /></button>
+    {open && <div className="routeDetailsBody panel">
+      <div className="routeDetailsHead">
+        <div><p className="eyebrow">WHY THIS ROUTE</p><h3>{estimate.protocolName} ranks first{planAmount === null ? '' : ` for ${compact(planAmount, 6)} ${asset}`}</h3></div>
+        <div className={`privacy ${bandClass(estimate.band)}`}><span>ESTIMATED PRIVACY</span><strong>{displayBand(estimate.band)}</strong><em>{scoreText(estimate.score)}</em></div>
+      </div>
+      <ul className="routeReasons">
+        <li className={margin > 0 || !runnerUp ? 'positive' : 'neutral'}><i>{margin > 0 || !runnerUp ? '+' : '='}</i><span>{leadReason}</span></li>
+        {estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = explanationTone(entry, text); return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}
+      </ul>
+      <dl className="routeFacts">
+        <div><dt>Pool TVL</dt><dd>{formatMetricMoney(metrics.tvl)}</dd></div>
+        <div><dt>Your pool share</dt><dd>{formatPercent(estimate.poolShare)}</dd></div>
+        <div><dt>Similar-size flows</dt><dd>{finite(estimate.similarFlowCount) === null ? 'Unavailable' : compact(estimate.similarFlowCount, 0)}</dd></div>
+        <div><dt>{targetLabel} wait</dt><dd>{formatDuration(targetWait)}</dd></div>
+        <div><dt>Estimated fee</dt><dd>{fee.primary}</dd></div>
+      </dl>
+      {alternatives.length > 0 && <div className="routeAlternatives"><p>COMPARED AGAINST</p>{alternatives.map((item) => <div key={item.protocol}><ProtocolLogo protocol={item.protocol} name={item.protocolName} /><span>{item.protocolName}</span>{item.available ? <b>{scoreText(item.score)} <small>{displayBand(item.band)}</small></b> : <small className="routeUnavailable">{item.unavailableReason || 'Unavailable for this transfer'}</small>}</div>)}</div>}
+      <p className="estimateDisclaimer">This is an estimate, not a guarantee of anonymity.</p>
+    </div>}
+  </section>
+}
+
 function PrivacyHome() {
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
@@ -278,6 +320,7 @@ function PrivacyHome() {
   const [sendStatus, setSendStatus] = useState('')
   const [sendError, setSendError] = useState('')
   const [receipt, setReceipt] = useState(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [sendAttempted, setSendAttempted] = useState(false)
   const [selectedProtocol, setSelectedProtocol] = useState(null)
   const [walletBalance, setWalletBalance] = useState(null)
@@ -516,6 +559,7 @@ function PrivacyHome() {
       <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
       <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || Boolean(wallet && (receipt?.depositSignature || !transferValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{sending ? sendStatus || (isSwap ? 'Swapping...' : 'Sending...') : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : isSwap ? 'Swap' : 'Send'} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
     </section>
+    {recommended && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
   </div>
 }
@@ -532,13 +576,12 @@ function EstimateAnalytics({ estimate }) {
     ['uniqueness', pickNumber(rawScores.uniqueness, rawScores.uniquenessScore, estimate.uniquenessScore)],
   ].filter(([, value]) => value !== null)
   const plan = estimate._plan || {}
-  const explanationText = (entry) => typeof entry === 'string' ? entry : entry?.text || entry?.message || entry?.label
   return <section className="estimateAnalytics">
     <div className="sectionTitle"><div><p className="eyebrow">PLANNING ESTIMATE</p><h2>Why this transfer received its score</h2></div><span>{plan.amount !== null && plan.amount !== undefined ? `${compact(plan.amount, 6)} ${plan.asset}` : ''}</span></div>
     <div className="estimateOverview panel"><div className={`estimateScore ${bandClass(estimate.band)}`}><span>ESTIMATED PRIVACY</span><strong>{displayBand(estimate.band)}</strong><b>{scoreText(estimate.score)}</b></div><div className="estimateFacts"><div><span>POOL SHARE</span><b>{formatPercent(estimate.poolShare)}</b></div><div><span>SIMILAR-SIZE FLOWS</span><b>{finite(estimate.similarFlowCount) === null ? 'Unavailable' : compact(estimate.similarFlowCount, 0)}</b></div><div><span>{plan.targetLabel || 'TARGET'} WAIT</span><b>{formatDuration(estimate.recommendedWait ?? estimate.estimatedTimeToTarget)}</b></div></div></div>
     <div className="explainGrid">
       <section className="panel subScores"><div className="panelHead"><div><p>SCORE COMPONENTS</p><h2>Independent signals</h2></div></div>{scoreEntries.length ? <div className="scoreBars">{scoreEntries.map(([key, value]) => <div key={key}><span>{SUB_SCORE_LABELS[key] || key}</span><i><b style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></i><strong>{Math.round(value)}</strong></div>)}</div> : <div className="empty smallEmpty">Sub-scores unavailable</div>}</section>
-      <section className="panel explanationPanel"><div className="panelHead"><div><p>EXPLANATION</p><h2>Evidence behind the estimate</h2></div></div>{estimate.explanations?.length ? <ul>{estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = entry && typeof entry === 'object' ? entry.type || entry.tone || entry.impact : String(text).trim().startsWith('-') ? 'negative' : 'positive'; return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}</ul> : <div className="empty smallEmpty">No explanation was returned for this estimate.</div>}</section>
+      <section className="panel explanationPanel"><div className="panelHead"><div><p>EXPLANATION</p><h2>Evidence behind the estimate</h2></div></div>{estimate.explanations?.length ? <ul>{estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = explanationTone(entry, text); return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}</ul> : <div className="empty smallEmpty">No explanation was returned for this estimate.</div>}</section>
     </div>
     {plan.strategy === 'multiple' && <section className="panel selectedReceivers"><ReceiverBreakdown receivers={estimate.receiverEstimates} asset={plan.asset} targetLabel={plan.targetLabel || 'Target'} /><div className="coordination"><span>PLAN COORDINATION RISK</span><b className={bandClass(estimate.coordinationRisk)}>{displayBand(estimate.coordinationRisk || 'Unavailable')}</b><small>{finite(estimate.coordinationPenalty) === null ? 'Penalty unavailable' : `−${compact(estimate.coordinationPenalty, 1)} score points`}</small></div></section>}
     <section className="panel selectedTimeline"><div><p className="eyebrow">ESTIMATED PRIVACY WAIT</p><h2>Expected score based on recent activity</h2></div><EstimateTimeline timeline={estimate.timeline} targetScore={plan.targetScore || 75} /></section>
@@ -1024,7 +1067,7 @@ function LiquidityUniverse() {
     <div className="universeCopy"><p className="eyebrow">LIVE PRIVATE LIQUIDITY</p><h2>Funds enter publicly, and leave without a trace</h2><p>A deposit into a privacy pool is visible on-chain. What leaves it later is not linkable back to it.</p><div className="universeLegend"><span className="in"><i /> Inflow {money(inflow)}</span><span className="out"><i /> Withdrawals {money(outflow)}</span></div><div className="normalization">MAX SIZE · ALL PROTOCOLS <b>{money(totalTvl)}</b></div></div>
     <div className="liquidityVisual">
       <ObsidianLiquidity selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
-      <div className="tvlReadout"><span>SELECTED TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
+      <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
     </div>
     <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{['privacycash', 'cloakc'].map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{['curvy'].map(poolButton)}</div></div></div>
   </section>
@@ -1073,7 +1116,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <section className="panel chartPanel">
       <div className="panelHead"><div><p>EXTERNAL FLOW</p><h2>{token} pool movements</h2></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div><div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div></div>
       <div className="flowSummary">{FLOW_TYPES.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[range]}</small></div>
-      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 2.4 : 1.8} />)}<Line type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2.75} dot={false} /></AreaChart></ResponsiveContainer></div>
+      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 2.4 : 1.8} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2.75} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
 
     <div className="sectionTitle activityTitle"><div><p className="eyebrow">ACTIVITY</p><h2>Behavior inside this window</h2></div><span>{analytics.flowMethod}</span></div>
@@ -1092,6 +1135,7 @@ function App() {
   const getPage = () => window.location.pathname.replace(/\/+$/, '') === '/analytics' ? 'analytics' : 'home'
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [protocol, setProtocol] = useState('privacycash')
   const [selectedEstimate, setSelectedEstimate] = useState(null)
   useEffect(() => {
@@ -1100,13 +1144,27 @@ function App() {
     window.addEventListener('popstate', syncLocation)
     return () => window.removeEventListener('popstate', syncLocation)
   }, [])
+  useEffect(() => {
+    if (!drawerOpen) return
+    const closeOnEscape = (event) => { if (event.key === 'Escape') setDrawerOpen(false) }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape) }
+  }, [drawerOpen])
   function navigate(path) { window.history.pushState({}, '', path); setView(path.startsWith('/analytics') ? 'analytics' : 'home') }
   function openAnalytics(id = protocol) { setProtocol(id); setSelectedEstimate(null); if (view !== 'analytics') navigate('/analytics') }
-  function launchApp(event) { event.preventDefault(); navigate('/') }
-  function openHome(event) { event.preventDefault(); navigate('/') }
-  function openAnalyticsPage(event) { event.preventDefault(); openAnalytics(protocol) }
-  if (view === 'analytics') return <div className="analyticsApp"><main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}`}><Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onAnalytics={openAnalyticsPage} /><main><PrivacyHome /></main></div>
+  function closeDrawer() { setDrawerOpen(false) }
+  function launchApp(event) { event.preventDefault(); closeDrawer(); navigate('/') }
+  function openHome(event) { event.preventDefault(); closeDrawer(); navigate('/') }
+  function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
+  const mobileNav = <>
+    <MobileBar onOpen={() => setDrawerOpen(true)} />
+    <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
+    {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
+  </>
+  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PrivacyHome /></main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

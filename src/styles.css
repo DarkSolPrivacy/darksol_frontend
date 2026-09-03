@@ -494,14 +494,18 @@ footer { color: var(--label); }
 .high,
 .medium,
 .low { color: var(--gold); }
+/* Recent activity flow types mirror the External Flow chart palette:
+   deposits read white, withdrawals read as a light black. */
 .direction,
-.direction.withdraw,
 .direction.swap_in,
 .direction.swap_out { color: #B5B5B5; }
 .direction i,
-.direction.withdraw i,
 .direction.swap_in i,
 .direction.swap_out i { background: var(--gold); }
+.direction.deposit { color: #F0F0F0; }
+.direction.deposit i { background: #F0F0F0; box-shadow: none; }
+.direction.withdraw { color: #7A7A7A; }
+.direction.withdraw i { background: #3E3E3E; box-shadow: inset 0 0 0 1px #555555; }
 .scoreBars i { background: #222; }
 .scoreBars i b,
 .timelinePoint i.crossed { background: var(--gold); }
@@ -535,4 +539,124 @@ footer { color: var(--label); }
   .poolGroup button { width: 100%; min-width: 0; padding: 0 9px; }
   .poolGroup button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .recent { max-width: 100%; overflow-x: auto; }
+}
+
+/* Route details — the collapsible "why this route won" panel on the home page */
+.routeDetails { margin-top: 10px; }
+.routeDetailsToggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 auto;
+  padding: 4px 8px;
+  border: 0;
+  color: var(--label);
+  background: transparent;
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+.routeDetailsToggle:hover { color: var(--text); }
+.routeDetailsToggle svg { width: 12px; transition: transform .18s ease; }
+.routeDetails.open .routeDetailsToggle { color: var(--text); }
+.routeDetails.open .routeDetailsToggle svg { transform: rotate(180deg); }
+
+.routeDetailsBody {
+  margin-top: 8px;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--surface);
+}
+.routeDetailsHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--grid);
+}
+.routeDetailsHead h3 { margin-top: 6px; font-size: 15px; font-weight: 500; }
+.routeDetailsHead .eyebrow { font: 500 8px "JetBrains Mono", monospace; letter-spacing: 1.4px; color: var(--label); }
+.routeDetailsHead .privacy { text-align: right; display: grid; gap: 2px; }
+.routeDetailsHead .privacy span { font: 500 8px "JetBrains Mono", monospace; color: var(--label); }
+.routeDetailsHead .privacy strong { font: 500 15px "JetBrains Mono", monospace; color: var(--gold); }
+.routeDetailsHead .privacy em { font: 9px "JetBrains Mono", monospace; font-style: normal; color: var(--label); }
+
+.routeReasons { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.routeReasons li { display: grid; grid-template-columns: 12px 1fr; gap: 8px; align-items: start; font-size: 11px; color: #B5B5B5; }
+.routeReasons i { font-style: normal; font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--gold); }
+.routeReasons li.negative i, .routeReasons li.risk i, .routeReasons li.neutral i { color: var(--muted); }
+
+.routeFacts { margin: 16px 0 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--grid); }
+.routeFacts > div { padding: 12px 12px 0 0; }
+.routeFacts dt { font-size: 9px; color: var(--label); }
+.routeFacts dd { margin: 6px 0 0; font: 500 12px "JetBrains Mono", monospace; color: var(--text); }
+
+.routeAlternatives { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.routeAlternatives > p { margin: 0 0 10px; font: 500 8px "JetBrains Mono", monospace; letter-spacing: 1.4px; color: var(--label); }
+.routeAlternatives > div { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 11px; color: #B5B5B5; }
+.routeAlternatives .protocolLogo { width: 22px; height: 22px; }
+.routeAlternatives b { margin-left: auto; font: 500 11px "JetBrains Mono", monospace; color: var(--text); }
+.routeAlternatives b small { margin-left: 6px; color: var(--label); font-size: 9px; }
+.routeAlternatives .routeUnavailable { margin-left: auto; max-width: 58%; text-align: right; font-size: 9px; color: var(--label); }
+
+.routeDetailsBody .estimateDisclaimer { margin: 14px 0 0; font-size: 9px; color: var(--label); }
+
+@media(max-width:760px) {
+  .routeDetailsHead { flex-direction: column; gap: 12px; }
+  .routeDetailsHead .privacy { text-align: left; }
+  .routeFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .routeAlternatives .routeUnavailable { max-width: 50%; }
+}
+
+/* --- Mobile navigation -------------------------------------------------
+   Below 760px the fixed rail becomes an off-canvas drawer opened from a
+   sticky top bar. Previously `aside` was simply display:none on phones,
+   which left the app with no navigation at all on mobile. The drawer is
+   the only navigation the analytics view gets, so it renders there too. */
+.mobileBar,.drawerScrim,.drawerClose,.analyticsApp>aside{display:none}
+.sidebarClosed .brandLockup>span{display:none}
+nav .analyticsNav .navArrow{width:12px;margin-left:auto;color:#888888}
+.sidebarClosed nav .analyticsNav .navArrow{display:none}
+
+@media(max-width:760px){
+  .app{display:block}
+
+  .mobileBar{position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:12px;height:58px;padding:0 14px;background:color-mix(in srgb,#0A0A0A 92%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid #2A2A2A}
+  .mobileBar .mobile{display:grid;place-items:center;width:40px;height:40px;padding:0;margin:0;border:1px solid #2A2A2A;border-radius:9px;background:#111111;color:#EFEFEF}
+  .mobileBar .mobile svg{width:19px}
+
+  .app>aside,.analyticsApp>aside{display:flex;width:272px;max-width:80vw;height:100dvh;padding:20px 16px;transform:translateX(-101%);transition:transform .24s ease;z-index:70}
+  .drawerOpen>aside{transform:none;box-shadow:0 0 46px #000000cc}
+  .drawerScrim{position:fixed;inset:0;z-index:65;display:block;width:100%;height:100%;padding:0;border:0;background:#000000a8;backdrop-filter:blur(2px)}
+
+  /* The collapsed-rail rules are desktop-only; the drawer always shows labels. */
+  .sidebarClosed .sideTop{display:flex}
+  .sidebarClosed .brandLockup>span{display:inline}
+  .sidebarClosed nav{margin-top:40px}
+  .sidebarClosed nav a{width:auto;height:auto;padding:11px 12px;display:flex}
+  .sidebarClosed nav span{display:inline}
+  .sidebarClosed .sideBottom{display:block}
+  .sidebarClosed nav .externalNav .navArrow,.sidebarClosed nav .analyticsNav .navArrow{display:block}
+
+  .sidebarToggle{display:none}
+  .drawerClose{display:grid;place-items:center;width:34px;height:34px;margin-left:auto;padding:0;border:1px solid #2A2A2A;border-radius:7px;background:#111111;color:#BBBBBB}
+  .drawerClose svg{width:16px}
+}
+
+@media(max-width:760px) and (prefers-reduced-motion:reduce){
+  .app>aside,.analyticsApp>aside{transition:none}
+}
+
+/* --- Small phones ------------------------------------------------------ */
+html,body{overflow-x:clip}
+@media(max-width:430px){
+  h1,.analyticsHeader h1{font-size:22px}
+  .stats{grid-template-columns:1fr}
+  .stat{border-right:0;border-bottom:1px solid #2A2A2A}
+  .stat strong{font-size:21px}
+  .activityMetrics,.estimateFacts{grid-template-columns:1fr}
+  .brandLockup>span{font-size:12px;letter-spacing:1.8px}
+  .analyticsProtocolTabs button{min-width:104px}
+  .tr{padding:0 12px}
 }
