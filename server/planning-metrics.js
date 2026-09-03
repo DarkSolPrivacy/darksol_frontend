@@ -110,8 +110,10 @@ function zeroFilledBins(flows, now, seconds, bucketSeconds) {
 
 function sourceAge(now, timestamp) { return timestamp == null ? null : Math.max(0, now - timestamp) }
 
-export async function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.floor(Date.now() / 1000)) {
-  const priceRows = await readLatestTokenPrices()
+// `priceRows` is optional so a caller building metrics for several protocols at
+// once reads the shared price table once instead of once per protocol.
+export async function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.floor(Date.now() / 1000), sharedPriceRows = null) {
+  const priceRows = sharedPriceRows ?? await readLatestTokenPrices()
   const priceRow = priceRows[asset]
   const price = Number(priceRow?.usdPrice) > 0 ? Number(priceRow.usdPrice) : null
   const [snapshot, state, history, flows] = await Promise.all([

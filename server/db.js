@@ -275,10 +275,14 @@ export function readPlanningFlows(protocol, asset, from, to) {
 // Derived from pool_flows now that source_transactions is gone. A transaction
 // that decoded no flow is not represented, so these bounds describe the indexed
 // analytics rather than every transaction that touched the program.
+//
+// Bounds only, deliberately. Adding a COUNT here turns two index-only lookups
+// into a full scan of the protocol's rows: measured on 110k flows, MIN/MAX runs
+// in 0.1ms touching 10 buffers, while the same query with COUNT(DISTINCT
+// signature) takes 108ms and touches 112,242. No caller reads the count.
 export function readProtocolHistoryBounds(protocol) {
   return db.get(`
-    SELECT MIN(block_time) AS earliest, MAX(block_time) AS latest,
-      COUNT(DISTINCT signature)::int AS "transactionCount"
+    SELECT MIN(block_time) AS earliest, MAX(block_time) AS latest
     FROM pool_flows
     WHERE protocol = $1
   `, [protocol])

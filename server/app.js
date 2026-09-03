@@ -50,8 +50,7 @@ const INTERVALS = {
 const TYPE_SUFFIX = { deposit: 'Deposit', withdraw: 'Withdraw', swap_in: 'SwapIn', swap_out: 'SwapOut' }
 const TYPE_GROUP = { deposit: 'deposits', withdraw: 'withdrawals', swap_in: 'swapIn', swap_out: 'swapOut' }
 
-async function prices() {
-  const stored = await readLatestTokenPrices()
+function toPriceMap(stored) {
   return Object.fromEntries(ASSETS.map((asset) => {
     const value = Number(stored[asset]?.usdPrice)
     return [asset, value > 0 ? value : null]
@@ -162,7 +161,7 @@ async function analytics(protocol, interval) {
     getSyncState(protocol),
     readLatestPoolSnapshot(protocol),
     readFlows(protocol, from, now),
-    prices(),
+    readLatestTokenPrices().then(toPriceMap),
     databaseStats(protocol),
   ])
   const historicalFlows = snapshot ? [] : await readFlows(protocol, 0, from - 1)
@@ -384,9 +383,12 @@ function multiRanking(provider, request, metrics, tokenPrices, now) {
 async function planningResult(body) {
   const request = validatePlanRequest(body)
   const now = Math.floor(Date.now() / 1000)
-  const tokenPrices = await prices()
+  // Read once and hand the same rows to every provider: the price table is
+  // shared, and fetching it per provider was three extra round trips.
+  const priceRows = await readLatestTokenPrices()
+  const tokenPrices = toPriceMap(priceRows)
   const rankings = await Promise.all(Object.keys(PROTOCOLS).map(async (provider) => {
-    const metrics = await buildPlanningMetrics(provider, request.asset, request.total.amount, now)
+    const metrics = await buildPlanningMetrics(provider, request.asset, request.total.amount, now, priceRows)
     const ranking = request.strategy === 'multiple'
       ? multiRanking(provider, request, metrics, tokenPrices, now)
       : singleRanking(provider, request, metrics, tokenPrices, now)
