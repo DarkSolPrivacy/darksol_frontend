@@ -27,6 +27,26 @@ npm run dev
 
 `npm run indexer` performs one production-mode reconciliation/catch-up and exits. `npm run indexer:watch` runs the writer every five minutes. Each cycle runs an Alchemy/Arbitrum lane in parallel with a Helius/Solana lane, so a long Solana history backfill cannot delay Curvy refreshes. Cloak and PrivacyCash remain sequential inside the shared Helius lane to avoid competing for the same service. `npm run indexer:dev` enables verbose development mode and exits after one correct cycle; `npm run indexer:dev:watch` uses the same checkpoints with a 30-second development cadence. Development mode never truncates or resets history. For short local tests, `npm run indexer:dev -- --max-backfill-pages 1` processes one historical page and leaves the cursor ready to resume. `npm run dev` starts the read-only API on port 8787 and Vite on port 5173.
 
+## Deploying
+
+The dashboard is a Vite build; the API is the same Express app in both places.
+[`server/app.js`](server/app.js) holds the routes and binds nothing, so
+[`server/api.js`](server/api.js) can serve it with the built assets on one local
+port while [`api/index.js`](api/index.js) exposes it to Vercel as a serverless
+function. An Express app is already a `(request, response)` handler, so the
+function is a re-export and [`vercel.json`](vercel.json) rewrites `/api/*` onto
+it. Without that rewrite Vercel serves only the static build and every `/api`
+call returns its HTML 404 page, which the dashboard then fails to parse as JSON.
+
+Vercel needs the same `SUPABASE_DB_URL`, but pointed at Supabase's **transaction
+pooler** (port 6543) rather than the direct connection, which is IPv6-only
+without the IPv4 add-on and unreachable from a function. Each warm instance
+keeps its own pool, so the pool is capped at one connection there
+automatically.
+
+The indexer is not part of the deployment. It is a long-running writer and still
+runs wherever you choose to run it, writing to the same Supabase project.
+
 ## Supabase
 
 Analytics live in Supabase Postgres. The server connects over the direct Postgres

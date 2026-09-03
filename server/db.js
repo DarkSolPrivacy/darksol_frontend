@@ -63,8 +63,11 @@ function pool() {
       // Supabase terminates TLS with its own CA, which Node does not ship. A
       // loopback URL is a local Postgres, which serves no certificate at all.
       ssl: /@(localhost|127\.0\.0\.1)[:/]/.test(url) ? false : { rejectUnauthorized: false },
-      max: Number(process.env.SUPABASE_POOL_MAX || 8),
-      idleTimeoutMillis: 30_000,
+      // Every warm serverless instance holds its own pool, so a generous max
+      // there multiplies into Supabase's connection limit rather than adding
+      // throughput. One connection per instance is what the pooler expects.
+      max: Number(process.env.SUPABASE_POOL_MAX || (process.env.VERCEL ? 1 : 8)),
+      idleTimeoutMillis: process.env.VERCEL ? 10_000 : 30_000,
       connectionTimeoutMillis: 15_000,
     })
   }
