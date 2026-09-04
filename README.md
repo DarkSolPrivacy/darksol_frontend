@@ -113,7 +113,9 @@ older than the cutoff into `flow_baselines` and copies only the recent rows, so
 the initial import never sends the full history over the wire.
 
 Two consequences worth knowing. A transaction that decoded no flow is no longer
-represented, so `storage.transactions` and the coverage bounds describe indexed
+represented, so `storage.transactions` (returned by `/api/analytics` only with
+`?storage=1`, since counting every indexed row costs more than the rest of the
+response put together) and the coverage bounds describe indexed
 analytics rather than every transaction that touched the program — about 0.6% of
 this history. And a raw payload was the only re-decodable record of a
 transaction, so a decoder change now needs a re-index from Helius rather than a
