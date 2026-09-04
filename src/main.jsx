@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import * as THREE from 'three'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -594,218 +594,15 @@ function FlowTooltip({ active, payload, label, token }) {
   return <div className="tip"><small>{label} UTC</small>{payload.map((entry) => <b key={entry.dataKey} style={{ color: entry.color }}>{entry.name}: {compact(entry.value)} {token}</b>)}</div>
 }
 
-function ObsidianLiquidityCanvas({ selectedTvl, totalTvl, inflowEvents, outflowEvents }) {
-  const canvasRef = useRef(null)
-  const radiusRef = useRef(70)
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    const context = canvas.getContext('2d')
-    let width = 0; let height = 0; let frame; let lastTime = performance.now(); let nextIn = lastTime; let nextOut = lastTime + 600
-    let particles = []; let ripples = []
-    const resize = () => {
-      const bounds = canvas.getBoundingClientRect()
-      const scale = Math.min(window.devicePixelRatio || 1, 2)
-      width = Math.max(320, bounds.width); height = Math.max(260, bounds.height)
-      canvas.width = Math.round(width * scale); canvas.height = Math.round(height * scale)
-      context.setTransform(scale, 0, 0, scale, 0, 0)
-    }
-    const observer = new ResizeObserver(resize)
-    observer.observe(canvas); resize()
-
-    // A fixed, seeded relief map keeps the object organic without making its
-    // surface flicker from frame to frame. The features rotate very slowly so
-    // the liquidity mass feels dimensional rather than like a wavy disc.
-    let seed = 0x51f15e
-    const random = () => {
-      seed = (seed + 0x6d2b79f5) | 0
-      let value = Math.imul(seed ^ seed >>> 15, 1 | seed)
-      value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value
-      return ((value ^ value >>> 14) >>> 0) / 4294967296
-    }
-    const surfacePockets = Array.from({ length: 28 }, () => {
-      const angle = random() * Math.PI * 2
-      const distance = Math.sqrt(random()) * .78
-      return {
-        x: Math.cos(angle) * distance,
-        y: Math.sin(angle) * distance,
-        size: .075 + random() * .14,
-        stretch: .58 + random() * 1.35,
-        tilt: random() * Math.PI,
-        depth: .45 + random() * .55,
-        phase: random() * Math.PI * 2,
-      }
-    }).sort((a, b) => a.y - b.y)
-    const surfaceRidges = Array.from({ length: 17 }, () => ({
-      angle: random() * Math.PI * 2,
-      reach: .28 + random() * .58,
-      bend: (random() - .5) * .62,
-      phase: random() * Math.PI * 2,
-      width: .45 + random() * 1.1,
-    }))
-
-    const spawn = (type, radius, centerX, centerY) => {
-      const angle = Math.random() * Math.PI * 2
-      if (type === 'in') {
-        const side = Math.floor(Math.random() * 4)
-        const margin = 18
-        const positions = [[margin, Math.random() * height], [width - margin, Math.random() * height], [Math.random() * width, margin], [Math.random() * width, height - margin]]
-        const [x, y] = positions[side]
-        const distance = Math.max(1, Math.hypot(centerX - x, centerY - y))
-        particles.push({ type, x, y, vx: (centerX - x) / distance * .02375, vy: (centerY - y) / distance * .02375, size: 1 + Math.random() * 1.4, trail: [], born: performance.now() })
-      } else {
-        const speed = .13125 + Math.random() * .1375
-        const size = .5 + Math.random() * .9
-        particles.push({ type, x: centerX + Math.cos(angle) * radius * .91, y: centerY + Math.sin(angle) * radius * .91, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size, trail: [], born: performance.now() })
-        ripples.push({ angle, born: performance.now(), type: 'out', strength: 4 + size * 1.2 })
-      }
-    }
-
-    const drawDroplet = (particle) => {
-      if (particle.trail.length > 1) {
-        context.beginPath(); context.moveTo(particle.trail[0].x, particle.trail[0].y)
-        particle.trail.slice(1).forEach((point) => context.lineTo(point.x, point.y))
-        context.strokeStyle = particle.type === 'in' ? '#f4f7f55c' : '#05060666'; context.lineWidth = particle.size * .52; context.lineCap = 'round'; context.stroke()
-      }
-      const shine = context.createRadialGradient(particle.x - particle.size * .35, particle.y - particle.size * .4, .5, particle.x, particle.y, particle.size)
-      if (particle.type === 'in') { shine.addColorStop(0, '#ffffff'); shine.addColorStop(.2, '#e8edeb'); shine.addColorStop(.62, '#aeb7b4'); shine.addColorStop(1, '#626a68') }
-      else { shine.addColorStop(0, '#6e7774'); shine.addColorStop(.14, '#202423'); shine.addColorStop(.46, '#070909'); shine.addColorStop(1, '#000') }
-      context.beginPath(); context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2); context.fillStyle = shine; context.shadowColor = particle.type === 'in' ? '#ffffffb0' : '#aab3b070'; context.shadowBlur = 14; context.fill(); context.shadowBlur = 0
-      context.strokeStyle = particle.type === 'in' ? '#ffffffb8' : '#89918f9c'; context.lineWidth = particle.type === 'in' ? .45 : .7; context.stroke()
-    }
-
-    const drawSphere = (centerX, centerY, radius, now) => {
-      const time = now / 1000
-      const ratio = totalTvl > 0 ? Math.max(0, Math.min(1, selectedTvl / totalTvl)) : 0
-      const turbulence = radius * (.046 + (1 - ratio) * .055)
-      const bodyPath = new Path2D()
-      for (let index = 0; index <= 180; index += 1) {
-        const angle = index / 180 * Math.PI * 2
-        let deformation = Math.sin(angle * 3 + time * .34) * turbulence * .5 + Math.sin(angle * 7 - time * .27) * turbulence * .42 + Math.sin(angle * 11 + time * .19) * turbulence * .29 + Math.sin(angle * 17 - time * .23) * turbulence * .18
-        // Localized knots create the pinched, almost geological silhouette.
-        deformation += Math.pow(Math.max(0, Math.sin(angle * 5 - time * .16)), 5) * turbulence * .72
-        for (const ripple of ripples) {
-          const age = (now - ripple.born) / 760
-          if (age >= 1) continue
-          const delta = Math.atan2(Math.sin(angle - ripple.angle), Math.cos(angle - ripple.angle))
-          const local = Math.exp(-(delta * delta) / .13) * Math.sin(age * Math.PI)
-          deformation += local * ripple.strength * (ripple.type === 'in' ? 1 : -.7)
-        }
-        const pointRadius = radius + deformation
-        const x = centerX + Math.cos(angle) * pointRadius; const y = centerY + Math.sin(angle) * pointRadius
-        if (index === 0) bodyPath.moveTo(x, y); else bodyPath.lineTo(x, y)
-      }
-      bodyPath.closePath()
-
-      context.save()
-      context.translate(0, radius * .06)
-      context.scale(1.04, .94)
-      context.filter = `blur(${Math.max(8, radius * .09)}px)`
-      context.fillStyle = '#00000082'
-      context.fill(bodyPath)
-      context.restore()
-
-      context.save()
-      context.shadowColor = '#000000b8'; context.shadowBlur = 28; context.shadowOffsetY = 12
-      const body = context.createRadialGradient(centerX - radius * .28, centerY - radius * .34, radius * .02, centerX + radius * .08, centerY + radius * .12, radius * 1.14)
-      body.addColorStop(0, '#6d7270'); body.addColorStop(.045, '#252827'); body.addColorStop(.19, '#0b0d0c'); body.addColorStop(.56, '#020303'); body.addColorStop(.82, '#101312'); body.addColorStop(1, '#010202')
-      context.fillStyle = body; context.fill(bodyPath)
-      context.shadowBlur = 0; context.shadowOffsetY = 0
-      context.clip(bodyPath)
-
-      // Dimples are built from a bright lip and an offset black core. Together
-      // they read as deep folds in a reflective, viscous surface.
-      const rotation = time * .018
-      surfacePockets.forEach((pocket) => {
-        const cosine = Math.cos(rotation); const sine = Math.sin(rotation)
-        const px = pocket.x * cosine - pocket.y * sine
-        const py = pocket.x * sine + pocket.y * cosine
-        const pulse = 1 + Math.sin(time * .31 + pocket.phase) * .055
-        const x = centerX + px * radius; const y = centerY + py * radius
-        const size = pocket.size * radius * pulse
-        context.save(); context.translate(x, y); context.rotate(pocket.tilt + rotation * .7); context.scale(pocket.stretch, 1)
-        const lip = context.createRadialGradient(-size * .3, -size * .42, size * .03, 0, 0, size * 1.3)
-        lip.addColorStop(0, `rgba(196,202,199,${.27 * pocket.depth})`)
-        lip.addColorStop(.17, `rgba(57,62,60,${.7 * pocket.depth})`)
-        lip.addColorStop(.48, `rgba(1,2,2,${.96 * pocket.depth})`)
-        lip.addColorStop(.76, `rgba(3,4,4,${.7 * pocket.depth})`)
-        lip.addColorStop(1, 'rgba(107,113,110,.08)')
-        context.fillStyle = lip; context.beginPath(); context.arc(0, 0, size * 1.3, 0, Math.PI * 2); context.fill()
-        context.strokeStyle = `rgba(190,196,193,${.08 + pocket.depth * .1})`; context.lineWidth = Math.max(.35, radius * .006)
-        context.beginPath(); context.arc(-size * .05, -size * .08, size * .78, Math.PI * 1.02, Math.PI * 1.82); context.stroke()
-        context.restore()
-      })
-
-      // Hairline ridges catch the key light and give the black material the
-      // sharp, wet specular response visible in the reference.
-      surfaceRidges.forEach((ridge) => {
-        const angle = ridge.angle + rotation
-        const inner = radius * (.08 + .1 * Math.sin(time * .22 + ridge.phase))
-        const end = radius * ridge.reach
-        const x1 = centerX + Math.cos(angle) * inner; const y1 = centerY + Math.sin(angle) * inner
-        const x2 = centerX + Math.cos(angle + ridge.bend) * end; const y2 = centerY + Math.sin(angle + ridge.bend) * end
-        const controlX = centerX + Math.cos(angle - ridge.bend * .7) * end * .62
-        const controlY = centerY + Math.sin(angle - ridge.bend * .7) * end * .62
-        context.lineCap = 'round'
-        context.strokeStyle = '#000000d9'; context.lineWidth = radius * .028 * ridge.width
-        context.beginPath(); context.moveTo(x1, y1); context.quadraticCurveTo(controlX, controlY, x2, y2); context.stroke()
-        context.strokeStyle = '#d9dedb40'; context.lineWidth = Math.max(.45, radius * .005 * ridge.width)
-        context.shadowColor = '#ffffff4d'; context.shadowBlur = radius * .025
-        context.beginPath(); context.moveTo(x1 - radius * .008, y1 - radius * .01); context.quadraticCurveTo(controlX - radius * .008, controlY - radius * .01, x2 - radius * .006, y2 - radius * .009); context.stroke(); context.shadowBlur = 0
-      })
-
-      const reflection = context.createRadialGradient(centerX - radius * .43, centerY - radius * .48, 0, centerX - radius * .3, centerY - radius * .35, radius * .48)
-      reflection.addColorStop(0, '#ffffff8f'); reflection.addColorStop(.08, '#dce1df4d'); reflection.addColorStop(.28, '#70767318'); reflection.addColorStop(1, '#0000')
-      context.fillStyle = reflection; context.fillRect(centerX - radius * 1.2, centerY - radius * 1.2, radius * 2.4, radius * 2.4)
-      context.restore()
-
-      context.save(); context.strokeStyle = '#bbc1be38'; context.lineWidth = Math.max(.55, radius * .008); context.shadowColor = '#ffffff42'; context.shadowBlur = 5; context.stroke(bodyPath); context.restore()
-    }
-
-    const animate = (now) => {
-      const delta = Math.min(2.3, (now - lastTime) / 16.67); lastTime = now
-      context.clearRect(0, 0, width, height)
-      const centerX = width * .53; const centerY = height * .49
-      const maxRadius = Math.min(width, height) * .31
-      const ratio = totalTvl > 0 ? Math.sqrt(Math.max(0, Math.min(1, selectedTvl / totalTvl))) : 0
-      const targetRadius = maxRadius * (.42 + ratio * .58)
-      radiusRef.current += (targetRadius - radiusRef.current) * .035 * delta
-      const radius = radiusRef.current
-      if (now >= nextIn) { spawn('in', radius, centerX, centerY); nextIn = now + Math.max(2400, 6240 / (1 + inflowEvents * .05)) + Math.random() * 1600 }
-      if (now >= nextOut) { spawn('out', radius, centerX, centerY); nextOut = now + Math.max(3040, 8320 / (1 + outflowEvents * .05)) + Math.random() * 2080 }
-      particles.forEach((particle) => {
-        particle.trail.push({ x: particle.x, y: particle.y }); if (particle.trail.length > 7) particle.trail.shift()
-        if (particle.type === 'in') {
-          const xDistance = centerX - particle.x; const yDistance = centerY - particle.y; const distance = Math.max(1, Math.hypot(xDistance, yDistance))
-          const force = .0034375 + Math.min(.015, 26.25 / (distance * distance))
-          particle.vx = (particle.vx + xDistance / distance * force * delta) * .997; particle.vy = (particle.vy + yDistance / distance * force * delta) * .997
-          particle.x += particle.vx * delta; particle.y += particle.vy * delta
-          if (distance < radius * .88) { particle.dead = true; ripples.push({ angle: Math.atan2(particle.y - centerY, particle.x - centerX), born: now, type: 'in', strength: particle.size * 1.7 }) }
-        } else {
-          particle.vx *= Math.pow(.998, delta); particle.vy = particle.vy * Math.pow(.998, delta) + .00009375 * delta
-          particle.x += particle.vx * delta; particle.y += particle.vy * delta
-          if (particle.x < -30 || particle.x > width + 30 || particle.y < -30 || particle.y > height + 30) particle.dead = true
-        }
-        if (now - particle.born > 12000) particle.dead = true
-      })
-      particles = particles.filter((particle) => !particle.dead); ripples = ripples.filter((ripple) => now - ripple.born < 760)
-      particles.filter((particle) => particle.type === 'in').forEach(drawDroplet)
-      drawSphere(centerX, centerY, radius, now)
-      particles.filter((particle) => particle.type === 'out').forEach(drawDroplet)
-      frame = requestAnimationFrame(animate)
-    }
-    const initialCenterX = width * .53; const initialCenterY = height * .49; const initialRadius = radiusRef.current
-    spawn('in', initialRadius, initialCenterX, initialCenterY)
-    spawn('out', initialRadius, initialCenterX, initialCenterY)
-    frame = requestAnimationFrame(animate)
-    return () => { cancelAnimationFrame(frame); observer.disconnect() }
-  }, [selectedTvl, totalTvl, inflowEvents, outflowEvents])
-
-  return <canvas ref={canvasRef} className="obsidianCanvas" role="img" aria-label={`${money(selectedTvl)} selected TVL, normalized against ${money(totalTvl)} across all protocols`} />
-}
-
 function ObsidianLiquidity({ selectedTvl, totalTvl, inflowEvents, outflowEvents }) {
   const mountRef = useRef(null)
+  // The scene is expensive to build - a WebGL context, a PMREM environment
+  // map, and a shader compile - and the figures it visualises refresh every 30
+  // seconds. Passing them through a ref rather than the effect's dependencies
+  // means a refresh retargets the running animation instead of tearing the
+  // whole renderer down and starting again.
+  const figures = useRef({ selectedTvl, totalTvl, inflowEvents, outflowEvents })
+  figures.current = { selectedTvl, totalTvl, inflowEvents, outflowEvents }
 
   useEffect(() => {
     const mount = mountRef.current
@@ -934,17 +731,36 @@ function ObsidianLiquidity({ selectedTvl, totalTvl, inflowEvents, outflowEvents 
     const observer = new ResizeObserver(resize)
     observer.observe(mount); resize()
 
-    const ratio = totalTvl > 0 ? Math.max(0, Math.min(1, selectedTvl / totalTvl)) : 0
     // Radius follows the cube root of TVL because the blob represents volume.
     // Keep only a tiny visual floor so pools around $500 remain dramatically
     // smaller than million-dollar pools while still being discoverable.
-    const targetScale = selectedTvl > 0 ? .07 + Math.cbrt(ratio) * .95 : 0
-    blob.scale.setScalar(targetScale)
+    const scaleFor = ({ selectedTvl: selected, totalTvl: total }) => {
+      const ratio = total > 0 ? Math.max(0, Math.min(1, selected / total)) : 0
+      return selected > 0 ? .07 + Math.cbrt(ratio) * .95 : 0
+    }
+    // Starts at the figures the first frame knows about, then eases toward
+    // whatever the 30-second refresh reports, so selecting a pool or a change
+    // in TVL reads as the blob growing rather than as a reload.
+    let currentScale = scaleFor(figures.current)
+    blob.scale.setScalar(currentScale)
     const clock = new THREE.Clock()
     const motionSpeed = 10
     let frame
     const animate = (now) => {
       const delta = Math.min(.05, clock.getDelta())
+      const { inflowEvents: inflowRate, outflowEvents: outflowRate } = figures.current
+      const targetScale = scaleFor(figures.current)
+      if (currentScale !== targetScale) {
+        // Time-based easing so the approach looks the same regardless of frame
+        // rate, and snap once the remaining difference stops being visible.
+        // Anyone who asked for reduced motion gets the new size outright.
+        if (reducedMotion) currentScale = targetScale
+        else {
+          currentScale += (targetScale - currentScale) * Math.min(1, delta * 2.4)
+          if (Math.abs(targetScale - currentScale) < .0005) currentScale = targetScale
+        }
+        blob.scale.setScalar(currentScale)
+      }
       if (shaderState.value) shaderState.value.uniforms.liquidTime.value = now / 1000 * motionSpeed
       if (!reducedMotion) {
         // Rebuild the radius field continuously. Multiple travelling waves
@@ -989,13 +805,13 @@ function ObsidianLiquidity({ selectedTvl, totalTvl, inflowEvents, outflowEvents 
         positions.needsUpdate = true
         geometry.computeVertexNormals()
       }
-      if (now >= nextIn && inflowEvents > 0) {
+      if (now >= nextIn && inflowRate > 0) {
         spawnParticle('in', now)
-        nextIn = now + Math.max(2100, 7200 / (1 + inflowEvents * .06)) + Math.random() * 1400
+        nextIn = now + Math.max(2100, 7200 / (1 + inflowRate * .06)) + Math.random() * 1400
       }
-      if (now >= nextOut && outflowEvents > 0) {
+      if (now >= nextOut && outflowRate > 0) {
         spawnParticle('out', now)
-        nextOut = now + Math.max(2700, 9000 / (1 + outflowEvents * .06)) + Math.random() * 1700
+        nextOut = now + Math.max(2700, 9000 / (1 + outflowRate * .06)) + Math.random() * 1700
       }
       for (let index = particles.length - 1; index >= 0; index -= 1) {
         const particle = particles[index]
@@ -1020,41 +836,64 @@ function ObsidianLiquidity({ selectedTvl, totalTvl, inflowEvents, outflowEvents 
       geometry.dispose(); particleGeometry.dispose(); material.dispose(); inflowMaterial.dispose(); outflowMaterial.dispose()
       environment.dispose(); pmrem.dispose(); renderer.dispose(); renderer.domElement.remove()
     }
-  }, [selectedTvl, totalTvl, inflowEvents, outflowEvents])
+    // Built once. Every figure the scene reads comes from `figures`, so a data
+    // refresh must not re-run this.
+  }, [])
 
   return <div ref={mountRef} className="obsidianCanvas" role="img" aria-label={`${money(selectedTvl)} selected TVL, normalized against ${money(totalTvl)} across all protocols`} />
 }
 
-function LiquidityUniverse() {
-  const [summary, setSummary] = useState({ loading: true, pools: [] })
-  const [selectedPools, setSelectedPools] = useState(['privacycash', 'cloakc'])
+// Module scope, not component state. App swaps whole trees when the route
+// changes, so PrivacyHome unmounts the moment /analytics opens and anything it
+// held in useState is discarded - which is why returning home used to show
+// "Loading" again for numbers the browser had already fetched. Keeping the
+// summary out here means a remount renders what is already known, and however
+// many components subscribe, they share one request and one poll.
+const POOL_SUMMARY_TTL = 30_000
+const poolSummary = { state: { loading: true, pools: [], error: '' }, listeners: new Set(), fetchedAt: 0, timer: null, inflight: null }
 
-  useEffect(() => {
-    const controller = new AbortController()
-    const load = () => Promise.allSettled(Object.keys(PROTOCOLS).map(async (protocol) => {
-      const response = await fetch(`/api/analytics?protocol=${protocol}&interval=1d`, { signal: controller.signal }); if (!response.ok) throw new Error('Analytics request failed')
-      return { protocol, data: await response.json() }
-    })).then((results) => {
-      if (controller.signal.aborted) return
-      setSummary({ loading: false, pools: results.filter((result) => result.status === 'fulfilled').map((result) => {
-        const { protocol, data } = result.value
-        const state = data.poolState || EMPTY.poolState
-        const price = (asset) => state.balances?.[asset] ? Number(state.usd?.[asset] || 0) / Number(state.balances[asset]) : 0
-        const valueFlows = (groups) => groups.reduce((total, group) => total + ASSETS.reduce((assetTotal, asset) => assetTotal + Number(data.externalFlows?.[group]?.[asset] || 0) * price(asset), 0), 0)
-        const inflow = valueFlows(['deposits', 'swapIn'])
-        const outflow = valueFlows(['withdrawals', 'swapOut'])
-        let inflowEvents = 0; let outflowEvents = 0
-        for (const flow of data.recent || []) {
-          if (flow.direction === 'deposit' || flow.flowType === 'deposit' || flow.flowType === 'swap_in') inflowEvents += 1
-          if (flow.direction === 'withdraw' || flow.flowType === 'withdraw' || flow.flowType === 'swap_out') outflowEvents += 1
-        }
-        const tvl = Object.values(state.usd || {}).reduce((total, value) => total + (Number.isFinite(Number(value)) ? Number(value) : 0), 0)
-        return { protocol, name: PROTOCOLS[protocol].name, tvl, inflow, outflow, inflowEvents, outflowEvents }
-      }) })
+function loadPoolSummary() {
+  if (poolSummary.inflight) return poolSummary.inflight
+  const publish = (state) => {
+    poolSummary.state = state
+    poolSummary.fetchedAt = Date.now()
+    for (const listener of poolSummary.listeners) listener()
+  }
+  poolSummary.inflight = fetch('/api/summary')
+    .then(async (response) => {
+      if (!response.ok) throw new Error('Pool summary request failed')
+      const result = await response.json()
+      publish({ loading: false, pools: result.pools || [], error: '' })
     })
-    load(); const timer = setInterval(load, 30_000)
-    return () => { controller.abort(); clearInterval(timer) }
-  }, [])
+    // A refresh that fails keeps the figures already on screen; only the first
+    // attempt has nothing better to show, and it shows zeroes rather than a
+    // permanent "Loading".
+    .catch((error) => publish({ ...poolSummary.state, loading: false, error: error.message }))
+    .finally(() => { poolSummary.inflight = null })
+  return poolSummary.inflight
+}
+
+function subscribePoolSummary(listener) {
+  poolSummary.listeners.add(listener)
+  if (!poolSummary.timer) poolSummary.timer = setInterval(loadPoolSummary, POOL_SUMMARY_TTL)
+  return () => {
+    poolSummary.listeners.delete(listener)
+    // Nothing is watching, so stop polling until something is again.
+    if (!poolSummary.listeners.size) { clearInterval(poolSummary.timer); poolSummary.timer = null }
+  }
+}
+
+function usePoolSummary() {
+  const state = useSyncExternalStore(subscribePoolSummary, () => poolSummary.state)
+  useEffect(() => { if (Date.now() - poolSummary.fetchedAt > POOL_SUMMARY_TTL) loadPoolSummary() }, [])
+  return state
+}
+
+function LiquidityUniverse() {
+  // /api/summary already values every pool in USD, so nothing is derived here
+  // beyond adding up the pools the visitor has selected.
+  const summary = usePoolSummary()
+  const [selectedPools, setSelectedPools] = useState(['privacycash', 'cloakc'])
 
   const included = summary.pools.filter((pool) => selectedPools.includes(pool.protocol))
   const totalTvl = summary.pools.reduce((sum, pool) => sum + pool.tvl, 0)

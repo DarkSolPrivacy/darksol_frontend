@@ -248,6 +248,90 @@ export async function readFlowBaseline(protocol) {
   return Object.fromEntries(rows.map((row) => [row.asset, row]))
 }
 
+// The three readers below back /api/summary, which the home page's liquidity
+// sphere calls instead of asking /api/analytics for one full dashboard payload
+// per protocol. Every figure is aggregated inside Postgres and covers all
+// protocols in a single round trip: the old path shipped every flow row in the
+// window - and, for a protocol with no pool snapshot, every row ever indexed -
+// into the API process only to sum it in JavaScript.
+export async function readFlowTotals(protocols, from, to) {
+  const rows = await db.all(`
+    SELECT protocol, asset,
+      COALESCE(SUM(amount) FILTER (WHERE COALESCE(flow_type, direction) IN ('deposit', 'swap_in')), 0) AS inflow,
+      COALESCE(SUM(amount) FILTER (WHERE COALESCE(flow_type, direction) IN ('withdraw', 'swap_out')), 0) AS outflow
+    FROM pool_flows
+    WHERE protocol = ANY($1) AND block_time >= $2 AND block_time <= $3
+    GROUP BY protocol, asset
+  `, [protocols, from, to])
+  const totals = {}
+  for (const { protocol, asset, inflow, outflow } of rows) {
+    totals[protocol] = totals[protocol] || {}
+    totals[protocol][asset] = { inflow, outflow }
+  }
+  return totals
+}
+
+// Direction mix across the newest `limit` flows per protocol, which is what
+// drives the sphere's particle cadence. Deliberately a sample of the latest
+// activity rather than the window total: the cadence formula saturates in the
+// hundreds, so a full-window count would pin every pool to the same rate.
+export async function readRecentFlowMix(protocols, from, to, limit) {
+  const rows = await db.all(`
+    SELECT protocol,
+      COUNT(*) FILTER (WHERE type IN ('deposit', 'swap_in'))::int AS "inflowEvents",
+      COUNT(*) FILTER (WHERE type IN ('withdraw', 'swap_out'))::int AS "outflowEvents"
+    FROM (
+      SELECT protocol, COALESCE(flow_type, direction) AS type,
+        ROW_NUMBER() OVER (PARTITION BY protocol ORDER BY block_time DESC) AS position
+      FROM pool_flows
+      WHERE protocol = ANY($1) AND block_time >= $2 AND block_time <= $3
+    ) ranked
+    WHERE position <= $4
+    GROUP BY protocol
+  `, [protocols, from, to, limit])
+  return Object.fromEntries(rows.map(({ protocol, ...counts }) => [protocol, counts]))
+}
+
+export async function readLatestPoolSnapshots(protocols) {
+  const rows = await db.all(`
+    SELECT DISTINCT ON (protocol, asset) protocol, asset, amount, block_time AS "blockTime"
+    FROM pool_snapshots
+    WHERE protocol = ANY($1)
+    ORDER BY protocol, asset, block_time DESC
+  `, [protocols])
+  const snapshots = {}
+  for (const { protocol, asset, amount, blockTime } of rows) {
+    snapshots[protocol] = snapshots[protocol] || { blockTime, balances: {} }
+    snapshots[protocol].balances[asset] = amount
+    snapshots[protocol].blockTime = Math.max(snapshots[protocol].blockTime, blockTime)
+  }
+  return snapshots
+}
+
+// The no-snapshot fallback, kept in SQL. Pruned history lives in
+// flow_baselines and the retained rows in pool_flows, so the pool balance is
+// the sum of both; this returns nine rows where the JavaScript equivalent read
+// the protocol's entire flow history.
+export async function readReconstructedBalances(protocols) {
+  const rows = await db.all(`
+    SELECT protocol, asset, SUM(net) AS net FROM (
+      SELECT protocol, asset,
+        SUM(CASE WHEN direction = 'deposit' THEN amount ELSE -amount END) AS net
+      FROM pool_flows WHERE protocol = ANY($1) GROUP BY protocol, asset
+      UNION ALL
+      SELECT protocol, asset, net_amount AS net
+      FROM flow_baselines WHERE protocol = ANY($1)
+    ) combined
+    GROUP BY protocol, asset
+  `, [protocols])
+  const balances = {}
+  for (const { protocol, asset, net } of rows) {
+    balances[protocol] = balances[protocol] || {}
+    balances[protocol][asset] = net
+  }
+  return balances
+}
+
 export function readFlows(protocol, from, to) {
   return db.all(`
     SELECT id, signature, block_time AS timestamp,

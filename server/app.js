@@ -5,7 +5,10 @@ import express from 'express'
 import dotenv from 'dotenv'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { databaseStats, getSyncState, readFlowBaseline, readFlows, readLatestPoolSnapshot, readLatestTokenPrices } from './db.js'
+import {
+  databaseStats, getSyncState, readFlowBaseline, readFlowTotals, readFlows, readLatestPoolSnapshot,
+  readLatestPoolSnapshots, readLatestTokenPrices, readRecentFlowMix, readReconstructedBalances,
+} from './db.js'
 import { buildPlanningMetrics } from './planning-metrics.js'
 import {
   ESTIMATE_NOTICE, PROVIDER_CAPABILITIES, calculatePrivacyEstimate, estimateMultiReceiverPlan,
@@ -149,7 +152,12 @@ function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poo
   return { buckets, totals, externalFlows, poolState, activity: activityFor(flows, tokenPrices, now) }
 }
 
-async function analytics(protocol, interval) {
+// `withStorage` is opt-in because databaseStats() is the most expensive thing
+// this endpoint can do and no page reads its result. Its COUNT(DISTINCT
+// signature) has no time bound, so it scans every row the protocol has ever
+// indexed: measured on 110k flows, 108ms touching 112,242 buffers, against
+// 0.1ms and 10 buffers for the bounded queries beside it.
+async function analytics(protocol, interval, { withStorage = false } = {}) {
   const protocolConfig = PROTOCOLS[protocol]
   const intervalConfig = INTERVALS[interval]
   if (!protocolConfig) throw new Error('protocol must be cloakc, privacycash, or curvy')
@@ -162,7 +170,7 @@ async function analytics(protocol, interval) {
     readLatestPoolSnapshot(protocol),
     readFlows(protocol, from, now),
     readLatestTokenPrices().then(toPriceMap),
-    databaseStats(protocol),
+    withStorage ? databaseStats(protocol) : null,
   ])
   const historicalFlows = snapshot ? [] : await readFlows(protocol, 0, from - 1)
   const baseline = snapshot ? null : await readFlowBaseline(protocol)
@@ -178,7 +186,8 @@ async function analytics(protocol, interval) {
       complete: Boolean(state?.historyComplete), historyComplete: Boolean(state?.historyComplete),
       backfilledFrom: state?.backfilledFrom ?? null, syncedThrough: state?.syncedThrough ?? null,
     },
-    poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows', storage,
+    poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows',
+    ...(withStorage ? { storage } : {}),
     ...aggregate(windowFlows, historicalFlows, from, intervalConfig.bucketSeconds, intervalConfig.bucketCount, snapshot?.balances, tokenPrices, now, baseline),
     recent: windowFlows.slice(0, 12),
     flowMethod: protocol === 'privacycash'
@@ -187,6 +196,52 @@ async function analytics(protocol, interval) {
         ? 'Vault deposits and withdrawals verified from Curvy events on Arbitrum; portal swaps are not inferred without a defensible link.'
         : 'Swap-outs decoded from Cloak TransactSwap instructions; output asset is read from the instruction payload.',
   }
+}
+
+// The liquidity sphere on the home page needs five numbers per protocol, and
+// nothing else analytics() returns. Asking /api/analytics for them meant three
+// requests, three full dashboard payloads, and a databaseStats() count over
+// every row of each protocol that no caller read. This is one request whose
+// work is bounded by the 24h window plus one snapshot lookup.
+const SUMMARY_RANGE = '1d'
+// Matches the slice the dashboard shows as recent activity, so the cadence the
+// sphere animates stays the same as before this endpoint existed.
+const RECENT_FLOW_SAMPLE = 12
+
+async function summary() {
+  const protocols = Object.keys(PROTOCOLS)
+  const { bucketSeconds, bucketCount } = INTERVALS[SUMMARY_RANGE]
+  const now = Math.floor(Date.now() / 1000)
+  const from = Math.floor(now / bucketSeconds) * bucketSeconds - (bucketCount - 1) * bucketSeconds
+  const [snapshots, flowTotals, recentMix, tokenPrices] = await Promise.all([
+    readLatestPoolSnapshots(protocols),
+    readFlowTotals(protocols, from, now),
+    readRecentFlowMix(protocols, from, now, RECENT_FLOW_SAMPLE),
+    readLatestTokenPrices().then(toPriceMap),
+  ])
+  const unsnapshotted = protocols.filter((protocol) => !snapshots[protocol])
+  const reconstructed = unsnapshotted.length ? await readReconstructedBalances(unsnapshotted) : {}
+  // An asset with no stored price contributes nothing rather than poisoning the
+  // total with NaN, which is how the client treated a null usd value too.
+  const price = (asset) => tokenPrices[asset] || 0
+  const pools = protocols.map((protocol) => {
+    const snapshot = snapshots[protocol]
+    const balances = snapshot?.balances || reconstructed[protocol] || blankAssets()
+    const flows = flowTotals[protocol] || {}
+    const valued = (key) => ASSETS.reduce((sum, asset) => sum + (flows[asset]?.[key] || 0) * price(asset), 0)
+    return {
+      protocol, name: PROTOCOLS[protocol].name,
+      chain: PROTOCOLS[protocol].chain || 'solana',
+      tvl: ASSETS.reduce((sum, asset) => sum + (Number(balances[asset]) || 0) * price(asset), 0),
+      balances: Object.fromEntries(ASSETS.map((asset) => [asset, Number(balances[asset]) || 0])),
+      inflow: valued('inflow'), outflow: valued('outflow'),
+      inflowEvents: recentMix[protocol]?.inflowEvents || 0,
+      outflowEvents: recentMix[protocol]?.outflowEvents || 0,
+      poolSource: snapshot ? 'stored pool snapshot' : 'indexed external flows',
+      indexedAt: snapshot?.blockTime || null,
+    }
+  })
+  return { source: 'supabase', range: SUMMARY_RANGE, from, to: now, prices: tokenPrices, pools }
 }
 
 const TOKEN_DECIMALS = { SOL: 9, USDC: 6, USDT: 6 }
@@ -490,8 +545,25 @@ app.post('/api/solana-rpc', async (request, response) => {
   }
 })
 app.get('/api/health', (_request, response) => response.json({ ok: true, source: 'supabase', protocols: Object.values(PROTOCOLS).map(({ id, name, programId, chain = 'solana', chainId = null }) => ({ id, name, programId, chain, chainId })) }))
+app.get('/api/summary', async (_request, response) => {
+  try {
+    const result = await summary()
+    // Pool balances move on the indexer's cadence, not the browser's, so the
+    // edge can answer most hits without waking a function at all. The stale
+    // window keeps an expired entry serving while one request revalidates.
+    response.set('Cache-Control', 'public, max-age=30, s-maxage=30, stale-while-revalidate=300')
+    response.json(result)
+  }
+  catch (error) { response.status(500).json({ error: 'Unable to read pool summary', detail: error.message }) }
+})
 app.get('/api/analytics', async (request, response) => {
-  try { response.json(await analytics(String(request.query.protocol || 'cloakc').toLowerCase(), String(request.query.interval || '1h').toLowerCase())) }
+  try {
+    response.json(await analytics(
+      String(request.query.protocol || 'cloakc').toLowerCase(),
+      String(request.query.interval || '1h').toLowerCase(),
+      { withStorage: ['1', 'true'].includes(String(request.query.storage || '')) },
+    ))
+  }
   catch (error) { response.status(400).json({ error: 'Unable to read analytics', detail: error.message }) }
 })
 app.get('/api/compare', async (request, response) => {
