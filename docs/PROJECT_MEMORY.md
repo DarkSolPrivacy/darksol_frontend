@@ -25,6 +25,13 @@ Users can generally choose the assets and amount, but cannot necessarily choose 
 
 ## Test identities and contracts
 
+Values shown as `<redacted>` are disposable test identities, Curvy Portal addresses, and
+transaction signatures. They are kept out of version control so this repository does not
+link itself to specific on-chain activity. Their real values stay in the Git-ignored
+`test-wallets/TEST_IDENTITIES.local.md`. Program IDs, pool accounts, the Curvy Vault and
+Aggregator, and Jupiter venues below are public protocol infrastructure, so they are not
+redacted.
+
 ### Solana test wallets
 
 - Sender: `<redacted>`

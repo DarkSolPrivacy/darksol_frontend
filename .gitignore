@@ -17,6 +17,8 @@ npm-debug.log*
 # Runtime state, databases, and test wallets
 data/
 test-wallets/
+*.local.md
+*.local.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
