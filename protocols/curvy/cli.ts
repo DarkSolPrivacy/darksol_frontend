@@ -1,13 +1,13 @@
 import { Connection, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js'
 import { Wallet, Contract, JsonRpcProvider, SigningKey, formatUnits, hashMessage, recoverAddress } from 'ethers'
 import { resolve } from 'node:path'
-import { loadKeypair, PROGRAMS, readJson, solanaRpcUrl, walletsDir, writePrivateJson } from '../runtime.js'
+import { loadKeypair, parseLamports, PROGRAMS, readJson, solanaRpcUrl, walletsDir, writePrivateJson } from '../../scripts/runtime.js'
 
 type CurvySecrets = { version: 3, s: string, v: string, userAddress: `0x${string}`, handle: string | null }
 
 function secretsPath() { return resolve(walletsDir(), 'curvy-account.json') }
 
-export async function ensureCurvySecrets() {
+export async function walletSetup() {
   let secrets = await readJson<CurvySecrets | (Omit<CurvySecrets, 'version'> & { version: 1 | 2 }) | null>(secretsPath(), null)
   if (secrets?.version === 1 || secrets?.version === 2) {
     if (secrets.handle) throw new Error('Refusing to migrate private keys for an already-registered Curvy account')
@@ -42,7 +42,7 @@ async function config() {
 }
 
 async function session() {
-  const secrets = await ensureCurvySecrets()
+  const secrets = await walletSetup()
   if (!secrets.handle) throw new Error('Curvy account is not registered. Run: npm run curvy:register -- <handle.curvy.name> --execute')
   const sdkConfig = await config()
   const { loginWithPrivateKeys } = await import('@0xcurvy/curvy-sdk/actions')
@@ -67,7 +67,7 @@ export async function registerCurvy(handle: string) {
   if (!/^[a-z0-9-]{3,20}\.curvy\.name$/i.test(handle)) {
     throw new Error('Curvy handle must have a 3-20 character letter/number/dash name followed by .curvy.name')
   }
-  const secrets = await ensureCurvySecrets()
+  const secrets = await walletSetup()
   if (secrets.handle) throw new Error(`Curvy test account is already registered as ${secrets.handle}`)
   const sdkConfig = await config()
   try {
@@ -93,7 +93,7 @@ export async function registerCurvy(handle: string) {
   } finally { await sdkConfig.destroy() }
 }
 
-export async function curvySnapshot() {
+export async function snapshot() {
   if (!process.env.ARBITRUM_RPC_URL) throw new Error('ARBITRUM_RPC_URL is required for the Curvy snapshot')
   const sdkConfig = await config()
   try {
@@ -126,11 +126,11 @@ export async function curvySnapshot() {
   } finally { await sdkConfig.destroy() }
 }
 
-export async function curvyCheck() {
+export async function check() {
   const sdkConfig = await config()
   try {
     const { getNetworks } = await import('@0xcurvy/curvy-sdk/actions')
-    const secrets = await ensureCurvySecrets()
+    const secrets = await walletSetup()
     const localKeys = await sdkConfig.core.getCurvyKeys(secrets.s, secrets.v)
     const registered = secrets.handle ? (await sdkConfig.api.user.ResolveCurvyId(secrets.handle)).data : null
     const networks = getNetworks({ config: sdkConfig })
@@ -162,7 +162,7 @@ export async function curvyCheck() {
   } finally { await sdkConfig.destroy() }
 }
 
-export async function curvyEstimateExternal(lamports: bigint) {
+export async function estimate(lamports: bigint) {
   const sdkConfig = await config()
   try {
     const { estimateExternalTransfer, getNetworks } = await import('@0xcurvy/curvy-sdk/actions')
@@ -221,7 +221,7 @@ export async function curvyRecoverPortal(address: string, tokenSymbol: string) {
 export async function curvyAuthDiagnostic() {
   const sdkConfig = await config()
   try {
-    const secrets = await ensureCurvySecrets()
+    const secrets = await walletSetup()
     if (!secrets.handle) throw new Error('Curvy account is not registered')
     const localKeys = await sdkConfig.core.getCurvyKeys(secrets.s, secrets.v)
     const generatedKeys = await sdkConfig.core.generateKeyPairs()
@@ -264,7 +264,7 @@ export async function curvyAuthDiagnostic() {
   } finally { await sdkConfig.destroy() }
 }
 
-export async function curvyBalance() {
+export async function balance() {
   const current = await session()
   try {
     const { getBalances, getNetworks, refreshBalances } = await import('@0xcurvy/curvy-sdk/actions')
@@ -283,7 +283,12 @@ export async function curvyBalance() {
   } finally { await current.config.destroy() }
 }
 
-export async function curvySwap(fromSymbol: string, toSymbol: string, amount: bigint) {
+// Curvy swaps between private Vault currencies: <from-symbol> <to-symbol> <base-units>.
+export async function swap(args: string[]) {
+  return swapCurrencies(args[0], args[1], parseLamports(args[2]))
+}
+
+async function swapCurrencies(fromSymbol: string, toSymbol: string, amount: bigint) {
   const from = fromSymbol.toUpperCase()
   const to = toSymbol.toUpperCase()
   if (from === to) throw new Error('Curvy swap input and output currencies must differ')
@@ -354,7 +359,7 @@ export async function curvySwap(fromSymbol: string, toSymbol: string, amount: bi
   } finally { await current.config.destroy() }
 }
 
-export async function curvyDeposit(lamports: bigint) {
+export async function deposit(lamports: bigint) {
   const current = await session()
   try {
     const { generateEntryPortal, getNetworks } = await import('@0xcurvy/curvy-sdk/actions')
@@ -374,7 +379,7 @@ export async function curvyDeposit(lamports: bigint) {
   } finally { await current.config.destroy() }
 }
 
-export async function curvySend(recipientAddress: string, lamports: bigint) {
+export async function send(recipientAddress: string, lamports: bigint) {
   const recipient = new PublicKey(recipientAddress).toBase58()
   const current = await session()
   try {

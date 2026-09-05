@@ -10,6 +10,27 @@ import './styles.css'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
 import { BRIDGE_CHAINS, bridgeChain, bridgeEligibility, sanitizeBridgeAddress, validateBridgeAddress } from './bridge-routes.js'
+import {
+  LOGOS as PROTOCOL_LOGOS, PROTOCOLS, PROVIDER_CAPABILITIES, listProtocols, resolveProtocolId,
+} from '../protocols/registry.js'
+import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
+import { loadBrowserAdapter } from '../protocols/browser.js'
+
+// The pool selector used to hardcode which ids sit under which heading, and the
+// bridge picker named privacycash directly. Both follow the manifests now.
+const SOLANA_POOL_IDS = listProtocols({ chain: 'solana' }).map(({ id }) => id)
+const OTHER_POOL_IDS = listProtocols().filter(({ chain }) => chain !== 'solana').map(({ id }) => id)
+const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || null
+const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
+
+// A route runs in the browser only if the protocol ships the module for it and
+// declares that capability as actually executing, not merely documented.
+function browserCanRun(protocolId, capability) {
+  const manifest = protocolId ? PROTOCOLS[protocolId] : null
+  if (!manifest) return false
+  const module = capability === 'bridge' ? manifest.modules.bridge : manifest.modules.browser
+  return Boolean(module && manifest[capability]?.execution === 'sdk')
+}
 
 const ASSETS = ['USDC', 'SOL', 'USDT']
 // Bridging is offered as a fourth destination choice rather than a separate mode,
@@ -22,25 +43,10 @@ const LOGOS = {
     SOL: { src: '/logos/sol.svg', source: 'https://solana.com/branding' },
     USDT: { src: '/logos/usdt.svg', source: 'https://tether.to/en/media/' },
   },
-  protocols: {
-    cloakc: { src: '/logos/cloak.png', source: 'https://www.cloak.ag/brand' },
-    privacycash: { src: '/logos/privacycash-icon.png', source: 'https://privacycash.mintlify.app/' },
-    curvy: { src: '/logos/curvy.svg', source: 'https://www.curvy.box/' },
-  },
+  protocols: PROTOCOL_LOGOS,
 }
-const TOKEN_DECIMALS = { SOL: 9, USDC: 6, USDT: 6 }
 const EMPTY_ASSETS = { USDC: 0, SOL: 0, USDT: 0 }
 const EMPTY = { buckets: [], totals: { deposits: EMPTY_ASSETS, withdrawals: EMPTY_ASSETS, swapIn: EMPTY_ASSETS, swapOut: EMPTY_ASSETS, poolSize: EMPTY_ASSETS, count: 0, counts: { byAsset: EMPTY_ASSETS } }, poolState: { balances: EMPTY_ASSETS, usd: EMPTY_ASSETS, totalUsd: 0 }, externalFlows: {}, activity: { txCount: 0, uniqueAmounts: 0, amountDistribution: [], recentVolume: {}, timeDistribution: [] }, recent: [] }
-const PROTOCOLS = {
-  cloakc: { name: 'CLOAKC', shortProgram: 'zh1e…RkW', docs: 'https://docs.cloak.ag/sdk/introduction', chain: 'solana' },
-  privacycash: { name: 'PrivacyCash', shortProgram: '9fhQ…QyQD', docs: 'https://privacycash.mintlify.app/', chain: 'solana' },
-  curvy: { name: 'Curvy', shortProgram: '0xB4BA…B6d5', docs: 'https://docs.curvy.box/', chain: 'arbitrum' },
-}
-const PROVIDER_CAPABILITIES = {
-  privacycash: { supportsMultiRecipient: true, supportsPrivateSwap: false, documentsPrivateSwap: true, maxRecipients: null, swapAggregator: 'Jupiter', network: 'Solana' },
-  cloakc: { supportsMultiRecipient: false, supportsPrivateSwap: true, maxRecipients: 1, swapAggregator: 'Jupiter', network: 'Solana' },
-  curvy: { supportsMultiRecipient: false, supportsPrivateSwap: true, maxRecipients: 1, swapAggregator: 'LiFi', network: 'Arbitrum One' },
-}
 const PRIVACY_TARGETS = [
   { value: 'balanced', label: 'Balanced', score: 60 },
   { value: 'high', label: 'High', score: 75 },
@@ -103,10 +109,7 @@ function formatDuration(value) {
 }
 
 function providerKey(item) {
-  const key = String(item?.provider || item?.protocol || '').toLowerCase().replace(/[^a-z]/g, '')
-  if (key.includes('privacycash')) return 'privacycash'
-  if (key.includes('cloak')) return 'cloakc'
-  return key
+  return resolveProtocolId(item?.provider || item?.protocol || '')
 }
 
 function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge) {
@@ -114,7 +117,8 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge) {
   const configured = PROVIDER_CAPABILITIES[protocol] || {}
   const poolMetrics = item?.poolMetrics || {}
   const capabilities = { ...configured, ...(item?.capabilities || {}) }
-  if (protocol === 'cloakc') capabilities.supportsMultiRecipient = false
+  // A server response must not widen a protocol past what its manifest declares.
+  if (!configured.supportsMultiRecipient) capabilities.supportsMultiRecipient = false
   // A bridge is ranked on its own route table: the swap table would report the
   // wrong answer, since bridging leaves Solana entirely.
   const route = bridge ? bridgeEligibility(protocol, inputAsset, bridge.chainId, bridge.token)
@@ -345,7 +349,7 @@ function PrivacyHome() {
   const isBridge = destinationAsset === BRIDGE_OPTION
   const isSwap = !isBridge && asset !== destinationAsset
   const selectedBridgeChain = bridgeChain(bridgeChainId)
-  const bridgeRoute = isBridge ? bridgeEligibility('privacycash', asset, bridgeChainId, bridgeToken) : null
+  const bridgeRoute = isBridge ? bridgeEligibility(BRIDGE_PROTOCOL_ID, asset, bridgeChainId, bridgeToken) : null
 
   const total = finite(amount)
   const totalRaw = rawTokenAmount(amount, asset)
@@ -514,33 +518,28 @@ function PrivacyHome() {
     setReceipt(null)
     if (!wallet) return connectWallet()
     if (!activeValidation.valid) return setSendError(activeValidation.error)
-    // Bridging only exists on PrivacyCash, so it is not gated on the swap ranking.
-    const canExecute = isBridge ? recommended?.protocol === 'privacycash'
-      : isSwap ? recommended?.protocol === 'cloakc' : recommended?.protocol === 'privacycash'
-    if (!canExecute) return setSendError('This recommended route is not enabled for browser execution yet')
+    const kind = isBridge ? 'bridge' : isSwap ? 'swap' : 'send'
+    if (!browserCanRun(recommended?.protocol, kind)) {
+      return setSendError('This recommended route is not enabled for browser execution yet')
+    }
     setSending(true)
     try {
-      const result = isBridge
-        ? await import('./bridge-client.js').then(({ executePrivacyCashBridge }) => executePrivacyCashBridge({
-          provider: wallet.provider, asset, chainId: bridgeChainId, outputToken: bridgeToken,
-          recipient: activeValidation.recipient,
-          totalBaseUnits: activeValidation.total.baseUnits,
-          onStatus: setSendStatus,
-        }))
-        : isSwap
-        ? await import('./cloak-client.js').then(({ executeCloakSwap }) => executeCloakSwap({
-          provider: wallet.provider, inputAsset: asset, outputAsset: destinationAsset,
-          totalBaseUnits: transferValidation.total.baseUnits,
-          recipient: transferValidation.rows[0].address.publicKey,
-          onStatus: setSendStatus,
-        }))
-        : await import('./privacycash-client.js').then(({ executePrivacyCashTransfer }) => executePrivacyCashTransfer({
-          provider: wallet.provider,
-          asset,
-          totalBaseUnits: transferValidation.total.baseUnits,
-          recipients: transferValidation.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
-          onStatus: setSendStatus,
-        }))
+      // One dispatch for every protocol and every capability. The adapter is
+      // still a lazy chunk, so no privacy SDK reaches the entry bundle.
+      const { execute } = await loadBrowserAdapter(recommended.protocol)
+      const result = await execute({
+        kind,
+        provider: wallet.provider,
+        asset,
+        inputAsset: asset,
+        outputAsset: destinationAsset,
+        chainId: bridgeChainId,
+        outputToken: bridgeToken,
+        recipient: isBridge ? activeValidation.recipient : transferValidation.rows[0]?.address.publicKey,
+        recipients: transferValidation.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
+        totalBaseUnits: activeValidation.total.baseUnits,
+        onStatus: setSendStatus,
+      })
       setReceipt(result); setSendStatus('Sent')
     } catch (transferError) {
       if (transferError?.receipt) setReceipt(transferError.receipt)
@@ -553,8 +552,11 @@ function PrivacyHome() {
     if (!comparison) return []
     const bridge = isBridge ? { chainId: bridgeChainId, token: bridgeToken } : null
     const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge))
-    if (strategy === 'multiple' && !normalized.some((item) => item.protocol === 'cloakc')) {
-      normalized.push(normalizeEstimate({ protocol: 'cloakc', protocolName: 'CLOAKC', available: false, unavailableReason: 'Multiple-recipient withdrawal is not currently supported by this provider.', capabilities: PROVIDER_CAPABILITIES.cloakc }, strategy, asset, destinationAsset, bridge))
+    if (strategy === 'multiple') {
+      for (const id of SINGLE_RECIPIENT_IDS) {
+        if (normalized.some((item) => item.protocol === id)) continue
+        normalized.push(normalizeEstimate({ protocol: id, protocolName: PROTOCOLS[id].name, available: false, unavailableReason: 'Multiple-recipient withdrawal is not currently supported by this provider.', capabilities: PROVIDER_CAPABILITIES[id] }, strategy, asset, destinationAsset, bridge))
+      }
     }
     return normalized
   }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken])
@@ -566,7 +568,7 @@ function PrivacyHome() {
   const resultAmount = pickNumber(comparison?.amount, total)
   const recommended = rankings.find((item) => item.available && item.protocol === activeProtocol)
   const alternatives = rankings.filter((item) => item.protocol !== activeProtocol)
-  const browserExecutable = isSwap ? recommended?.protocol === 'cloakc' : recommended?.protocol === 'privacycash'
+  const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
   const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : 'Send'
   const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : 'Sending...'
 
@@ -948,7 +950,7 @@ function LiquidityUniverse() {
   // /api/summary already values every pool in USD, so nothing is derived here
   // beyond adding up the pools the visitor has selected.
   const summary = usePoolSummary()
-  const [selectedPools, setSelectedPools] = useState(['privacycash', 'cloakc'])
+  const [selectedPools, setSelectedPools] = useState(SOLANA_POOL_IDS)
 
   const included = summary.pools.filter((pool) => selectedPools.includes(pool.protocol))
   const totalTvl = summary.pools.reduce((sum, pool) => sum + pool.tvl, 0)
@@ -963,7 +965,7 @@ function LiquidityUniverse() {
       <ObsidianLiquidity selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
       <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
     </div>
-    <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{['privacycash', 'cloakc'].map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{['curvy'].map(poolButton)}</div></div></div>
+    <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{SOLANA_POOL_IDS.map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{OTHER_POOL_IDS.map(poolButton)}</div></div></div>
   </section>
 }
 
@@ -1001,7 +1003,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <LiquidityUniverse />
     <div className="analyticsProtocolTabs" aria-label="Analytics project">{Object.entries(PROTOCOLS).map(([id, item]) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={item.name} /><span>{item.name}</span></button>)}</div>
     <section className={`notice ${error ? 'error' : ''}`}>{error ? <ShieldX /> : <ShieldCheck />}<span>{error || `Reading ${meta.name} data from the analytics database`}</span><b>{loading ? 'Loading' : error ? 'Error' : isBackfilling ? 'Partial' : 'Ready'}</b><em>{analytics.indexedAt ? `Indexed ${new Date(analytics.indexedAt * 1000).toLocaleString()}` : 'Run the backend indexer to update'}</em></section>
-    {protocol === 'cloakc' && <section className="route panel"><span>PRIVATE SOL</span><ArrowRight /><b>JUPITER</b><ArrowRight /><span>PUBLIC USDC / USDT RECIPIENT</span><small>Two-stage Cloak TransactSwap flow</small></section>}
+    {meta.swap.routeBanner && <section className="route panel"><span>{meta.swap.routeBanner.from}</span><ArrowRight /><b>{meta.swap.routeBanner.via}</b><ArrowRight /><span>{meta.swap.routeBanner.to}</span><small>{meta.swap.routeBanner.note}</small></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
     <div className="sectionTitle"><div><p className="eyebrow">POOL STATE</p><h2>Current balances</h2></div><strong>{money(state.totalUsd)} TVL</strong></div>

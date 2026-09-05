@@ -12,8 +12,15 @@
 // so this path is independent of the swap route table in `swap-routes.js`.
 // Source: https://privacycash.mintlify.app/sdk/bridge
 
-export const BRIDGE_RELAYER_URL = 'https://api3.privacycash.org/bridge'
-export const BRIDGE_CONFIG_URL = 'https://api3.privacycash.org/config'
+import { BRIDGE_CAPABILITIES, PROTOCOLS } from '../protocols/registry.js'
+import { decimalsFor } from '../protocols/shared/units.js'
+
+export { BRIDGE_CAPABILITIES }
+
+// The relayer is PrivacyCash infrastructure, so its URLs come from that
+// protocol's manifest rather than being retyped here.
+export const BRIDGE_RELAYER_URL = PROTOCOLS.privacycash.services.bridgeRelayer
+export const BRIDGE_CONFIG_URL = PROTOCOLS.privacycash.services.bridgeConfig
 
 // Assets that can leave the PrivacyCash Solana pool as bridge input.
 export const BRIDGE_INPUT_ASSETS = Object.freeze(['SOL', 'USDC', 'USDT'])
@@ -34,23 +41,13 @@ export const BRIDGE_CHAINS = Object.freeze([
   Object.freeze({ id: 'bitcoin', label: 'btc', name: 'Bitcoin', addressKind: 'bitcoin', tokens: Object.freeze(['BTC']) }),
 ])
 
-// Only PrivacyCash exposes a usable bridge today. Cloak's SDK and program are
-// Solana-only with no bridge surface at all; Curvy bridges through LI.FI but has
-// no browser-wallet path in this app yet.
-export const BRIDGE_CAPABILITIES = Object.freeze({
-  privacycash: Object.freeze({
-    execution: 'sdk',
-    note: 'PrivacyCash bridges by withdrawing privately to a NEAR Intents market-maker address.',
-  }),
-  cloakc: Object.freeze({
-    execution: 'unsupported',
-    note: 'Cloak is Solana-only. Its SDK and Shield Pool program expose no bridge.',
-  }),
-  curvy: Object.freeze({
-    execution: 'documented-only',
-    note: 'Curvy bridges through LI.FI entry/exit Portals, but this app has no Curvy browser path.',
-  }),
-})
+// A token DarkSol knows is not automatically a token this relayer accepts as
+// bridge input, so the asset is checked against the bridge list rather than
+// just the decimals table.
+function bridgeDecimals(asset) {
+  if (!BRIDGE_INPUT_ASSETS.includes(String(asset).toUpperCase())) throw new Error('Unsupported bridge asset')
+  return decimalsFor(asset)
+}
 
 export function bridgeChain(chainId) {
   return BRIDGE_CHAINS.find((chain) => chain.id === chainId) || null
@@ -114,8 +111,7 @@ export function bridgeEligibility(protocol, inputAsset, chainId, outputToken) {
 // quoted the NET amount it will actually receive, while the SDK withdrawal is
 // still called with the GROSS amount.
 export function bridgeNetBaseUnits(grossBaseUnits, asset, config) {
-  const decimals = { SOL: 9, USDC: 6, USDT: 6 }[String(asset).toUpperCase()]
-  if (decimals === undefined) throw new Error('Unsupported bridge asset')
+  const decimals = bridgeDecimals(asset)
   const unitsPerToken = 10 ** decimals
   const feeRate = Number(config?.withdraw_fee_rate)
   if (!Number.isFinite(feeRate) || feeRate < 0) throw new Error('Relayer did not report a withdrawal fee rate')
@@ -135,8 +131,7 @@ export const BRIDGE_MINIMUM_SOL_EQUIVALENT = 0.05
 
 export function bridgeMinimumBaseUnits(asset, config) {
   const key = String(asset).toLowerCase()
-  const decimals = { SOL: 9, USDC: 6, USDT: 6 }[String(asset).toUpperCase()]
-  if (decimals === undefined) throw new Error('Unsupported bridge asset')
+  const decimals = bridgeDecimals(asset)
   const unitsPerToken = 10 ** decimals
   const withdrawalMinimum = Number(config?.minimum_withdrawal?.[key] ?? 0)
   const solPrice = Number(config?.prices?.sol)

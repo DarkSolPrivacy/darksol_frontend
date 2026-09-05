@@ -8,20 +8,51 @@ Live-test findings, routes, fee measurements and integration caveats live in [`d
 
 | Path | Role |
 | --- | --- |
-| [`src/`](src/) | Vite + React dashboard: `main.jsx` UI, `data.js` token palette, `swap-routes.js` and `bridge-routes.js` route tables, `*-client.js` browser-wallet calls, `transfer-validation.js` and `wallet-balance.js` input checks |
+| [`protocols/`](protocols/) | **One folder per integrated project.** `registry.js` derives every capability table from the manifests, `addresses.js` holds every on-chain address, `shared/` the helpers more than one protocol needs |
+| [`src/`](src/) | Vite + React dashboard: `main.jsx` UI, `data.js` token palette, `swap-routes.js` and `bridge-routes.js` eligibility rules, `transfer-validation.js` and `wallet-balance.js` input checks |
 | [`server/app.js`](server/app.js) | The API as a bare Express app — no listener, no static handler, so both entry points reuse it |
 | [`server/api.js`](server/api.js) | Local entry point: built dashboard and API on one port |
 | [`api/index.js`](api/index.js) | Vercel serverless re-export of that same app |
-| [`server/indexer.js`](server/indexer.js) | Writer-process entry point; `index.js` holds the Solana decode/index core, `curvy-indexer.js` the Arbitrum lane |
+| [`server/indexer.js`](server/indexer.js) | Writer-process entry point; `index.js` walks transactions and each protocol's `indexer.js` decodes them |
 | [`server/db.js`](server/db.js) | All Postgres access; `migrate.js`, `sync.js` and `import-sqlite.js` are the schema and SQLite copy entry points |
 | [`server/privacy-engine.js`](server/privacy-engine.js) | Pure planning heuristics — never reads the database |
 | [`server/planning-metrics.js`](server/planning-metrics.js) | Turns stored flows into the metrics the engine scores |
-| [`scripts/private-sol.ts`](scripts/private-sol.ts) | CLI for the test-only SDK runner; `protocols/` is one module per protocol, `runtime.ts` shared config and wallet loading |
+| [`scripts/private-sol.ts`](scripts/private-sol.ts) | CLI for the test-only SDK runner; `runtime.ts` holds shared config and wallet loading |
 | [`supabase/migrations/`](supabase/migrations/) | Live schema. [`migrations/`](migrations/) is the older SQLite lineage, kept only as history |
 | [`test/`](test/) | `node --test` suites |
 | [`public/`](public/) | Logos plus the PrivacyCash circuit wasm/zkey copied in by `postinstall` |
 | `data/` | Local SQLite analytics database (Git-ignored) |
 | `test-wallets/` | Disposable test identities, keys and Cloak UTXO state (Git-ignored) |
+
+## Adding a project
+
+A protocol is one folder under [`protocols/`](protocols/). Nothing outside it is edited
+except a single import line in `protocols/manifests.js` and a logo in `public/logos/`.
+
+```
+protocols/<id>/
+  manifest.js    required. Pure data, imports only ../addresses.js
+  cli.ts         optional. snapshot / balance / deposit / send / swap
+  browser.js     optional. execute({ kind, ... }) for the connected wallet
+  indexer.js     optional. decode() on the Solana lane, run() on an EVM lane
+  commands.ts    optional. Commands only this protocol has
+```
+
+The manifest is the declarative surface: chain, addresses, assets, fee model, and an
+`execution` mode per capability — `sdk` when it really runs, `documented-only` when the
+protocol documents it but its SDK does not expose it (the UI shows `SOON`), or
+`unsupported`. `modules` declares which of the files above exist; the UI greys out a
+route from that rather than attempting an import.
+
+Every address belongs in [`protocols/addresses.js`](protocols/addresses.js), and anything
+two protocols both need belongs in [`protocols/shared/`](protocols/shared/). Both are
+enforced by tests: `test/protocol-registry.test.js` validates every manifest and checks
+each address parses on the chain it claims, and `test/protocol-modules.test.js` fails if a
+manifest promises a capability the folder does not implement.
+
+Assets are constrained to `USDC`, `SOL` and `USDT` by a CHECK constraint on four tables in
+`supabase/migrations`. A protocol trading anything else needs a migration first — the
+schema test tells you so rather than letting an INSERT fail later.
 
 ## Run locally
 
@@ -124,7 +155,7 @@ Selecting a different receive asset switches the home screen into private-swap m
 
 ### Private bridging
 
-The receive-asset menu's fourth `Bridge` entry replaces the single-token choice with a destination-chain row and a token grid. Bridging is not a separate protocol primitive: PrivacyCash issues a one-time Solana deposit address from its relayer and the transfer is then an ordinary private withdrawal to that address, so [`src/bridge-client.js`](src/bridge-client.js) reuses the same `withdraw`/`withdrawSPL` calls as a private transfer and shares the session setup exported by [`src/privacycash-client.js`](src/privacycash-client.js). Destination settlement is performed by a NEAR Intents market maker, independent of the Jupiter path used for swaps.
+The receive-asset menu's fourth `Bridge` entry replaces the single-token choice with a destination-chain row and a token grid. Bridging is not a separate protocol primitive: PrivacyCash issues a one-time Solana deposit address from its relayer and the transfer is then an ordinary private withdrawal to that address, so [`protocols/privacycash/bridge.js`](protocols/privacycash/bridge.js) reuses the same `withdraw`/`withdrawSPL` calls as a private transfer and shares the session setup exported by [`protocols/privacycash/browser.js`](protocols/privacycash/browser.js). Destination settlement is performed by a NEAR Intents market maker, independent of the Jupiter path used for swaps.
 
 [`src/bridge-routes.js`](src/bridge-routes.js) holds the whole route table: Ethereum (ETH/USDC/USDT/DAI), BNB Chain (BNB/USDC/USDT), Base (ETH/USDC), Polygon (POL/USDC/USDT, sent to the relayer as `pol`) and Bitcoin (BTC), from SOL, USDC or USDT input. The live PrivacyCash app also shows Robinhood, Arbitrum, Tron, Zcash and Hyperliquid chips; those are absent from the documented route map and are deliberately not offered rather than presented as pairs the relayer would refuse. Recipient addresses validate locally against the destination chain's format before the user is asked to sign, the relayer is quoted the net amount after PrivacyCash withdrawal fees while the SDK withdrawal still uses the gross amount, and the minimum is the larger of the per-token withdrawal floor and roughly 0.05 SOL of value from the relayer's live prices. Cloak has no bridge surface — its SDK and Shield Pool program are Solana-only — and Curvy bridges through LI.FI entry/exit Portals but has no browser-wallet path in this app.
 
@@ -196,6 +227,9 @@ Leave enough SOL in the sender for protocol and network fees, and use small disp
 - https://docs.curvy.box/for-programmers/installing-the-sdk
 - https://docs.curvy.box/faq
 - https://github.com/0xCurvy/contracts
+- https://sdk.umbraprivacy.com
+- https://docs.umbraprivacy.com/docs/introduction
+- https://github.com/umbra-defi/docs
 - https://www.helius.dev/docs/rpc/gettransactionsforaddress
 - https://www.helius.dev/docs/api-reference/das/getasset
 - https://www.alchemy.com/docs/data/transfers-api/transfers-endpoints/alchemy-get-asset-transfers

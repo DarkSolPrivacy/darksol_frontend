@@ -15,6 +15,9 @@ import {
   estimateProviderFee, getPrivacyTarget,
 } from './privacy-engine.js'
 import { swapEligibility } from '../src/swap-routes.js'
+import { PROTOCOLS, PROTOCOL_IDS } from '../protocols/registry.js'
+import { quoteJupiter } from '../protocols/shared/jupiter.js'
+import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Absent on Vercel, where the values come from the project environment; dotenv
@@ -22,25 +25,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 dotenv.config({ path: resolve(root, '.env.local'), override: true, quiet: true })
 const ASSETS = ['USDC', 'SOL', 'USDT']
 const blankAssets = () => Object.fromEntries(ASSETS.map((asset) => [asset, 0]))
-const PROTOCOLS = {
-  cloakc: {
-    id: 'cloakc', name: 'CLOAKC', programId: 'zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
-    docs: 'https://docs.cloak.ag/sdk/introduction',
-    feePolicy: { label: '0.3% protocol fee', detail: 'SOL exits add 0.005 SOL' },
-  },
-  privacycash: {
-    id: 'privacycash', name: 'PrivacyCash', programId: '9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD',
-    docs: 'https://privacycash.mintlify.app/',
-    feePolicy: { label: '0.35% + base fee', detail: 'Transfers: 0.006 SOL equivalent · swaps: 0.008 SOL equivalent + Jupiter fees' },
-  },
-  curvy: {
-    id: 'curvy', name: 'Curvy', programId: '0xcc8d5c60a8fb15aa3793647ef531f1ba7df24f00',
-    docs: 'https://docs.curvy.box/', chain: 'arbitrum', chainId: 42161,
-    explorerAccount: 'https://arbiscan.io/address/0xcc8d5c60a8fb15aa3793647ef531f1ba7df24f00',
-    explorerTransaction: 'https://arbiscan.io/tx/',
-    feePolicy: { label: '0.3% private exit path', detail: '0.1% aggregation + 0.2% unshielding; shielding separately costs 0.1%' },
-  },
-}
 const INTERVALS = {
   '1h': { bucketSeconds: 300, bucketCount: 12 },
   '6h': { bucketSeconds: 900, bucketCount: 24 },
@@ -160,7 +144,7 @@ function aggregate(flows, historicalFlows, from, bucketSeconds, bucketCount, poo
 async function analytics(protocol, interval, { withStorage = false } = {}) {
   const protocolConfig = PROTOCOLS[protocol]
   const intervalConfig = INTERVALS[interval]
-  if (!protocolConfig) throw new Error('protocol must be cloakc, privacycash, or curvy')
+  if (!protocolConfig) throw new Error(`protocol must be one of: ${PROTOCOL_IDS.join(', ')}`)
   if (!intervalConfig) throw new Error('range must be 1h, 6h, 1d, 30d, or 90d')
   const now = Math.floor(Date.now() / 1000)
   const currentBucket = Math.floor(now / intervalConfig.bucketSeconds) * intervalConfig.bucketSeconds
@@ -175,12 +159,12 @@ async function analytics(protocol, interval, { withStorage = false } = {}) {
   const historicalFlows = snapshot ? [] : await readFlows(protocol, 0, from - 1)
   const baseline = snapshot ? null : await readFlowBaseline(protocol)
   return {
-    source: 'supabase', indexedVia: protocol === 'curvy' ? 'alchemy' : 'helius',
-    chain: protocolConfig.chain || 'solana', chainId: protocolConfig.chainId || null,
+    source: 'supabase', indexedVia: protocolConfig.indexer.indexedVia,
+    chain: protocolConfig.chain, chainId: protocolConfig.chainId,
     protocol, protocolName: protocolConfig.name, programId: protocolConfig.programId,
     docs: protocolConfig.docs, feePolicy: protocolConfig.feePolicy, range: interval, bucketSeconds: intervalConfig.bucketSeconds,
-    explorerAccount: protocolConfig.explorerAccount || `https://solscan.io/account/${protocolConfig.programId}`,
-    explorerTransaction: protocolConfig.explorerTransaction || 'https://solscan.io/tx/',
+    explorerAccount: protocolConfig.explorerAccount,
+    explorerTransaction: protocolConfig.explorerTransaction,
     from, to: now, prices: tokenPrices, indexedAt: snapshot?.blockTime || state?.syncedThrough || null,
     coverage: {
       complete: Boolean(state?.historyComplete), historyComplete: Boolean(state?.historyComplete),
@@ -190,11 +174,7 @@ async function analytics(protocol, interval, { withStorage = false } = {}) {
     ...(withStorage ? { storage } : {}),
     ...aggregate(windowFlows, historicalFlows, from, intervalConfig.bucketSeconds, intervalConfig.bucketCount, snapshot?.balances, tokenPrices, now, baseline),
     recent: windowFlows.slice(0, 12),
-    flowMethod: protocol === 'privacycash'
-      ? 'Swaps inferred by one-to-one ephemeral-wallet links within 120 seconds.'
-      : protocol === 'curvy'
-        ? 'Vault deposits and withdrawals verified from Curvy events on Arbitrum; portal swaps are not inferred without a defensible link.'
-        : 'Swap-outs decoded from Cloak TransactSwap instructions; output asset is read from the instruction payload.',
+    flowMethod: protocolConfig.indexer.flowMethod,
   }
 }
 
@@ -209,7 +189,7 @@ const SUMMARY_RANGE = '1d'
 const RECENT_FLOW_SAMPLE = 12
 
 async function summary() {
-  const protocols = Object.keys(PROTOCOLS)
+  const protocols = PROTOCOL_IDS
   const { bucketSeconds, bucketCount } = INTERVALS[SUMMARY_RANGE]
   const now = Math.floor(Date.now() / 1000)
   const from = Math.floor(now / bucketSeconds) * bucketSeconds - (bucketCount - 1) * bucketSeconds
@@ -231,7 +211,7 @@ async function summary() {
     const valued = (key) => ASSETS.reduce((sum, asset) => sum + (flows[asset]?.[key] || 0) * price(asset), 0)
     return {
       protocol, name: PROTOCOLS[protocol].name,
-      chain: PROTOCOLS[protocol].chain || 'solana',
+      chain: PROTOCOLS[protocol].chain,
       tvl: ASSETS.reduce((sum, asset) => sum + (Number(balances[asset]) || 0) * price(asset), 0),
       balances: Object.fromEntries(ASSETS.map((asset) => [asset, Number(balances[asset]) || 0])),
       inflow: valued('inflow'), outflow: valued('outflow'),
@@ -244,7 +224,6 @@ async function summary() {
   return { source: 'supabase', range: SUMMARY_RANGE, from, to: now, prices: tokenPrices, pools }
 }
 
-const TOKEN_DECIMALS = { SOL: 9, USDC: 6, USDT: 6 }
 const MAX_RECEIVERS = 50
 
 function parseTokenAmount(value, asset, label = 'amount') {
@@ -442,7 +421,7 @@ async function planningResult(body) {
   // shared, and fetching it per provider was three extra round trips.
   const priceRows = await readLatestTokenPrices()
   const tokenPrices = toPriceMap(priceRows)
-  const rankings = await Promise.all(Object.keys(PROTOCOLS).map(async (provider) => {
+  const rankings = await Promise.all(PROTOCOL_IDS.map(async (provider) => {
     const metrics = await buildPlanningMetrics(provider, request.asset, request.total.amount, now, priceRows)
     const ranking = request.strategy === 'multiple'
       ? multiRanking(provider, request, metrics, tokenPrices, now)
@@ -488,34 +467,33 @@ async function planningResult(body) {
 
 const app = express()
 app.use(express.json({ limit: '32kb' }))
-const SWAP_MINTS = Object.freeze({
-  SOL: 'So11111111111111111111111111111111111111112',
-  USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-})
+// Quotes are validated against the requested route before they are returned,
+// because the caller binds the minimum output into a ZK proof immediately
+// afterwards. The fetch-and-check itself lives in protocols/shared/jupiter.js,
+// which the Cloak CLI uses too; this endpoint only decides who may ask for what.
+//
+// Statically imported, not loaded through protocols/load.js: this runs inside
+// the Vercel function, which bundles by tracing static imports.
 app.get('/api/swap-quote', async (request, response) => {
   try {
+    const protocol = String(request.query.protocol || 'cloakc').toLowerCase()
     const inputAsset = String(request.query.inputAsset || '').toUpperCase()
     const outputAsset = String(request.query.outputAsset || '').toUpperCase()
-    const amount = String(request.query.amount || '')
-    if (inputAsset !== 'SOL' || !['USDC', 'USDT'].includes(outputAsset)) throw new Error('Only CLOAKC SOL to USDC/USDT quotes are supported')
-    if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) throw new Error('amount must be positive integer base units')
-    const url = new URL('https://lite-api.jup.ag/swap/v1/quote')
-    url.search = new URLSearchParams({
-      inputMint: SWAP_MINTS[inputAsset], outputMint: SWAP_MINTS[outputAsset], amount,
-      slippageBps: '100', restrictIntermediateTokens: 'true',
-    }).toString()
-    const quoteResponse = await fetch(url)
-    if (!quoteResponse.ok) throw new Error(`Jupiter quote failed with HTTP ${quoteResponse.status}`)
-    const quote = await quoteResponse.json()
-    if (quote.inputMint !== SWAP_MINTS[inputAsset] || quote.outputMint !== SWAP_MINTS[outputAsset]
-      || quote.inAmount !== amount || !/^\d+$/.test(quote.outAmount || '') || !/^\d+$/.test(quote.otherAmountThreshold || '')) {
-      throw new Error('Jupiter returned a quote for an unexpected route or amount')
+    const capability = PROTOCOLS[protocol]?.swap
+    if (!capability || capability.execution !== 'sdk') {
+      throw new Error(`${PROTOCOLS[protocol]?.name || protocol} has no quotable swap route`)
     }
+    if (!capability.inputAssets.includes(inputAsset) || !capability.outputAssets.includes(outputAsset)) {
+      throw new Error(`${PROTOCOLS[protocol].name} cannot swap ${inputAsset || '?'} to ${outputAsset || '?'}`)
+    }
+    const quote = await quoteJupiter({ inputAsset, outputAsset, amount: String(request.query.amount || '') })
     response.json({
-      inputAsset, outputAsset, inputBaseUnits: quote.inAmount,
-      expectedOutputBaseUnits: quote.outAmount, minimumOutputBaseUnits: quote.otherAmountThreshold,
-      priceImpactPct: quote.priceImpactPct, routeLabels: quote.routePlan?.map((leg) => leg.swapInfo?.label).filter(Boolean) || [],
+      protocol, inputAsset, outputAsset,
+      inputBaseUnits: quote.inputBaseUnits,
+      expectedOutputBaseUnits: quote.expectedOutputBaseUnits,
+      minimumOutputBaseUnits: quote.minimumOutputBaseUnits,
+      priceImpactPct: quote.priceImpactPct,
+      routeLabels: quote.routeLabels,
     })
   } catch (error) {
     response.status(400).json({ error: 'Unable to quote swap', detail: error.message })
@@ -544,7 +522,7 @@ app.post('/api/solana-rpc', async (request, response) => {
     response.status(502).json({ jsonrpc: '2.0', id: request.body?.id ?? null, error: { code: -32000, message: `Solana RPC unavailable: ${error.message}` } })
   }
 })
-app.get('/api/health', (_request, response) => response.json({ ok: true, source: 'supabase', protocols: Object.values(PROTOCOLS).map(({ id, name, programId, chain = 'solana', chainId = null }) => ({ id, name, programId, chain, chainId })) }))
+app.get('/api/health', (_request, response) => response.json({ ok: true, source: 'supabase', protocols: Object.values(PROTOCOLS).map(({ id, name, programId, chain, chainId }) => ({ id, name, programId, chain, chainId })) }))
 app.get('/api/summary', async (_request, response) => {
   try {
     const result = await summary()

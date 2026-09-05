@@ -1,9 +1,8 @@
 import { Connection, PublicKey } from '@solana/web3.js'
+import { MINTS as REGISTRY_MINTS } from '../addresses.js'
 
-export const MINTS = Object.freeze({
-  USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-})
+// Re-exported so bridge.js and the older call sites keep one source.
+export const MINTS = Object.freeze({ USDC: REGISTRY_MINTS.USDC, USDT: REGISTRY_MINTS.USDT })
 const SIGN_IN_MESSAGE = new TextEncoder().encode('Privacy Money account sign in')
 const CIRCUIT_BASE_PATH = '/circuit2/transaction2'
 
@@ -109,4 +108,15 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
     throw partialError
   }
   return receipt
+}
+
+// The one entry point the UI calls. Bridging lives in bridge.js and is loaded
+// only when asked for, so its relayer code stays out of the transfer path.
+export async function execute({ kind, ...options }) {
+  if (kind === 'send') return executePrivacyCashTransfer(options)
+  if (kind === 'bridge') {
+    const { executePrivacyCashBridge } = await import('./bridge.js')
+    return executePrivacyCashBridge(options)
+  }
+  throw new Error(`PrivacyCash has no browser ${kind} flow`)
 }

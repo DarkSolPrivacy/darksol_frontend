@@ -1,9 +1,10 @@
 import { PublicKey } from '@solana/web3.js'
-import { MINTS, openPrivacyCashSession } from './privacycash-client.js'
+import { decimalsFor } from '../shared/units.js'
+import { MINTS, openPrivacyCashSession } from './browser.js'
 import {
   BRIDGE_CONFIG_URL, BRIDGE_RELAYER_URL,
   bridgeEligibility, bridgeMinimumBaseUnits, bridgeNetBaseUnits,
-} from './bridge-routes.js'
+} from '../../src/bridge-routes.js'
 
 // Renders base units as the plain decimal token string the relayer expects in
 // `inputTokenAmount`. Kept exact (no float round-trip) so the quoted amount and
@@ -57,7 +58,7 @@ export async function executePrivacyCashBridge({
   const config = await relayerConfig()
   const minimumBaseUnits = bridgeMinimumBaseUnits(asset, config)
   if (BigInt(totalBaseUnits) < minimumBaseUnits) {
-    const decimals = { SOL: 9, USDC: 6, USDT: 6 }[String(asset).toUpperCase()]
+    const decimals = decimalsFor(asset)
     throw new Error(`Bridging ${asset} requires at least ${decimalAmount(minimumBaseUnits, decimals)} ${asset} to cover cross-chain fees`)
   }
   // The relayer must be quoted the amount it will actually receive, while the SDK

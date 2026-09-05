@@ -4,19 +4,16 @@ import { Keypair, PublicKey } from '@solana/web3.js'
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { PROGRAMS, PROTOCOL_IDS as REGISTRY_PROTOCOL_IDS } from '../protocols/registry.js'
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 dotenv.config({ path: resolve(projectRoot, '.env.local'), override: true, quiet: true })
 
-export const PROTOCOL_IDS = ['cloakc', 'privacycash', 'curvy'] as const
-export type ProtocolId = typeof PROTOCOL_IDS[number]
-
-export const PROGRAMS = Object.freeze({
-  cloakc: 'zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
-  privacycash: '9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD',
-  curvyVault: '0xcc8d5c60a8fb15aa3793647ef531f1ba7df24f00',
-  curvyAggregator: '0xe51924cef003a654ec9735c4d97f5d4862cbcbb1',
-})
+// Both come from the protocol manifests now. PROGRAMS keeps its original key
+// names because the CLI and its tests address curvy's two contracts separately.
+export { PROGRAMS }
+export const PROTOCOL_IDS = REGISTRY_PROTOCOL_IDS
+export type ProtocolId = string
 
 export function walletsDir() {
   const configured = process.env.TEST_WALLETS_DIR || 'test-wallets'

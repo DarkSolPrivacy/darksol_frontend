@@ -17,13 +17,17 @@ import {
 } from '@cloak.dev/sdk'
 import { getAssociatedTokenAddressSync } from '@solana/spl-token'
 import { resolve } from 'node:path'
-import { loadKeypair, parseRecipient, readJson, solanaRpcUrl, walletsDir, writePrivateJson } from '../runtime.js'
+import { loadKeypair, parseLamports, parseRecipient, readJson, solanaRpcUrl, walletsDir, writePrivateJson } from '../../scripts/runtime.js'
+import { quoteJupiter } from '../shared/jupiter.js'
+import { MINTS } from '../addresses.js'
 
 type CloakState = { version: 1, utxos: string[], signatures: string[] }
 const emptyState: CloakState = { version: 1, utxos: [], signatures: [] }
+// Cloak settles a swap into a public SPL recipient; the mints come from the
+// registry so this file holds no address of its own.
 const OUTPUT_MINTS: Record<string, PublicKey> = {
-  USDC: new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
-  USDT: new PublicKey('Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'),
+  USDC: new PublicKey(MINTS.USDC),
+  USDT: new PublicKey(MINTS.USDT),
 }
 
 function statePath() { return resolve(walletsDir(), 'state', 'cloak.json') }
@@ -54,7 +58,7 @@ function options(connection: Connection, signer: Awaited<ReturnType<typeof loadK
   }
 }
 
-export async function cloakSnapshot() {
+export async function snapshot() {
   const connection = new Connection(solanaRpcUrl(), 'confirmed')
   const program = await connection.getAccountInfo(CLOAK_PROGRAM_ID)
   const pdas = getShieldPoolPDAs(CLOAK_PROGRAM_ID, NATIVE_SOL_MINT)
@@ -85,12 +89,12 @@ export async function cloakSnapshot() {
   }
 }
 
-export async function cloakBalance() {
+export async function balance() {
   const { utxos } = await loadState()
   return { protocol: 'cloakc', privateLamports: utxos.reduce((sum, utxo) => sum + utxo.amount, 0n), utxoCount: utxos.length }
 }
 
-export async function cloakDeposit(lamports: bigint) {
+export async function deposit(lamports: bigint) {
   const signer = await loadKeypair()
   const connection = new Connection(solanaRpcUrl(), 'confirmed')
   const owner = await generateUtxoKeypair()
@@ -104,7 +108,7 @@ export async function cloakDeposit(lamports: bigint) {
   return { protocol: 'cloakc', action: 'deposit', signature: result.signature, lamports, privateLamports: lamports }
 }
 
-export async function cloakSend(recipientAddress: string, lamports: bigint) {
+export async function send(recipientAddress: string, lamports: bigint) {
   const recipient = parseRecipient(recipientAddress)
   const signer = await loadKeypair()
   const connection = new Connection(solanaRpcUrl(), 'confirmed')
@@ -118,7 +122,12 @@ export async function cloakSend(recipientAddress: string, lamports: bigint) {
   return { protocol: 'cloakc', action: 'send', signature: result.signature, recipient: recipient.toBase58(), grossLamports: lamports }
 }
 
-export async function cloakSwapSolToToken(recipientAddress: string, lamports: bigint, outputSymbol = 'USDC') {
+// Cloak swaps private SOL to a public token recipient: <recipient> <lamports> [SYMBOL].
+export async function swap(args: string[]) {
+  return swapSolToToken(args[0], parseLamports(args[1]), args[2] === '--execute' || !args[2] ? 'USDC' : args[2])
+}
+
+async function swapSolToToken(recipientAddress: string, lamports: bigint, outputSymbol = 'USDC') {
   const recipient = parseRecipient(recipientAddress)
   const symbol = outputSymbol.toUpperCase()
   const outputMint = OUTPUT_MINTS[symbol]
@@ -129,31 +138,21 @@ export async function cloakSwapSolToToken(recipientAddress: string, lamports: bi
   const available = utxos.reduce((sum, utxo) => sum + utxo.amount, 0n)
   if (lamports > available) throw new Error(`Cloak private balance is ${available} lamports, requested ${lamports}`)
 
-  // The deployed SOL PoolConfig was checked by cloakSnapshot. Quote the amount
+  // The deployed SOL PoolConfig was checked by snapshot(). Quote the amount
   // Jupiter actually receives after Cloak's fixed + variable protocol fee.
   const feeLamports = 5_000_000n + lamports * 3n / 1000n
   const quotedInputLamports = lamports - feeLamports
   if (quotedInputLamports <= 0n) throw new Error('Cloak swap amount does not exceed its protocol fee')
-  const quoteUrl = new URL('https://lite-api.jup.ag/swap/v1/quote')
-  quoteUrl.search = new URLSearchParams({
-    inputMint: 'So11111111111111111111111111111111111111112',
-    outputMint: outputMint.toBase58(),
+  // Shared with /api/swap-quote, so the browser and the CLI validate a quote
+  // the same way before its minimum output is bound into the proof.
+  const quote = await quoteJupiter({
+    inputAsset: 'SOL',
+    outputAsset: outputMint.toBase58(),
     amount: quotedInputLamports.toString(),
-    slippageBps: '100',
-    restrictIntermediateTokens: 'true',
-  }).toString()
-  const quoteResponse = await fetch(quoteUrl)
-  if (!quoteResponse.ok) throw new Error(`Jupiter quote failed: HTTP ${quoteResponse.status}`)
-  const quote: any = await quoteResponse.json()
-  if (quote.inputMint !== 'So11111111111111111111111111111111111111112'
-    || quote.outputMint !== outputMint.toBase58()
-    || quote.inAmount !== quotedInputLamports.toString()
-    || !/^\d+$/.test(quote.otherAmountThreshold || '')) {
-    throw new Error('Jupiter returned a quote for an unexpected route or amount')
-  }
+  })
   const recipientAta = getAssociatedTokenAddressSync(outputMint, recipient)
   const result = await swapWithChange(
-    utxos, lamports, outputMint, recipientAta, BigInt(quote.otherAmountThreshold),
+    utxos, lamports, outputMint, recipientAta, BigInt(quote.minimumOutputBaseUnits),
     { ...options(connection, signer), swapSlippageBps: 100 }, recipient,
   )
   await saveState(result.outputUtxos, [...state.signatures, result.signature])
@@ -170,14 +169,12 @@ export async function cloakSwapSolToToken(recipientAddress: string, lamports: bi
     requestId: result.requestId, swapStatePda: result.swapStatePda,
     recipient: recipient.toBase58(), recipientAta: recipientAta.toBase58(),
     grossLamports: lamports, feeLamports, quotedInputLamports,
-    outputSymbol: symbol, expectedOutputBaseUnits: quote.outAmount,
-    minimumOutputBaseUnits: quote.otherAmountThreshold,
+    outputSymbol: symbol, expectedOutputBaseUnits: quote.expectedOutputBaseUnits,
+    minimumOutputBaseUnits: quote.minimumOutputBaseUnits,
     priceImpactPct: quote.priceImpactPct,
-    route: quote.routePlan?.map((leg: any) => ({
-      ammKey: leg.swapInfo?.ammKey, label: leg.swapInfo?.label,
-      inputMint: leg.swapInfo?.inputMint, outputMint: leg.swapInfo?.outputMint,
-      inAmount: leg.swapInfo?.inAmount, outAmount: leg.swapInfo?.outAmount,
-      percent: leg.percent,
-    })),
+    // The full route is kept in the receipt: an aggregator route can change
+    // between the quote and the broadcast, and this is the record of which one
+    // the proof was actually built against.
+    route: quote.route,
   }
 }

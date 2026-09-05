@@ -30,7 +30,8 @@
     "start": "node scripts/check-node-version.js && node server/api.js",
     "supabase:migrate": "node server/migrate.js",
     "supabase:sync": "node server/sync.js",
-    "supabase:resync": "node server/sync.js --resync"
+    "supabase:resync": "node server/sync.js --resync",
+    "umbra:register": "tsx scripts/private-sol.ts umbra:register"
   },
   "dependencies": {
     "@0xcurvy/curvy-sdk": "^0.0.8-rc.1",
@@ -39,6 +40,7 @@
     "@solana/web3.js": "^1.98.4",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.115.0",
+    "@umbra-privacy/sdk": "5.0.0-rc.6",
     "@vitejs/plugin-react": "^6.1.1",
     "bs58": "^6.0.0",
     "concurrently": "^9.2.1",

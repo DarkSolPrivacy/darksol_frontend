@@ -1,10 +1,9 @@
 import { getAssociatedTokenAddressSync } from '@solana/spl-token'
 import { Connection, PublicKey } from '@solana/web3.js'
+import { MINTS } from '../addresses.js'
 
-const OUTPUT_MINTS = Object.freeze({
-  USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-})
+// Cloak settles into a public SPL recipient; the mints come from the registry.
+const OUTPUT_MINTS = Object.freeze({ USDC: MINTS.USDC, USDT: MINTS.USDT })
 
 const bytesToBase64 = (bytes) => {
   let binary = ''
@@ -118,4 +117,12 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
     wrapped.receipt = { provider: 'cloakc', inputAsset, outputAsset, depositSignature: deposit.signature, withdrawals: [] }
     throw wrapped
   }
+}
+
+// The one entry point the UI calls, so it branches on neither protocol nor
+// capability. Cloak only executes swaps in the browser today; anything else is
+// refused here rather than silently doing the wrong thing.
+export async function execute({ kind, ...options }) {
+  if (kind !== 'swap') throw new Error(`CLOAKC has no browser ${kind} flow`)
+  return executeCloakSwap(options)
 }
