@@ -8,7 +8,7 @@ import { databaseStats, getSyncState, pruneFlows, readFlowBaseline, readFlows, r
 import { importLocalSqlite } from './import-sqlite.js'
 import { PROTOCOLS, PROTOCOL_IDS, listProtocols } from '../protocols/registry.js'
 import { loadIndexer } from '../protocols/load.js'
-import { accountKeysFor } from '../protocols/shared/solana-flows.js'
+import { ASSETS_BY_MINT, accountKeysFor } from '../protocols/shared/solana-flows.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 dotenv.config({ path: resolve(root, '.env.local'), override: true, quiet: true })
@@ -213,7 +213,7 @@ async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infin
 
 async function updateTokenPrices() {
   const prices = {}
-  for (const [mint, asset] of Object.entries(MINTS)) {
+  for (const [mint, asset] of Object.entries(ASSETS_BY_MINT)) {
     try {
       const result = await rpc('getAsset', { id: mint, displayOptions: { showFungible: true } })
       const price = Number(result?.token_info?.price_info?.price_per_token)
