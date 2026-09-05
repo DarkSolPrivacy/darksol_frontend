@@ -9,8 +9,13 @@ import { ArrowLeftRight, ArrowRight, ArrowUpRight, CheckCircle2, ChevronDown, Cl
 import './styles.css'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
+import { BRIDGE_CHAINS, bridgeChain, bridgeEligibility, sanitizeBridgeAddress, validateBridgeAddress } from './bridge-routes.js'
 
 const ASSETS = ['USDC', 'SOL', 'USDT']
+// Bridging is offered as a fourth destination choice rather than a separate mode,
+// so the amount and asset the user already entered carry straight over.
+const BRIDGE_OPTION = 'BRIDGE'
+const DESTINATION_OPTIONS = [...ASSETS, BRIDGE_OPTION]
 const LOGOS = {
   assets: {
     USDC: { src: '/logos/usdc.svg', source: 'https://www.circle.com/pressroom' },
@@ -104,15 +109,18 @@ function providerKey(item) {
   return key
 }
 
-function normalizeEstimate(item, strategy, inputAsset, outputAsset) {
+function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge) {
   const protocol = providerKey(item)
   const configured = PROVIDER_CAPABILITIES[protocol] || {}
   const poolMetrics = item?.poolMetrics || {}
   const capabilities = { ...configured, ...(item?.capabilities || {}) }
   if (protocol === 'cloakc') capabilities.supportsMultiRecipient = false
-  const route = inputAsset && outputAsset ? swapEligibility(protocol, inputAsset, outputAsset) : { available: true }
+  // A bridge is ranked on its own route table: the swap table would report the
+  // wrong answer, since bridging leaves Solana entirely.
+  const route = bridge ? bridgeEligibility(protocol, inputAsset, bridge.chainId, bridge.token)
+    : inputAsset && outputAsset ? swapEligibility(protocol, inputAsset, outputAsset) : { available: true }
   const capabilityBlocked = strategy === 'multiple' && !capabilities.supportsMultiRecipient
-  const routeBlocked = inputAsset !== outputAsset && !route.available
+  const routeBlocked = bridge ? !route.available : inputAsset !== outputAsset && !route.available
   const subScores = item?.subScores || item?.subscores || {
     depth: item?.depthScore, cover: item?.coverScore, similarity: item?.similarityScore,
     temporal: item?.temporalScore, activity: item?.activityScore, uniqueness: item?.uniquenessScore,
@@ -213,6 +221,9 @@ function ReceiverBreakdown({ receivers, asset, targetLabel }) {
 
 function AssetLogo({ asset }) {
   const logo = LOGOS.assets[asset]
+  // Bridge destinations reach into tokens this dashboard holds no mark for
+  // (ETH, DAI, BNB, POL, BTC), so those fall back to a lettered badge.
+  if (!logo) return <span className="assetLogo" aria-hidden="true">{String(asset || '?').slice(0, 1)}</span>
   return <img className="assetLogo" src={logo.src} alt="" aria-hidden="true" />
 }
 
@@ -310,6 +321,8 @@ function PrivacyHome() {
   const [recipientAddresses, setRecipientAddresses] = useState([''])
   const [assetMenuOpen, setAssetMenuOpen] = useState(false)
   const [destinationMenuOpen, setDestinationMenuOpen] = useState(false)
+  const [bridgeChainId, setBridgeChainId] = useState(BRIDGE_CHAINS[0].id)
+  const [bridgeToken, setBridgeToken] = useState(BRIDGE_CHAINS[0].tokens[0])
   const [privacyTarget, setPrivacyTarget] = useState('balanced')
   const [comparison, setComparison] = useState(null)
   const [error, setError] = useState('')
@@ -329,7 +342,10 @@ function PrivacyHome() {
   const balanceSequence = useRef(0)
   const receiverCount = receiverAmounts.length
   const strategy = receiverCount > 1 ? 'multiple' : 'single'
-  const isSwap = asset !== destinationAsset
+  const isBridge = destinationAsset === BRIDGE_OPTION
+  const isSwap = !isBridge && asset !== destinationAsset
+  const selectedBridgeChain = bridgeChain(bridgeChainId)
+  const bridgeRoute = isBridge ? bridgeEligibility('privacycash', asset, bridgeChainId, bridgeToken) : null
 
   const total = finite(amount)
   const totalRaw = rawTokenAmount(amount, asset)
@@ -348,6 +364,20 @@ function PrivacyHome() {
     recipients: receiverAmounts.map((receiverAmount, index) => ({ address: recipientAddresses[index], amount: receiverAmount })),
     senderAddress: wallet?.address,
   })
+  // A bridge always has a single recipient on another chain, so the Solana address
+  // and split-amount rules in `validateTransfer` do not apply to it. The relayer's
+  // own minimum is enforced later, against its live config.
+  const bridgeAddress = isBridge ? validateBridgeAddress(recipientAddresses[0], bridgeChainId) : null
+  const bridgeValidation = !isBridge ? null
+    : !bridgeRoute?.available ? { valid: false, error: bridgeRoute?.reason || 'This bridge route is unavailable' }
+      : !transferValidation.total.valid ? { valid: false, error: transferValidation.total.error }
+        : !bridgeAddress.valid ? { valid: false, error: bridgeAddress.error }
+          : { valid: true, total: transferValidation.total, recipient: bridgeAddress.sanitized }
+  const activeValidation = isBridge ? bridgeValidation : transferValidation
+  // The planner only scores the private Solana leg. For a bridge that leg is a
+  // same-asset withdrawal, so it is planned as a transfer rather than a swap and
+  // the 'BRIDGE' sentinel never reaches the API.
+  const plannedDestinationAsset = isBridge ? asset : destinationAsset
 
   useEffect(() => {
     const provider = window.phantom?.solana || window.solana
@@ -396,7 +426,7 @@ function PrivacyHome() {
     if (!formValid) return
     requestPlan({
       asset,
-      destinationAsset,
+      destinationAsset: plannedDestinationAsset,
       amount,
       strategy,
       receiverAmounts: strategy === 'multiple' ? receiverAmounts : [amount],
@@ -412,14 +442,14 @@ function PrivacyHome() {
     setLoading(true)
     const timeout = setTimeout(() => requestPlan({
       asset,
-      destinationAsset,
+      destinationAsset: plannedDestinationAsset,
       amount,
       strategy,
       receiverAmounts: strategy === 'multiple' ? receiverAmounts : [amount],
       privacyTarget,
     }, controller.signal), 350)
     return () => { clearTimeout(timeout); controller.abort() }
-  }, [asset, destinationAsset, amount, strategy, receiverAmounts, privacyTarget, formValid])
+  }, [asset, plannedDestinationAsset, amount, strategy, receiverAmounts, privacyTarget, formValid])
 
   function splitEvenly(count = receiverCount) {
     if (totalRaw === null || totalRaw <= 0n) return setReceiverAmounts(Array.from({ length: count }, () => ''))
@@ -483,12 +513,21 @@ function PrivacyHome() {
     if (receipt?.depositSignature) return setSendError('This deposit was already submitted. Do not send it again.')
     setReceipt(null)
     if (!wallet) return connectWallet()
-    if (!transferValidation.valid) return setSendError(transferValidation.error)
-    const canExecute = isSwap ? recommended?.protocol === 'cloakc' : recommended?.protocol === 'privacycash'
+    if (!activeValidation.valid) return setSendError(activeValidation.error)
+    // Bridging only exists on PrivacyCash, so it is not gated on the swap ranking.
+    const canExecute = isBridge ? recommended?.protocol === 'privacycash'
+      : isSwap ? recommended?.protocol === 'cloakc' : recommended?.protocol === 'privacycash'
     if (!canExecute) return setSendError('This recommended route is not enabled for browser execution yet')
     setSending(true)
     try {
-      const result = isSwap
+      const result = isBridge
+        ? await import('./bridge-client.js').then(({ executePrivacyCashBridge }) => executePrivacyCashBridge({
+          provider: wallet.provider, asset, chainId: bridgeChainId, outputToken: bridgeToken,
+          recipient: activeValidation.recipient,
+          totalBaseUnits: activeValidation.total.baseUnits,
+          onStatus: setSendStatus,
+        }))
+        : isSwap
         ? await import('./cloak-client.js').then(({ executeCloakSwap }) => executeCloakSwap({
           provider: wallet.provider, inputAsset: asset, outputAsset: destinationAsset,
           totalBaseUnits: transferValidation.total.baseUnits,
@@ -512,12 +551,13 @@ function PrivacyHome() {
 
   const rankings = useMemo(() => {
     if (!comparison) return []
-    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset))
+    const bridge = isBridge ? { chainId: bridgeChainId, token: bridgeToken } : null
+    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge))
     if (strategy === 'multiple' && !normalized.some((item) => item.protocol === 'cloakc')) {
-      normalized.push(normalizeEstimate({ protocol: 'cloakc', protocolName: 'CLOAKC', available: false, unavailableReason: 'Multiple-recipient withdrawal is not currently supported by this provider.', capabilities: PROVIDER_CAPABILITIES.cloakc }, strategy, asset, destinationAsset))
+      normalized.push(normalizeEstimate({ protocol: 'cloakc', protocolName: 'CLOAKC', available: false, unavailableReason: 'Multiple-recipient withdrawal is not currently supported by this provider.', capabilities: PROVIDER_CAPABILITIES.cloakc }, strategy, asset, destinationAsset, bridge))
     }
     return normalized
-  }, [comparison, strategy, asset, destinationAsset])
+  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken])
   const suggestedProtocol = rankings.find((item) => item.available)?.protocol
   const selectedIsAvailable = rankings.some((item) => item.available && item.protocol === selectedProtocol)
   const activeProtocol = selectedIsAvailable ? selectedProtocol : suggestedProtocol
@@ -527,9 +567,11 @@ function PrivacyHome() {
   const recommended = rankings.find((item) => item.available && item.protocol === activeProtocol)
   const alternatives = rankings.filter((item) => item.protocol !== activeProtocol)
   const browserExecutable = isSwap ? recommended?.protocol === 'cloakc' : recommended?.protocol === 'privacycash'
+  const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : 'Send'
+  const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : 'Sending...'
 
   return <div className="homePage">
-    <header><h1>{isSwap ? 'Swap privately' : 'Send privately'}</h1></header>
+    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : 'Send privately'}</h1></header>
     <section className="sendCard panel">
       <div className="amountRow">
         <input aria-label="Amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} onChange={(event) => { const nextAmount = sanitizeAmount(event.target.value); setAmount(nextAmount); if (receiverCount === 1) setReceiverAmounts([nextAmount]); setDirty(true); setReceipt(null) }} />
@@ -540,27 +582,40 @@ function PrivacyHome() {
         </div>
       </div>
       <div className="swapDestination">
-        <span>{isSwap ? 'SWAP TO' : 'RECEIVE'}</span><ArrowRight />
+        <span>{isBridge ? 'BRIDGE TO' : isSwap ? 'SWAP TO' : 'RECEIVE'}</span><ArrowRight />
         <div className="assetPicker">
-          <button type="button" aria-label="Destination asset" aria-haspopup="listbox" aria-expanded={destinationMenuOpen} onClick={() => setDestinationMenuOpen(!destinationMenuOpen)}><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b><ChevronDown /></button>
-          {destinationMenuOpen && <div className="assetMenu destinationAssetMenu" role="listbox">{ASSETS.map((item) => <button type="button" role="option" aria-selected={destinationAsset === item} onClick={() => { setDestinationAsset(item); setDestinationMenuOpen(false); if (item !== asset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } setDirty(true); setReceipt(null) }} key={item}><AssetLogo asset={item} />{item}</button>)}</div>}
+          <button type="button" aria-label="Destination asset" aria-haspopup="listbox" aria-expanded={destinationMenuOpen} onClick={() => setDestinationMenuOpen(!destinationMenuOpen)}>
+            <AssetLogo asset={isBridge ? bridgeToken : destinationAsset} /><b>{isBridge ? bridgeToken : destinationAsset}</b>
+            {isBridge && <small className="chainTag">{selectedBridgeChain?.label}</small>}<ChevronDown />
+          </button>
+          {destinationMenuOpen && <div className="assetMenu destinationAssetMenu" role="listbox">{DESTINATION_OPTIONS.map((item) => <button type="button" role="option" aria-selected={item === BRIDGE_OPTION ? isBridge : destinationAsset === item} onClick={() => { setDestinationAsset(item); setDestinationMenuOpen(false); if (item !== asset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } if (item === BRIDGE_OPTION || isBridge) { setReceiverAmounts([amount]); setRecipientAddresses(['']) } setDirty(true); setReceipt(null) }} key={item}>{item === BRIDGE_OPTION ? <><span className="assetLogo bridgeMark" aria-hidden="true"><ArrowUpRight /></span>Bridge</> : <><AssetLogo asset={item} />{item}</>}</button>)}</div>}
         </div>
-        <button type="button" className="flipAssets" aria-label="Reverse swap assets" onClick={() => { setAsset(destinationAsset); setDestinationAsset(asset); setAssetMenuOpen(false); setDestinationMenuOpen(false); setDirty(true); setReceipt(null) }}><ArrowLeftRight /></button>
+        {!isBridge && <button type="button" className="flipAssets" aria-label="Reverse swap assets" onClick={() => { setAsset(destinationAsset); setDestinationAsset(asset); setAssetMenuOpen(false); setDestinationMenuOpen(false); setDirty(true); setReceipt(null) }}><ArrowLeftRight /></button>}
       </div>
+      {isBridge && <div className="bridgePanel">
+        <div className="bridgeChains" role="tablist" aria-label="Destination chain">
+          {BRIDGE_CHAINS.map((chain) => <button type="button" role="tab" key={chain.id} aria-selected={chain.id === bridgeChainId} title={chain.name}
+            onClick={() => { setBridgeChainId(chain.id); if (!chain.tokens.includes(bridgeToken)) setBridgeToken(chain.tokens[0]); setRecipientAddresses(['']); setDirty(true); setReceipt(null) }}>{chain.label}</button>)}
+        </div>
+        <div className="bridgeTokens" role="listbox" aria-label="Destination token">
+          {(selectedBridgeChain?.tokens || []).map((token) => <button type="button" role="option" key={token} aria-selected={token === bridgeToken}
+            onClick={() => { setBridgeToken(token); setDirty(true); setReceipt(null) }}><AssetLogo asset={token} />{token}</button>)}
+        </div>
+      </div>}
       <div className="recipientRows">
-        {receiverAmounts.map((value, index) => <div className="recipientRow" key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isSwap ? <div className="recipientSwapAsset"><small>OUTPUT</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
-        <button type="button" className={`delayControl ${isSwap ? 'solo' : ''}`} aria-disabled="true" aria-label="Delay, coming soon" data-tooltip="Delay [SOON]"><Clock3 /></button>
-        {!isSwap && <button type="button" className="addReceiver" aria-label="Add receiver" onClick={addReceiver}><Plus /></button>}
+        {receiverAmounts.map((value, index) => <div className="recipientRow" key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name?.toUpperCase()}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>OUTPUT</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
+        <button type="button" className={`delayControl ${isSwap || isBridge ? 'solo' : ''}`} aria-disabled="true" aria-label="Delay, coming soon" data-tooltip="Delay [SOON]"><Clock3 /></button>
+        {!isSwap && !isBridge && <button type="button" className="addReceiver" aria-label="Add receiver" onClick={addReceiver}><Plus /></button>}
       </div>
-      {(sendAttempted || amount) && !transferValidation.valid && <div className="splitStatus">{!receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : transferValidation.error}</div>}
+      {(sendAttempted || amount) && !activeValidation.valid && <div className="splitStatus">{!isBridge && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error}</div>}
     </section>
     {error && <section className="notice error"><ShieldX /><span>{error}</span></section>}
     <section className="sendAction panel">
       <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
-      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || Boolean(wallet && (receipt?.depositSignature || !transferValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{sending ? sendStatus || (isSwap ? 'Swapping...' : 'Sending...') : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : isSwap ? 'Swap' : 'Send'} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
+      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || Boolean(wallet && (receipt?.depositSignature || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
     </section>
     {recommended && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
-    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
+    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
   </div>
 }
 

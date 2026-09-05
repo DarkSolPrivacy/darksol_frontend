@@ -1,6 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js'
 
-const MINTS = Object.freeze({
+export const MINTS = Object.freeze({
   USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
 })
@@ -59,7 +59,9 @@ async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   if (await connection.getBalance(publicKey, 'confirmed') === 0) throw new Error('A small SOL balance is required for network fees')
 }
 
-export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, onStatus = () => {} }) {
+// Wallet check, circuit/WASM load and encryption-key derivation are identical for a
+// private transfer and a private bridge, so both entry points share this setup.
+export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus = () => {} }) {
   if (!provider?.publicKey || typeof provider.signTransaction !== 'function') throw new Error('Connect a compatible Solana wallet')
   const publicKey = new PublicKey(String(provider.publicKey))
   const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString()
@@ -74,7 +76,17 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
   const lightWasm = await WasmFactory.getInstance()
   const encryptionService = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
-  const transactionSigner = (transaction) => provider.signTransaction(transaction)
+  return {
+    privacyCash,
+    common,
+    publicKey,
+    connection,
+    transactionSigner: (transaction) => provider.signTransaction(transaction),
+  }
+}
+
+export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, onStatus = () => {} }) {
+  const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus })
 
   onStatus('Approve deposit in your wallet…')
   const deposit = asset === 'SOL'
