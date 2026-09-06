@@ -2,6 +2,8 @@ import {
   getSyncState, readLatestPoolSnapshot, readLatestTokenPrices, readLinkedFlowLatencies,
   readPlanningFlows, readProtocolHistoryBounds,
 } from './db.js'
+import { PROTOCOLS } from '../protocols/registry.js'
+import { loadIndexer } from '../protocols/load.js'
 
 const WINDOW_SECONDS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800 }
 const FLOW_TYPES = ['DEPOSIT', 'WITHDRAW', 'SWAP_IN', 'SWAP_OUT']
@@ -112,15 +114,29 @@ function sourceAge(now, timestamp) { return timestamp == null ? null : Math.max(
 
 // `priceRows` is optional so a caller building metrics for several protocols at
 // once reads the shared price table once instead of once per protocol.
+// Some pools publish the size of the set a recipient hides among. Only Umbra
+// does today, so this is strictly additive: a protocol without it reports null
+// and nothing about its score changes.
+async function readAnonymitySet(protocol) {
+  if (!PROTOCOLS[protocol]?.modules.indexer) return null
+  try {
+    const indexer = await loadIndexer(protocol)
+    return typeof indexer.anonymitySet === 'function' ? await indexer.anonymitySet() : null
+  } catch {
+    return null
+  }
+}
+
 export async function buildPlanningMetrics(protocol, asset, targetAmount, now = Math.floor(Date.now() / 1000), sharedPriceRows = null) {
   const priceRows = sharedPriceRows ?? await readLatestTokenPrices()
   const priceRow = priceRows[asset]
   const price = Number(priceRow?.usdPrice) > 0 ? Number(priceRow.usdPrice) : null
-  const [snapshot, state, history, flows] = await Promise.all([
+  const [snapshot, state, history, flows, anonymitySet] = await Promise.all([
     readLatestPoolSnapshot(protocol),
     getSyncState(protocol),
     readProtocolHistoryBounds(protocol),
     readPlanningFlows(protocol, asset, now - WINDOW_SECONDS['7d'], now),
+    readAnonymitySet(protocol),
   ])
   const publicFlows = flows.map((flow) => ({ ...flow, amountUsd: price ? flow.amount * price : null }))
   const activity = Object.fromEntries(Object.keys(WINDOW_SECONDS).map((window) => [window, emptyWindow(price)]))
@@ -183,9 +199,8 @@ export async function buildPlanningMetrics(protocol, asset, targetAmount, now = 
     provider: protocol, token: asset, timestamp: now, tokenPriceUsd: price, amountUsd,
     availability: { available: availabilityReasons.length === 0, reasons: availabilityReasons },
     dataAvailable: availabilityReasons.length === 0,
-    tvl, poolBalance: balance, poolSource: protocol === 'privacycash'
-      ? 'on-chain pool accounts'
-      : protocol === 'curvy' ? 'on-chain Arbitrum Vault balance' : 'reconstructed indexed net flows',
+    tvl, poolBalance: balance, poolSource: PROTOCOLS[protocol].indexer.poolSource,
+    anonymitySet,
     providerTotalTvlUsd: snapshot && price ? Object.entries(snapshot.balances).reduce((sum, [token, amount]) => {
       const tokenPrice = Number(priceRows[token]?.usdPrice)
       return sum + (tokenPrice > 0 ? amount * tokenPrice : 0)

@@ -1,5 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js'
-import { loadKeypair, PROGRAMS, solanaRpcUrl, walletsDir } from '../runtime.js'
+import { loadKeypair, PROGRAMS, solanaRpcUrl, walletsDir } from '../../scripts/runtime.js'
 
 const programId = new PublicKey(PROGRAMS.privacycash)
 
@@ -17,7 +17,7 @@ async function client() {
   })
 }
 
-export async function privacyCashSnapshot() {
+export async function snapshot() {
   const connection = new Connection(solanaRpcUrl(), 'confirmed')
   const [pool] = PublicKey.findProgramAddressSync([Buffer.from('tree_token')], programId)
   const [program, poolLamports] = await Promise.all([
@@ -26,17 +26,17 @@ export async function privacyCashSnapshot() {
   return { protocol: 'privacycash', programId: programId.toBase58(), executable: Boolean(program?.executable), poolAddress: pool.toBase58(), poolLamports }
 }
 
-export async function privacyCashBalance() {
+export async function balance() {
   const balance = await (await client()).getPrivateBalance()
   return { protocol: 'privacycash', privateLamports: balance.lamports }
 }
 
-export async function privacyCashDeposit(lamports: bigint) {
+export async function deposit(lamports: bigint) {
   const result = await (await client()).deposit({ lamports: Number(lamports) })
   return { protocol: 'privacycash', action: 'deposit', signature: result.tx, lamports }
 }
 
-export async function privacyCashSend(recipientAddress: string, lamports: bigint) {
+export async function send(recipientAddress: string, lamports: bigint) {
   const recipient = new PublicKey(recipientAddress).toBase58()
   const result = await (await client()).withdraw({ lamports: Number(lamports), recipientAddress: recipient })
   return { protocol: 'privacycash', action: 'send', signature: result.tx, recipient, grossLamports: lamports, feeLamports: result.fee_in_lamports }

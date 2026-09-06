@@ -1,6 +1,6 @@
 # DarkSol
 
-Analytics for CLOAKC and PrivacyCash on Solana plus the Curvy Vault on Arbitrum: pool state, deposits, withdrawals, supported swap flows, activity patterns, and each platform's published fee policy for SOL, USDC and USDT. The home screen is a privacy planner for single- and multi-receiver transfers; its results are estimates from stored history, never guarantees of anonymity.
+DarkSol finds the best privacy pool for a transfer. It indexes the pools it tracks and scores each one on current TVL, pool size, quantum resistance, fees, volume, similar transactions, open-source status and further analytics, then ranks them for the asset and amount actually being sent. The home screen is a privacy planner for single- and multi-receiver transfers; its results are estimates from stored history, never guarantees of anonymity.
 
 Live-test findings, routes, fee measurements and integration caveats live in [`docs/PROJECT_MEMORY.md`](docs/PROJECT_MEMORY.md).
 
@@ -8,20 +8,51 @@ Live-test findings, routes, fee measurements and integration caveats live in [`d
 
 | Path | Role |
 | --- | --- |
-| [`src/`](src/) | Vite + React dashboard: `main.jsx` UI, `data.js` token palette, `swap-routes.js` and `bridge-routes.js` route tables, `*-client.js` browser-wallet calls, `transfer-validation.js` and `wallet-balance.js` input checks |
+| [`protocols/`](protocols/) | **One folder per integrated project.** `registry.js` derives every capability table from the manifests, `addresses.js` holds every on-chain address, `shared/` the helpers more than one protocol needs |
+| [`src/`](src/) | Vite + React dashboard: `main.jsx` UI, `data.js` token palette, `swap-routes.js` and `bridge-routes.js` eligibility rules, `transfer-validation.js` and `wallet-balance.js` input checks |
 | [`server/app.js`](server/app.js) | The API as a bare Express app — no listener, no static handler, so both entry points reuse it |
 | [`server/api.js`](server/api.js) | Local entry point: built dashboard and API on one port |
 | [`api/index.js`](api/index.js) | Vercel serverless re-export of that same app |
-| [`server/indexer.js`](server/indexer.js) | Writer-process entry point; `index.js` holds the Solana decode/index core, `curvy-indexer.js` the Arbitrum lane |
+| [`server/indexer.js`](server/indexer.js) | Writer-process entry point; `index.js` walks transactions and each protocol's `indexer.js` decodes them |
 | [`server/db.js`](server/db.js) | All Postgres access; `migrate.js`, `sync.js` and `import-sqlite.js` are the schema and SQLite copy entry points |
 | [`server/privacy-engine.js`](server/privacy-engine.js) | Pure planning heuristics — never reads the database |
 | [`server/planning-metrics.js`](server/planning-metrics.js) | Turns stored flows into the metrics the engine scores |
-| [`scripts/private-sol.ts`](scripts/private-sol.ts) | CLI for the test-only SDK runner; `protocols/` is one module per protocol, `runtime.ts` shared config and wallet loading |
+| [`scripts/private-sol.ts`](scripts/private-sol.ts) | CLI for the test-only SDK runner; `runtime.ts` holds shared config and wallet loading |
 | [`supabase/migrations/`](supabase/migrations/) | Live schema. [`migrations/`](migrations/) is the older SQLite lineage, kept only as history |
 | [`test/`](test/) | `node --test` suites |
 | [`public/`](public/) | Logos plus the PrivacyCash circuit wasm/zkey copied in by `postinstall` |
 | `data/` | Local SQLite analytics database (Git-ignored) |
 | `test-wallets/` | Disposable test identities, keys and Cloak UTXO state (Git-ignored) |
+
+## Adding a project
+
+A protocol is one folder under [`protocols/`](protocols/). Nothing outside it is edited
+except a single import line in `protocols/manifests.js` and a logo in `public/logos/`.
+
+```
+protocols/<id>/
+  manifest.js    required. Pure data, imports only ../addresses.js
+  cli.ts         optional. snapshot / balance / deposit / send / swap
+  browser.js     optional. execute({ kind, ... }) for the connected wallet
+  indexer.js     optional. decode() on the Solana lane, run() on an EVM lane
+  commands.ts    optional. Commands only this protocol has
+```
+
+The manifest is the declarative surface: chain, addresses, assets, fee model, and an
+`execution` mode per capability — `sdk` when it really runs, `documented-only` when the
+protocol documents it but its SDK does not expose it (the UI shows `SOON`), or
+`unsupported`. `modules` declares which of the files above exist; the UI greys out a
+route from that rather than attempting an import.
+
+Every address belongs in [`protocols/addresses.js`](protocols/addresses.js), and anything
+two protocols both need belongs in [`protocols/shared/`](protocols/shared/). Both are
+enforced by tests: `test/protocol-registry.test.js` validates every manifest and checks
+each address parses on the chain it claims, and `test/protocol-modules.test.js` fails if a
+manifest promises a capability the folder does not implement.
+
+Assets are constrained to `USDC`, `SOL` and `USDT` by a CHECK constraint on four tables in
+`supabase/migrations`. A protocol trading anything else needs a migration first — the
+schema test tells you so rather than letting an INSERT fail later.
 
 ## Run locally
 
@@ -29,14 +60,14 @@ Node.js 24 or newer — the PrivacyCash and Curvy SDKs require it.
 
 ```bash
 npm install
-cp .env.example .env.local   # Helius key, Arbitrum Alchemy RPC URL, SUPABASE_DB_URL
+cp .env.example .env.local   # your RPC service credentials and the SQL database connection string
 npm run migrate
 ```
 
 Writer and dashboard run as separate processes:
 
 ```bash
-npm run indexer:watch   # backend writer (Helius + Alchemy -> Supabase)
+npm run indexer:watch   # backend writer (RPC services -> SQL database)
 npm run dev             # read-only API on :8787 + Vite on :5173
 ```
 
@@ -47,58 +78,22 @@ npm run dev             # read-only API on :8787 + Vite on :5173
 | `npm run indexer:dev` | verbose, exits after one correct cycle |
 | `npm run indexer:dev:watch` | same checkpoints, 30-second cadence |
 
-Each cycle runs the Alchemy/Arbitrum lane in parallel with the Helius/Solana lane, so a long Solana backfill cannot delay Curvy refreshes; Cloak and PrivacyCash stay sequential inside the shared Helius lane. Development mode never truncates or resets history. `npm run indexer:dev -- --max-backfill-pages 1` processes one page and leaves the cursor ready to resume.
+The EVM and Solana lanes run in parallel when separate RPC services are configured.
 
 ## Deploying
 
 The dashboard is a Vite build; the API is the same Express app in both places. [`vercel.json`](vercel.json) rewrites `/api/*` onto the serverless function — without it Vercel serves only the static build and every `/api` call returns an HTML 404 the dashboard cannot parse as JSON.
 
-Vercel needs the same `SUPABASE_DB_URL`, but pointed at Supabase's **transaction pooler** (port 6543): the direct connection is IPv6-only without the IPv4 add-on and unreachable from a function. Each warm instance keeps its own pool, capped there at one connection.
+Vercel needs the same `SUPABASE_DB_URL`, but pointed at the SQL database's **transaction pooler** (port 6543): the direct connection is IPv6-only without an IPv4 add-on and unreachable from a function. Each warm instance keeps its own pool, capped there at one connection.
 
-The indexer is not deployed. It is a long-running writer, run wherever you like, writing to the same Supabase project.
-
-## Supabase
-
-Analytics live in Supabase Postgres over the direct Postgres connection string rather than PostgREST, so no anon, publishable or service-role key is involved and no RLS policy has to be opened for the writer. Set this locally and in Vercel, from Supabase > Connect > Direct connection:
-
-```bash
-SUPABASE_DB_URL=postgresql://postgres:PASSWORD@db.PROJECT_REF.supabase.co:5432/postgres
-```
-
-```bash
-npm run supabase:migrate   # apply pending schema changes
-npm run supabase:sync      # copy the local SQLite database into Supabase
-npm run supabase:resync    # copy it again, ignoring the completion marker
-```
-
-`npm run indexer:watch` does all three itself before its first cycle, then streams new transactions straight into Supabase. A copied file is recorded and skipped by later runs, and every table upserts on its primary key, so an interrupted import resumes rather than duplicates.
-
-### What Supabase stores
-
-Only what the dashboard reads, over a rolling window — roughly 96 MB against the local SQLite database's 2.7 GB, and flat over time rather than growing. Left behind:
-
-| dropped | why |
-| --- | --- |
-| `source_transactions` | its raw payload column had no reader and was ~95% of the dataset's bytes; the rest served three aggregates `pool_flows` answers itself |
-| `deposits` | a cloakc-only mirror of deposit rows already in `pool_flows`, written every batch and never read |
-| `decimals` | every consumer derives decimals from the asset |
-| `instruction_index` | recoverable from `id`, which is `signature:index` |
-| `indexed_at` | never read on any row |
-| `sync_state.last_block_time`, `last_signature` | written by the old schema, read by nothing |
-| five `pool_flows` indexes | unreachable: nothing filters `block_time`, `asset` or `direction` without also filtering `protocol` |
-
-`pool_flows` keeps every column — `participant` drives PrivacyCash swap matching, `amount_raw` the distinct-amount metrics, `linked_flow_id` swap pairing and latency. It is held to `FLOW_RETENTION_DAYS` (100 by default: the 90-day chart plus enough margin to keep its oldest bucket whole), and older rows are deleted after each cycle.
-
-Deleting a flow would move Cloak's TVL, reconstructed by summing every flow since the pool opened. So a row is folded into `flow_baselines` before deletion, in the same transaction, and the balance becomes that baseline plus surviving flows — never missing a row nor counting one twice. Curvy and PrivacyCash read balances from the chain, but the baseline is kept for all three as a cross-check. `supabase:sync` applies the same window inbound, so the first import never sends full history over the wire.
-
-Two consequences. A transaction that decoded no flow is no longer represented, so `storage.transactions` (returned by `/api/analytics` only with `?storage=1`, since counting every indexed row costs more than the rest of the response put together) and the coverage bounds describe indexed analytics rather than every transaction that touched the program — about 0.6% of this history. And a raw payload was the only re-decodable record, so a decoder change now needs a re-index from Helius rather than a local rebuild.
+The indexer is not deployed. It is a long-running writer, run wherever you like, writing to the same SQL database.
 
 ## Data pipeline
 
 ```text
-Solana / Helius  --\
-                    backend indexer -> Supabase Postgres <- read-only API <- dashboard
-Arbitrum / Alchemy-/
+Solana RPC --\
+               backend indexer -> SQL database <- read-only API <- dashboard
+EVM RPC -----/
 ```
 
 Only the indexer calls the chain data providers: Helius `getTransactionsForAddress` for both Solana programs, DAS `getAsset` for stored price snapshots.
@@ -119,16 +114,6 @@ The asset is resolved from the account layout and token-balance metadata against
 PrivacyCash decodes through its published SOL and SPL `transact` discriminators and signed `extAmount`, keeping only canonical SOL, USDC and USDT flows. Its private swaps are multi-transaction operations, so the indexer conservatively infers one by linking a withdrawal to a different-asset deposit from the same ephemeral wallet within 120 seconds — one-to-one, closest-time-first, and labelled as inferred in the dashboard. Fees decode from the instruction's unsigned `fee` field, so withdrawal volume represents the full pool outflow.
 
 The dashboard never presents fee revenue, only the published charge policy and an estimated charge for a proposed transfer: CLOAKC `0.3%` with `0.005 SOL` added on SOL exits; PrivacyCash `0.35% + 0.006 SOL equivalent`, private swaps `0.008 SOL equivalent + 0.35% + Jupiter fees`; Curvy `0.1%` aggregation plus `0.2%` unshielding for an already shielded transfer, with a separate `0.1%` shielding charge.
-
-### Curvy lane
-
-Indexed independently from the active production Arbitrum Vault advertised by SDK metadata, currently `0xcc8d5c60a8fb15aa3793647ef531f1ba7df24f00`, mapping the USDC/SOL/USDT scope to token IDs 2, 4 and 3.
-
-- A stored source identity forces a historical backfill whenever the configured Vault changes, so an old cursor cannot skip a replacement contract.
-- The Alchemy tier limits `eth_getLogs` ranges, so the writer paginates `alchemy_getAssetTransfers` for sparse Vault movements, then verifies each candidate receipt against Curvy's `Deposit`, `Withdraw` or legacy Vault `Transfer` event.
-- Each ERC-20 transfer yields at most one stored flow, even when a contract version emits both events.
-- Balances come from ERC-20 `balanceOf` at the confirmed indexing block.
-- A Vault movement is never labelled a swap without a defensible on-chain portal link.
 
 ### Storage and cursors
 
@@ -152,7 +137,7 @@ The dashboard API never calls Helius and never writes.
 | 30D | 1 day | 30 days |
 | 90D | 1 day | 90 days |
 
-90 days is the longest range, and it sets the flow retention window. The browser rereads Supabase through the API every 30 seconds. The Helius key and Alchemy RPC URL are needed only by the indexer, stay server-side, and `.env.local` is ignored by Git.
+90 days is the longest range, and it sets the flow retention window. The browser rereads the database through the API every 30 seconds. RPC service credentials are needed only by the indexer, stay server-side, and `.env.local` is ignored by Git.
 
 ## Privacy planner
 
@@ -162,7 +147,7 @@ The estimate combines configurable pool-depth, relevant-cover, similar-size-flow
 
 PrivacyCash is configured for multiple receivers and charges its fixed component per recipient. Cloak mainnet and Curvy are treated as single-recipient — visible but disabled for a multi-receiver plan. Curvy is labelled Arbitrum One in comparisons, the other two Solana. Equal, tightly coordinated receiver legs take an explicit coordination penalty.
 
-The planner reads only stored Supabase metrics. Missing prices, snapshots or flow watermarks produce an unavailable result, and stale or incomplete history lowers confidence; it never substitutes a `$1` stablecoin price or hardcodes production activity. Run the deterministic scoring scenarios with `npm test`.
+The planner reads only stored metrics. Missing prices, snapshots or flow watermarks produce an unavailable result, and stale or incomplete history lowers confidence; it never substitutes a `$1` stablecoin price or hardcodes production activity. Run the deterministic scoring scenarios with `npm test`.
 
 ### Swaps
 
@@ -170,7 +155,7 @@ Selecting a different receive asset switches the home screen into private-swap m
 
 ### Private bridging
 
-The receive-asset menu's fourth `Bridge` entry replaces the single-token choice with a destination-chain row and a token grid. Bridging is not a separate protocol primitive: PrivacyCash issues a one-time Solana deposit address from its relayer and the transfer is then an ordinary private withdrawal to that address, so [`src/bridge-client.js`](src/bridge-client.js) reuses the same `withdraw`/`withdrawSPL` calls as a private transfer and shares the session setup exported by [`src/privacycash-client.js`](src/privacycash-client.js). Destination settlement is performed by a NEAR Intents market maker, independent of the Jupiter path used for swaps.
+The receive-asset menu's fourth `Bridge` entry replaces the single-token choice with a destination-chain row and a token grid. Bridging is not a separate protocol primitive: PrivacyCash issues a one-time Solana deposit address from its relayer and the transfer is then an ordinary private withdrawal to that address, so [`protocols/privacycash/bridge.js`](protocols/privacycash/bridge.js) reuses the same `withdraw`/`withdrawSPL` calls as a private transfer and shares the session setup exported by [`protocols/privacycash/browser.js`](protocols/privacycash/browser.js). Destination settlement is performed by a NEAR Intents market maker, independent of the Jupiter path used for swaps.
 
 [`src/bridge-routes.js`](src/bridge-routes.js) holds the whole route table: Ethereum (ETH/USDC/USDT/DAI), BNB Chain (BNB/USDC/USDT), Base (ETH/USDC), Polygon (POL/USDC/USDT, sent to the relayer as `pol`) and Bitcoin (BTC), from SOL, USDC or USDT input. The live PrivacyCash app also shows Robinhood, Arbitrum, Tron, Zcash and Hyperliquid chips; those are absent from the documented route map and are deliberately not offered rather than presented as pairs the relayer would refuse. Recipient addresses validate locally against the destination chain's format before the user is asked to sign, the relayer is quoted the net amount after PrivacyCash withdrawal fees while the SDK withdrawal still uses the gross amount, and the minimum is the larger of the per-token withdrawal floor and roughly 0.05 SOL of value from the relayer's live prices. Cloak has no bridge surface — its SDK and Shield Pool program are Solana-only — and Curvy bridges through LI.FI entry/exit Portals but has no browser-wallet path in this app.
 
@@ -242,6 +227,9 @@ Leave enough SOL in the sender for protocol and network fees, and use small disp
 - https://docs.curvy.box/for-programmers/installing-the-sdk
 - https://docs.curvy.box/faq
 - https://github.com/0xCurvy/contracts
+- https://sdk.umbraprivacy.com
+- https://docs.umbraprivacy.com/docs/introduction
+- https://github.com/umbra-defi/docs
 - https://www.helius.dev/docs/rpc/gettransactionsforaddress
 - https://www.helius.dev/docs/api-reference/das/getasset
 - https://www.alchemy.com/docs/data/transfers-api/transfers-endpoints/alchemy-get-asset-transfers

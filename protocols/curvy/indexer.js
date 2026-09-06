@@ -1,22 +1,25 @@
 import { Contract, Interface, JsonRpcProvider, formatUnits, toBeHex } from 'ethers'
-import { databaseStats, getSyncState, pruneFlows, saveSyncState, storeIndexedData, storePoolSnapshot } from './db.js'
+import { databaseStats, getSyncState, pruneFlows, saveSyncState, storeIndexedData, storePoolSnapshot } from '../../server/db.js'
+import { ARBITRUM_TOKENS } from '../addresses.js'
+import manifest from './manifest.js'
 
+export const lane = 'evm'
+
+// Every value here used to be retyped in this file. It is manifest data now,
+// which is what keeps the vault address the indexer reads and the one the UI
+// displays from drifting apart.
 export const CURVY = Object.freeze({
-  id: 'curvy',
-  chain: 'arbitrum',
-  chainId: 42161,
-  deploymentBlock: 396_728_892,
-  confirmations: 64,
-  overlapBlocks: 2_400,
-  vault: '0xcc8d5c60a8fb15aa3793647ef531f1ba7df24f00',
-  aggregator: '0xe51924cef003a654ec9735c4d97f5d4862cbcbb1',
+  id: manifest.id,
+  chain: manifest.chain,
+  chainId: manifest.chainId,
+  deploymentBlock: manifest.indexer.deploymentBlock,
+  confirmations: manifest.indexer.confirmations,
+  overlapBlocks: manifest.indexer.overlapBlocks,
+  vault: manifest.addresses.vault,
+  aggregator: manifest.addresses.aggregator,
 })
 
-const ASSETS = Object.freeze({
-  '0xaf88d065e77c8cc2239327c5edb3a432268e5831': { symbol: 'USDC', decimals: 6, tokenId: 2 },
-  '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': { symbol: 'USDT', decimals: 6, tokenId: 3 },
-  '0x2bcc6d6cdbbdc0a4071e48bb3b969b06b3330c07': { symbol: 'SOL', decimals: 9, tokenId: 4 },
-})
+const ASSETS = ARBITRUM_TOKENS
 const ASSETS_BY_ID = Object.freeze(Object.fromEntries(Object.entries(ASSETS).map(([address, asset]) => [asset.tokenId, { ...asset, address }])))
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 const VAULT_ABI = [
@@ -203,7 +206,7 @@ async function poolBalances(evm, blockNumber) {
   return balances
 }
 
-export async function indexCurvy() {
+export async function run() {
   const evm = provider()
   const network = await evm.getNetwork()
   if (Number(network.chainId) !== CURVY.chainId) throw new Error(`ARBITRUM_RPC_URL returned chain ${network.chainId}, expected 42161`)

@@ -1,9 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js'
-
-const MINTS = Object.freeze({
-  USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-})
+import { MINTS } from '../protocols/addresses.js'
 
 // PrivacyCash requires SOL for its deposit transaction. Keep a conservative
 // reserve so MAX never attempts to spend the wallet's fee balance.

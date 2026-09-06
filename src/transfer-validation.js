@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js'
+import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
-export const TOKEN_DECIMALS = Object.freeze({ SOL: 9, USDC: 6, USDT: 6 })
+export { TOKEN_DECIMALS }
 
 export function sanitizeAmount(value) {
   return String(value ?? '').normalize('NFKC').trim()

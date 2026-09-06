@@ -1,8 +1,8 @@
 # Project Memory: privacy transfers, swaps, pools and routes
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
-Durable findings from testing Cloak, PrivacyCash and Curvy with real funds on mainnet. Amounts, routes, TVL, quotes and fee policies are point-in-time observations and change with liquidity, prices, relayer policy and SDK versions; the lessons around them do not.
+Durable findings from testing Cloak, PrivacyCash and Curvy with real funds on mainnet, plus read-only observations of Umbra. Amounts, routes, TVL, quotes and fee policies are point-in-time observations and change with liquidity, prices, relayer policy and SDK versions; the lessons around them do not.
 
 Evidence labels used below — **Live verified**: observed in a transaction, API response or balance during these tests. **SDK verified**: confirmed in the installed SDK source or types. **Documented only**: described by product documentation but absent from the installed public SDK. **Inferred**: reconstructed from related on-chain events, useful for analytics but not authoritative protocol linkage.
 
@@ -149,6 +149,103 @@ For pool-level attribution:
 8. Preserve recovery and refund state until final settlement; never print it in logs or documentation.
 9. Use a fresh Curvy entry Portal for each entry, with the correct network selection.
 10. Do not broadcast PrivacyCash swaps until a supported public SDK and recovery flow exist.
+
+## Umbra
+
+**Live verified**, read-only, on 2026-09-05. Mainnet program
+`UMBRAD2ishebJTcgCLkTkNUx1v3GyoAgpTRPeWoLykh` is executable. Nothing was broadcast.
+
+### Its pool is readable, despite the balances being encrypted
+
+Two different things are easy to conflate. Per-user encrypted token account balances and
+Stealth Pool note amounts are encrypted under Arcium MPC — those are genuinely unreadable.
+The **public boundary is not**: shielding and unshielding move real SPL tokens in and out
+of ordinary custody accounts.
+
+Derive custody with `findTokenPoolPda({ mintAddress, umbraProgram })` from
+`@umbra-privacy/sdk/pda`, then read the SPL account that PDA owns:
+
+| Asset | Token pool PDA | Custody account | Held |
+| --- | --- | --- | ---: |
+| SOL | `G4UZ3uHsYJWXgr4D1VhD3k9nNWtUGNih7SbfSbAErPMp` | `2FJpuSRLerXMPHHJWq24u8jF1XFdZwHxiddt7EyW5t7A` | 656.196683548 |
+| USDC | `8yQJpcpmK6EMfCh4Gj28Xp785a6cHYyrvXX1FAh1zdKT` | `HXCTEUpb7J1F545V44rstmdXk7oYzV8zPcjt4xx9mz7L` | 61384.887489 |
+| USDT | `A3HLhp1EsmjqFVix7jdbgXZVjMJkGxoincZUz6C93Xrn` | `81xeQ3U6LGjQXngptUReL2brrFCuQAFsxk4SCCjjmF42` | 51686.088505 |
+
+Protocol config PDA: `EkhRHB63HEFyckkoXWQNb52yc2fzTVQUHVJ4iWxJk69x`. Balances are
+point-in-time. This is a directly readable TVL, the way PrivacyCash's pool is read.
+
+### Decoding is easier here than for Cloak or PrivacyCash
+
+`@umbra-privacy/umbra-codama` ships `identifyUmbraInstruction`, `parseUmbraInstruction`
+and per-instruction parsers over a 156-entry `UmbraInstruction` enum, so no hand-rolled
+byte offsets are needed. **SDK verified**: 100 of 100 instructions in a sampled window
+identified, none unknown. The boundary-crossing names are explicit —
+`DepositFromPublicBalanceInto*`, `WithdrawFrom*IntoPublicBalance`, `ClaimIntoPublicBalance*`.
+
+### The Arcium callback trap
+
+**This is the finding that matters for the indexer.** Umbra settles through MPC, so a
+withdrawal is two transactions. The user's request only queues a computation. The tokens
+move later, in a **separate transaction carrying only the `...Callback` instruction**.
+
+Deposits are *not* symmetric: their tokens move in the initiating instruction.
+
+An earlier probe here excluded `Callback` instructions as noise and consequently reported
+**zero withdrawals over 90 days**, which was wrong. Watching the custody accounts directly
+instead — balance decrease is a withdrawal regardless of which instruction carried it —
+found them immediately:
+
+| Asset | Withdrawals in the last 200 signatures | Total | Carried by |
+| --- | ---: | ---: | --- |
+| USDC | 4 | 5552.097117 | `WithdrawFromSharedBalanceIntoPublicBalanceV18Callback` |
+| USDT | 5 | 2344.293048 | that plus `ClaimIntoPublicBalanceToMxeV18Callback` |
+
+Largest single observed exit: 3005.616457 USDC. SOL custody showed only dust deposits
+(~1 lamport each) and no withdrawals in the same window, so recent real value movement is
+in the stablecoins even though the pool holds 656 SOL.
+
+Rule for the decoder: **attribute the flow to the transaction where the custody balance
+changes**, not to the instruction that requested it. Filtering callbacks out reports a pool
+that only ever grows.
+
+### What their free API is and is not good for
+
+**Live verified.** `https://utxo-indexer.api.umbraprivacy.com` is unauthenticated, CORS-open
+and works, but it serves the *shielded tree*, not analytics. A note record carries
+`final_commitment`, `event_type`, `timestamp` and `aes_encrypted_data` — and **no amount
+field at all**. The amount sits inside the AES payload, readable only with that
+participant's viewing key. So it cannot replace RPC for TVL or flow history; amounts exist
+in the clear only on the public boundary, on-chain.
+
+The one number it has that the chain does not surface cheaply is
+`getStats() -> { total_utxos }`, the size of the set a recipient hides among: **7,708**
+notes, one unauthenticated call, ~1.1s cold. `anonymitySet()` in the Umbra indexer caches
+it for five minutes and returns null on any failure.
+
+A measured non-optimisation, recorded so it is not retried: scanning the three custody
+accounts with `getSignaturesForAddress` instead of paging the program was expected to be
+much cheaper, and is not. Over an identical uncapped 2-day window the program paged 1,227
+transactions while custody signatures numbered 2,008 — **64% worse**, because the custody
+account is referenced by buffer and callback transactions that never move its balance.
+Pool TVL, though, is genuinely nearly free: `poolBalances()` is three
+`getTokenAccountsByOwner` calls on standard RPC, no Helius credits.
+
+`protocols/umbra/indexer.js` implements this, and `test/umbra-decode.test.js` pins it
+against recorded mainnet transactions in both directions. The decoder takes direction from
+the custody balance rather than the instruction name and drops the flow if the two
+disagree — a missing flow is recoverable, a wrong one silently corrupts the pool series.
+Amounts come from the balance delta because the instruction payload is encrypted, and the
+pool PDAs are derived through `findTokenPoolPda` rather than hardcoded.
+
+### Anonymity set in the planner
+
+The set size is reported and explained, but **deliberately carries no scoring weight**.
+Weighting a signal only one of four providers can supply would tilt every comparison
+toward whichever one publishes it. It acts only as a hard constraint: below
+`anonymitySet.minimumSet` (default 50, configurable) the estimate is `NOT PRIVATE` with
+constraint code `THIN_ANONYMITY_SET`, the same shape as the existing `NO_COVER` rule.
+A pool that publishes nothing is scored exactly as before, and `test/anonymity-set.test.js`
+pins that the anonymity set is scored separately from the weighted signals.
 
 ## Next useful work
 

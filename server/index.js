@@ -4,37 +4,20 @@ import bs58 from 'bs58'
 import { PublicKey } from '@solana/web3.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { classifyPrivacyCashSwaps, databaseStats, getSyncState, pruneFlows, readFlowBaseline, readFlows, runMigrations, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
+import { databaseStats, getSyncState, pruneFlows, readFlowBaseline, readFlows, runMigrations, saveSyncState, storeIndexedData, storePoolSnapshot, storeTokenPrices } from './db.js'
 import { importLocalSqlite } from './import-sqlite.js'
-import { indexCurvy } from './curvy-indexer.js'
+import { PROTOCOLS, PROTOCOL_IDS, listProtocols } from '../protocols/registry.js'
+import { loadIndexer } from '../protocols/load.js'
+import { ASSETS_BY_MINT, accountKeysFor } from '../protocols/shared/solana-flows.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 dotenv.config({ path: resolve(root, '.env.local'), override: true, quiet: true })
 
-const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
-const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'
-const NATIVE_SOL_MINT = 'So11111111111111111111111111111111111111112'
-const MINTS = {
-  [NATIVE_SOL_MINT]: { symbol: 'SOL', decimals: 9 },
-  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { symbol: 'USDC', decimals: 6 },
-  Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: { symbol: 'USDT', decimals: 6 },
-}
-const PRIVACY_CASH_SOL_DISCRIMINATOR = [217, 149, 130, 143, 221, 52, 252, 119]
-const PRIVACY_CASH_SPL_DISCRIMINATOR = [154, 66, 244, 204, 78, 225, 163, 151]
-const PROTOCOLS = {
-  cloakc: {
-    id: 'cloakc', name: 'CLOAKC', programId: 'zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
-    docs: 'https://docs.cloak.ag/sdk/introduction',
-  },
-  privacycash: {
-    id: 'privacycash', name: 'PrivacyCash', programId: '9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD',
-    docs: 'https://privacycash.mintlify.app/',
-  },
-  curvy: {
-    id: 'curvy', name: 'Curvy', chain: 'arbitrum',
-    docs: 'https://docs.curvy.box/',
-  },
-}
+// Which lane a protocol belongs to is declared in its manifest, so the indexer
+// no longer names curvy to tell the two apart.
+const SOLANA_PROTOCOL_IDS = listProtocols({ lane: 'solana' }).map(({ id }) => id)
+const EVM_PROTOCOL_IDS = listProtocols({ lane: 'evm' }).map(({ id }) => id)
+
 const PAGE_SIZE = 100
 const SYNC_OVERLAP_SECONDS = 300
 // The dashboard's longest range is 90 days; the extra days keep the oldest
@@ -93,134 +76,11 @@ async function getTransactionPage(programId, from, to, paginationToken) {
   return { transactions: result?.data || [], paginationToken: result?.paginationToken || null }
 }
 
-function accountKeysFor(tx) {
-  const messageKeys = tx.transaction?.message?.accountKeys || []
-  const staticKeys = messageKeys.map((key) => typeof key === 'string' ? key : key.pubkey)
-  const loaded = tx.meta?.loadedAddresses || {}
-  return [...staticKeys, ...(loaded.writable || []), ...(loaded.readonly || [])]
-}
-
-function readI64LE(bytes, offset) {
-  let value = 0n
-  for (let index = 7; index >= 0; index -= 1) value = (value << 8n) | BigInt(bytes[offset + index])
-  return value >= (1n << 63n) ? value - (1n << 64n) : value
-}
-
-function readU64LE(bytes, offset) {
-  let value = 0n
-  for (let index = 7; index >= 0; index -= 1) value = (value << 8n) | BigInt(bytes[offset + index])
-  return value
-}
-
-function matchesDiscriminator(data, discriminator) {
-  return data.length >= discriminator.length && discriminator.every((byte, index) => data[index] === byte)
-}
-
-function tokenBalances(meta) {
-  const balances = new Map()
-  for (const entry of [...(meta?.preTokenBalances || []), ...(meta?.postTokenBalances || [])]) {
-    if (!balances.has(entry.accountIndex)) balances.set(entry.accountIndex, {
-      mint: entry.mint,
-      decimals: entry.uiTokenAmount?.decimals ?? 0,
-    })
-  }
-  return balances
-}
-
-function cloakAssetForInstruction(tx, instruction, keys) {
-  const indexes = instruction.accounts || []
-  const tokenProgram = indexes.length > 9 ? keys[indexes[9]] : undefined
-  if (tokenProgram !== TOKEN_PROGRAM_ID) return { ...MINTS[NATIVE_SOL_MINT], mint: NATIVE_SOL_MINT }
-  const balances = tokenBalances(tx.meta)
-  for (const index of indexes) {
-    const balance = balances.get(index)
-    if (balance && MINTS[balance.mint]) return { ...MINTS[balance.mint], mint: balance.mint, decimals: balance.decimals }
-  }
-  return null
-}
-
-function tokenAccountOwner(meta, accountIndex) {
-  const balances = [...(meta?.postTokenBalances || []), ...(meta?.preTokenBalances || [])]
-  return balances.find((entry) => entry.accountIndex === accountIndex)?.owner
-}
-
-function cloakParticipant(tx, instruction, keys, direction) {
-  const indexes = instruction.accounts || []
-  if (direction === 'deposit') return Number.isInteger(indexes[0]) ? keys[indexes[0]] : 'unknown'
-  const isSpl = indexes.length > 9 && keys[indexes[9]] === TOKEN_PROGRAM_ID
-  if (isSpl && Number.isInteger(indexes[10])) return tokenAccountOwner(tx.meta, indexes[10]) || keys[indexes[10]] || 'unknown'
-  return Number.isInteger(indexes[7]) ? keys[indexes[7]] : 'unknown'
-}
-
-function flowRecord(tx, instructionIndex, participant, direction, asset, absoluteAmount) {
-  const signature = tx.transaction?.signatures?.[0] || 'unknown'
-  return {
-    id: `${signature}:${instructionIndex}`, signature, instructionIndex, timestamp: tx.blockTime,
-    participant: participant || 'unknown', direction, asset: asset.symbol,
-    amountRaw: absoluteAmount.toString(), decimals: asset.decimals,
-    amount: Number(absoluteAmount) / (10 ** asset.decimals),
-    flowType: direction, counterAsset: null, linkedFlowId: null,
-  }
-}
-
-function encodedKnownAssets(data) {
-  const buffer = Buffer.from(data)
-  return Object.entries(MINTS)
-    .filter(([mint]) => buffer.includes(Buffer.from(bs58.decode(mint))))
-    .map(([, asset]) => asset.symbol)
-}
-
-function parseCloakInstruction(tx, instruction, keys, instructionIndex) {
-  const programId = instruction.programId || keys[instruction.programIdIndex]
-  if (programId !== PROTOCOLS.cloakc.programId || !instruction.data) return null
-  let data
-  try { data = bs58.decode(instruction.data) } catch { return null }
-  if (data.length < 521 || (data[0] !== 0 && data[0] !== 1)) return null
-  const publicAmount = readI64LE(data, 1 + 256 + 32)
-  if (publicAmount === 0n) return null
-  const isSwap = data[0] === 1
-  const asset = isSwap ? { ...MINTS[NATIVE_SOL_MINT], mint: NATIVE_SOL_MINT } : cloakAssetForInstruction(tx, instruction, keys)
-  if (!asset) return null
-  const direction = isSwap ? 'withdraw' : publicAmount > 0n ? 'deposit' : 'withdraw'
-  const absoluteAmount = publicAmount > 0n ? publicAmount : -publicAmount
-  const flow = flowRecord(tx, instructionIndex, cloakParticipant(tx, instruction, keys, direction), direction, asset, absoluteAmount)
-  if (isSwap) {
-    flow.flowType = 'swap_out'
-    flow.counterAsset = encodedKnownAssets(data).find((symbol) => symbol !== 'SOL') || null
-  }
-  return flow
-}
-
-function parsePrivacyCashInstruction(tx, instruction, keys, instructionIndex) {
-  const programId = instruction.programId || keys[instruction.programIdIndex]
-  if (programId !== PROTOCOLS.privacycash.programId || !instruction.data) return null
-  let data
-  try { data = bs58.decode(instruction.data) } catch { return null }
-  const isSol = matchesDiscriminator(data, PRIVACY_CASH_SOL_DISCRIMINATOR)
-  const isSpl = matchesDiscriminator(data, PRIVACY_CASH_SPL_DISCRIMINATOR)
-  if ((!isSol && !isSpl) || data.length < 504) return null
-  // discriminator[8] + proof A/B/C[256] + seven 32-byte public fields.
-  // The signed extAmount is the actual amount entering/leaving the public pool.
-  const extAmount = readI64LE(data, 8 + 256 + (7 * 32))
-  if (extAmount === 0n) return null
-  const chargedFee = readU64LE(data, 8 + 256 + (7 * 32) + 8)
-  const indexes = instruction.accounts || []
-  const asset = isSol ? MINTS[NATIVE_SOL_MINT] : MINTS[keys[indexes[7]]]
-  if (!asset) return null
-  const direction = extAmount > 0n ? 'deposit' : 'withdraw'
-  let participant
-  if (direction === 'deposit') participant = keys[indexes[isSol ? 9 : 6]]
-  else if (isSol) participant = keys[indexes[7]]
-  else participant = tokenAccountOwner(tx.meta, indexes[10]) || keys[indexes[9]] || keys[indexes[10]]
-  const recipientAmount = extAmount > 0n ? extAmount : -extAmount
-  const poolAmount = direction === 'withdraw' ? recipientAmount + chargedFee : recipientAmount
-  return flowRecord(tx, instructionIndex, participant, direction, asset, poolAmount)
-}
-
-function flowsFromTransaction(protocol, tx) {
+// Each protocol owns its decoder; this only walks the instruction tree.
+async function flowsFromTransaction(protocol, tx) {
   if (!tx?.blockTime || tx.meta?.err) return []
   const keys = accountKeysFor(tx)
-  const parse = protocol === 'privacycash' ? parsePrivacyCashInstruction : parseCloakInstruction
+  const { decode: parse } = await loadIndexer(protocol)
   const outer = tx.transaction?.message?.instructions || []
   const flows = outer.map((ix, index) => parse(tx, ix, keys, `o${index}`)).filter(Boolean)
   for (const group of tx.meta?.innerInstructions || []) {
@@ -234,14 +94,14 @@ function flowsFromTransaction(protocol, tx) {
 
 async function persistTransactionPage(protocol, transactions) {
   if (!transactions.length) return { transactions: 0, flows: 0, earliest: null, latest: null, matchedSwaps: 0 }
-  const decodedFlows = transactions.flatMap((transaction) => flowsFromTransaction(protocol, transaction))
+  const perTransaction = await Promise.all(transactions.map((transaction) => flowsFromTransaction(protocol, transaction)))
+  const decodedFlows = perTransaction.flat()
   await storeIndexedData(protocol, transactions, decodedFlows)
   const times = transactions.map(({ blockTime }) => blockTime).filter(Number.isFinite)
   const earliest = times.length ? Math.min(...times) : null
   const latest = times.length ? Math.max(...times) : null
-  const matchedSwaps = protocol === 'privacycash' && earliest !== null
-    ? await classifyPrivacyCashSwaps(earliest, latest)
-    : 0
+  const { postProcess } = await loadIndexer(protocol)
+  const matchedSwaps = postProcess && earliest !== null ? await postProcess({ earliest, latest }) : 0
   return { transactions: transactions.length, flows: decodedFlows.length, earliest, latest, matchedSwaps }
 }
 
@@ -313,32 +173,6 @@ async function catchUp(protocol, now) {
   return { from, to, pages, transactions, flows, resumed: resuming }
 }
 
-function associatedTokenAddress(owner, mint) {
-  return PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), new PublicKey(TOKEN_PROGRAM_ID).toBuffer(), mint.toBuffer()],
-    new PublicKey(ASSOCIATED_TOKEN_PROGRAM_ID),
-  )[0]
-}
-
-async function privacyCashPoolBalances() {
-  const program = new PublicKey(PROTOCOLS.privacycash.programId)
-  const [solPool] = PublicKey.findProgramAddressSync([Buffer.from('tree_token')], program)
-  const [globalConfig] = PublicKey.findProgramAddressSync([Buffer.from('global_config')], program)
-  const mintFor = (symbol) => new PublicKey(Object.keys(MINTS).find((mint) => MINTS[mint].symbol === symbol))
-  const usdcAta = associatedTokenAddress(globalConfig, mintFor('USDC'))
-  const usdtAta = associatedTokenAddress(globalConfig, mintFor('USDT'))
-  const [sol, usdc, usdt] = await Promise.all([
-    rpc('getBalance', [solPool.toBase58(), { commitment: 'finalized' }]),
-    rpc('getTokenAccountBalance', [usdcAta.toBase58(), { commitment: 'finalized' }]),
-    rpc('getTokenAccountBalance', [usdtAta.toBase58(), { commitment: 'finalized' }]),
-  ])
-  return {
-    SOL: Number(sol?.value || 0) / 1e9,
-    USDC: Number(usdc?.value?.amount || 0) / 1e6,
-    USDT: Number(usdt?.value?.amount || 0) / 1e6,
-  }
-}
-
 // Retained flows only cover the recent window, so the running balance starts
 // from the baseline holding everything already pruned.
 async function indexedPoolBalances(protocol, now) {
@@ -351,14 +185,15 @@ async function indexedPoolBalances(protocol, now) {
 }
 
 async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infinity) {
-  if (!PROTOCOLS[protocol]) throw new Error('protocol must be cloakc or privacycash')
+  if (PROTOCOLS[protocol]?.indexer.lane !== 'solana') throw new Error(`protocol must be one of: ${SOLANA_PROTOCOL_IDS.join(', ')}`)
   const now = Math.floor(Date.now() / 1000)
   const backfill = await ensureCompleteHistory(protocol, now, verbose, maxBackfillPages)
   const stateAfterBackfill = await getSyncState(protocol)
   const incremental = stateAfterBackfill?.historyComplete
     ? await catchUp(protocol, Math.floor(Date.now() / 1000))
     : { skipped: true, reason: 'historical backfill is incomplete' }
-  const balances = protocol === 'privacycash' ? await privacyCashPoolBalances() : await indexedPoolBalances(protocol, now)
+  const { poolBalances } = await loadIndexer(protocol)
+  const balances = poolBalances ? await poolBalances(rpc) : await indexedPoolBalances(protocol, now)
   await storePoolSnapshot(protocol, balances, now)
   // Pruning follows the snapshot so the balance is banked before the rows
   // behind it move into the baseline.
@@ -378,7 +213,7 @@ async function indexProtocol(protocol, verbose = false, maxBackfillPages = Infin
 
 async function updateTokenPrices() {
   const prices = {}
-  for (const [mint, asset] of Object.entries(MINTS)) {
+  for (const [mint, asset] of Object.entries(ASSETS_BY_MINT)) {
     try {
       const result = await rpc('getAsset', { id: mint, displayOptions: { showFungible: true } })
       const price = Number(result?.token_info?.price_info?.price_per_token)
@@ -405,13 +240,13 @@ const watchIndex = process.argv.indexOf('--watch')
 const watchArgument = process.argv[watchIndex + 1]
 const defaultWatchSeconds = devMode ? 30 : 300
 const watchSeconds = watchIndex === -1 ? 0 : Number(!watchArgument || watchArgument.startsWith('--') ? defaultWatchSeconds : watchArgument)
-const selectedProtocols = selectedProtocol === 'all' ? Object.keys(PROTOCOLS) : [selectedProtocol]
-if (!selectedProtocols.every((protocol) => PROTOCOLS[protocol])) throw new Error('protocol must be cloakc, privacycash, curvy, or all')
+const selectedProtocols = selectedProtocol === 'all' ? [...PROTOCOL_IDS] : [selectedProtocol]
+if (!selectedProtocols.every((protocol) => PROTOCOLS[protocol])) throw new Error(`protocol must be one of: ${PROTOCOL_IDS.join(', ')}, or all`)
 if (!Number.isFinite(watchSeconds) || watchSeconds < 0) throw new Error('watch interval must be a positive number of seconds')
 if (!(maxBackfillPages === Infinity || (Number.isInteger(maxBackfillPages) && maxBackfillPages > 0))) throw new Error('max-backfill-pages must be a positive integer')
 
 async function runCycle() {
-  const solanaProtocols = selectedProtocols.filter((protocol) => protocol !== 'curvy')
+  const solanaProtocols = selectedProtocols.filter((protocol) => SOLANA_PROTOCOL_IDS.includes(protocol))
   const solanaLane = (async () => {
     const prices = await updateTokenPrices()
     console.log(JSON.stringify({ indexedAt: new Date().toISOString(), lane: 'solana', tokenPrices: prices }))
@@ -420,12 +255,16 @@ async function runCycle() {
       console.log(JSON.stringify({ indexedAt: new Date().toISOString(), lane: 'solana', ...result }))
     }
   })()
-  const arbitrumLane = selectedProtocols.includes('curvy')
-    ? indexCurvy().then((result) => {
-      console.log(JSON.stringify({ indexedAt: new Date().toISOString(), lane: 'arbitrum', ...result }))
+  // Each EVM-lane protocol runs its own indexer; the loop replaces what used to
+  // be a hardcoded call to Curvy's.
+  const evmLanes = selectedProtocols
+    .filter((protocol) => EVM_PROTOCOL_IDS.includes(protocol))
+    .map(async (protocol) => {
+      const { run } = await loadIndexer(protocol)
+      const result = await run()
+      console.log(JSON.stringify({ indexedAt: new Date().toISOString(), lane: PROTOCOLS[protocol].chain, ...result }))
     })
-    : Promise.resolve()
-  await Promise.all([solanaLane, arbitrumLane])
+  await Promise.all([solanaLane, ...evmLanes])
 }
 
 console.log(JSON.stringify({ indexerMode: devMode ? 'development' : 'production', watchSeconds, protocols: selectedProtocols }))

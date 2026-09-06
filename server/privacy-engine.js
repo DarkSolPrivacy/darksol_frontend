@@ -6,68 +6,14 @@
  * activity when an input is missing.
  */
 
+import { PROVIDER_CAPABILITIES } from '../protocols/registry.js'
+
 export const ESTIMATE_NOTICE = 'Estimated from recent historical activity; future anonymity is not guaranteed.'
 
-export const PROVIDER_CAPABILITIES = Object.freeze({
-  privacycash: Object.freeze({
-    id: 'privacycash',
-    name: 'PrivacyCash',
-    network: 'Solana',
-    supportsMultiRecipient: true,
-    maxRecipients: null,
-    supportsPrivateSwap: false,
-    documentsPrivateSwap: true,
-    privateSwapIntegration: 'Unavailable in privacycash@1.2.2 public SDK',
-    swapAggregator: 'Jupiter',
-    protocolExecution: Object.freeze({ label: 'historical p50 / p95 when available' }),
-    withdrawalFee: Object.freeze({
-      variableRate: 0.0035,
-      fixedAmount: 0.006,
-      fixedToken: 'SOL',
-      fixedBasis: 'recipient',
-      label: '0.35% + 0.006 SOL equivalent per recipient',
-    }),
-  }),
-  cloakc: Object.freeze({
-    id: 'cloakc',
-    name: 'CLOAKC',
-    network: 'Solana',
-    supportsMultiRecipient: false,
-    maxRecipients: 1,
-    supportsPrivateSwap: true,
-    swapAggregator: 'Jupiter',
-    capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
-    protocolExecution: Object.freeze({ label: 'historical p50 / p95 when available' }),
-    withdrawalFee: Object.freeze({
-      variableRate: 0.003,
-      fixedAmount: 0.005,
-      fixedToken: 'SOL',
-      fixedBasis: 'transaction',
-      fixedAppliesToTokens: Object.freeze(['SOL']),
-      label: '0.3%; SOL exits add 0.005 SOL',
-    }),
-  }),
-  curvy: Object.freeze({
-    id: 'curvy',
-    name: 'Curvy',
-    network: 'Arbitrum One',
-    chainId: 42161,
-    supportsMultiRecipient: false,
-    maxRecipients: 1,
-    supportsPrivateSwap: true,
-    swapAggregator: 'LiFi',
-    supportedTokens: Object.freeze(['USDC', 'SOL', 'USDT']),
-    capabilityNote: 'The current integration treats each public unshield as a single-recipient exit.',
-    protocolExecution: Object.freeze({ label: 'historical p50 / p95 when available' }),
-    withdrawalFee: Object.freeze({
-      variableRate: 0.003,
-      fixedAmount: 0,
-      fixedToken: null,
-      fixedBasis: 'transaction',
-      label: '0.1% aggregation + 0.2% unshielding; shielding separately costs 0.1%',
-    }),
-  }),
-})
+// Derived from each protocol manifest. This module stays pure -- the registry
+// is data only -- and getProviderCapabilities/estimateProviderFee keep taking
+// the table as an injectable parameter, so tests can still pass their own.
+export { PROVIDER_CAPABILITIES }
 
 export const PRIVACY_TARGETS = Object.freeze({
   balanced: Object.freeze({ id: 'balanced', label: 'Balanced', score: 60 }),
@@ -141,6 +87,15 @@ export const DEFAULT_PRIVACY_CONFIG = Object.freeze({
     diversityHalfSaturationBuckets: 10,
   }),
   activity: Object.freeze({ transactionHalfSaturation: 80 }),
+  // A shielded pool hides a recipient among its notes, so the size of that set
+  // bounds how private any exit from it can be. Only pools that publish the
+  // number are affected; the rest are scored exactly as before, and this
+  // deliberately carries no scoring weight, because weighting a signal that one
+  // provider can supply and the others cannot would bias every comparison.
+  //
+  // `minimumSet` is a policy floor, not a derived constant: below it a recipient
+  // is one of too few candidates for the estimate to mean anything.
+  anonymitySet: Object.freeze({ minimumSet: 50 }),
   confidence: Object.freeze({ staleAfterSeconds: 600, unusableAfterSeconds: 86400, fullHistorySeconds: 7 * 86400 }),
   eta: Object.freeze({ stepMinutes: 1, maxHorizonMinutes: 7 * 24 * 60, timelineMinutes: Object.freeze([0, 30, 60, 120, 360]) }),
   multiRecipient: Object.freeze({
@@ -157,7 +112,7 @@ const finite = (value) => Number.isFinite(Number(value))
 
 function mergeConfig(base, overrides = {}) {
   const merged = { ...base, ...overrides }
-  for (const key of ['weights', 'depth', 'cover', 'similarity', 'temporal', 'activity', 'confidence', 'eta', 'multiRecipient']) {
+  for (const key of ['weights', 'depth', 'cover', 'similarity', 'temporal', 'activity', 'confidence', 'eta', 'multiRecipient', 'anonymitySet']) {
     merged[key] = { ...base[key], ...(overrides[key] || {}) }
   }
   return merged
@@ -421,7 +376,13 @@ function calculateCore(input, config, projection = {}) {
   const totalWeight = Object.values(config.weights).reduce((sum, value) => sum + Number(value), 0)
   const score = clamp(Object.entries(subscores).reduce((sum, [key, value]) => sum + value * config.weights[key], 0) / totalWeight)
   const noCover = waitMinutes === 0 && amount > tvl
-  const effectiveScore = noCover ? 0 : score
+  // A pool that publishes how many notes it holds tells us the size of the set
+  // the recipient hides among. Below the floor there are too few candidates for
+  // the estimate to carry meaning, whatever the value-based signals say. Pools
+  // that publish nothing are unaffected.
+  const anonymitySetSize = finite(metrics.anonymitySet?.size) ? Number(metrics.anonymitySet.size) : null
+  const thinAnonymitySet = anonymitySetSize !== null && anonymitySetSize < config.anonymitySet.minimumSet
+  const effectiveScore = noCover || thinAnonymitySet ? 0 : score
   const swapFlows = flows.filter(({ type }) => type === 'SWAP_IN' || type === 'SWAP_OUT')
   const confidence = confidenceFor(metrics, flows, similarity, rates, now, config)
   if (waitMinutes > 1440 && confidence.score > 0) {
@@ -431,6 +392,11 @@ function calculateCore(input, config, projection = {}) {
   }
   const explanations = []
   if (noCover) explanations.push({ impact: 'negative', metric: 'no cover', message: 'Transfer exceeds the current same-asset pool balance; an immediate exit would be mathematically linkable.' })
+  if (thinAnonymitySet) {
+    explanations.push({ impact: 'negative', metric: 'anonymity set', message: `Only ${anonymitySetSize} notes exist in this pool; a recipient would be one of too few candidates.` })
+  } else if (anonymitySetSize !== null) {
+    explanations.push({ impact: anonymitySetSize >= 5000 ? 'positive' : 'neutral', metric: 'anonymity set', message: `${anonymitySetSize.toLocaleString('en-US')} notes make up the set a recipient hides among.` })
+  }
   explanations.push({ impact: depthScore >= 75 ? 'positive' : depthScore < 45 ? 'negative' : 'neutral', metric: 'pool depth', message: `Transfer is ${round(poolShare * 100, 3)}% of pool TVL.` })
   explanations.push({ impact: coverScore >= 75 ? 'positive' : coverScore < 45 ? 'negative' : 'neutral', metric: 'relevant cover', message: `Observed cover ratio is ${round(coverRatio)}×; volume alone does not imply privacy.` })
   explanations.push({ impact: similarityScore >= 65 ? 'positive' : similarityScore < 35 ? 'negative' : 'neutral', metric: 'similar-size flows', message: `${round(projectedSimilarCount, 1)} weighted comparable flows provide amount cover.` })
@@ -443,10 +409,17 @@ function calculateCore(input, config, projection = {}) {
     timestamp: evaluationTime,
     score: Math.round(effectiveScore),
     rawScore: effectiveScore,
-    band: noCover ? 'NOT PRIVATE' : privacyBand(effectiveScore, config),
-    label: noCover ? 'No cover / not private' : 'Estimated privacy',
+    band: noCover || thinAnonymitySet ? 'NOT PRIVATE' : privacyBand(effectiveScore, config),
+    label: noCover || thinAnonymitySet ? 'No cover / not private' : 'Estimated privacy',
     noCover,
-    privacyConstraint: noCover ? { code: 'NO_COVER', message: 'Immediate transfer exceeds the current same-asset pool balance.' } : null,
+    anonymitySetSize,
+    anonymitySetSource: metrics.anonymitySet?.source ?? null,
+    thinAnonymitySet,
+    privacyConstraint: noCover
+      ? { code: 'NO_COVER', message: 'Immediate transfer exceeds the current same-asset pool balance.' }
+      : thinAnonymitySet
+        ? { code: 'THIN_ANONYMITY_SET', message: `Pool holds ${anonymitySetSize} notes, below the ${config.anonymitySet.minimumSet} required for a meaningful estimate.` }
+        : null,
     depthScore: Math.round(depthScore),
     coverScore: Math.round(coverScore),
     similarityScore: Math.round(similarityScore),
