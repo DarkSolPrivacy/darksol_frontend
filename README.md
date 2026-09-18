@@ -13,12 +13,11 @@ Live-test findings, routes, fee measurements and integration caveats live in [`d
 | [`server/app.js`](server/app.js) | The API as a bare Express app — no listener, no static handler, so both entry points reuse it |
 | [`server/api.js`](server/api.js) | Local entry point: built dashboard and API on one port |
 | [`api/index.js`](api/index.js) | Vercel serverless re-export of that same app |
-| [`server/indexer.js`](server/indexer.js) | Writer-process entry point; `index.js` walks transactions and each protocol's `indexer.js` decodes them |
-| [`server/db.js`](server/db.js) | All Postgres access; `migrate.js`, `sync.js` and `import-sqlite.js` are the schema and SQLite copy entry points |
+| [`server/db.js`](server/db.js) | All Postgres access. Read-only here — the writer lives in [darksol-backend](https://github.com/DarkSolPrivacy/darksol-backend) |
 | [`server/privacy-engine.js`](server/privacy-engine.js) | Pure planning heuristics — never reads the database |
 | [`server/planning-metrics.js`](server/planning-metrics.js) | Turns stored flows into the metrics the engine scores |
 | [`scripts/private-sol.ts`](scripts/private-sol.ts) | CLI for the test-only SDK runner; `runtime.ts` holds shared config and wallet loading |
-| [`supabase/migrations/`](supabase/migrations/) | Live schema. [`migrations/`](migrations/) is the older SQLite lineage, kept only as history |
+| [`migrations/`](migrations/) | The older SQLite lineage, kept only as history. The live schema moved to [darksol-backend](https://github.com/DarkSolPrivacy/darksol-backend) |
 | [`test/`](test/) | `node --test` suites |
 | [`public/`](public/) | Logos plus the PrivacyCash circuit wasm/zkey copied in by `postinstall` |
 | `data/` | Local SQLite analytics database (Git-ignored) |
@@ -51,8 +50,9 @@ each address parses on the chain it claims, and `test/protocol-modules.test.js` 
 manifest promises a capability the folder does not implement.
 
 Assets are constrained to `USDC`, `SOL` and `USDT` by a CHECK constraint on four tables in
-`supabase/migrations`. A protocol trading anything else needs a migration first — the
-schema test tells you so rather than letting an INSERT fail later.
+darksol-backend's `supabase/migrations`. A protocol trading anything else needs a migration
+there first, and its `indexer.js` has to be copied across — `protocols/` is duplicated in
+both repos on purpose, so the decoders stay next to the writer that runs them.
 
 ## Run locally
 
@@ -60,25 +60,14 @@ Node.js 24 or newer — the PrivacyCash and Curvy SDKs require it.
 
 ```bash
 npm install
-cp .env.example .env.local   # your RPC service credentials and the SQL database connection string
-npm run migrate
+cp .env.example .env.local   # the SQL database connection string
+npm run dev                  # read-only API on :8787 + Vite on :5173
 ```
 
-Writer and dashboard run as separate processes:
-
-```bash
-npm run indexer:watch   # backend writer (RPC services -> SQL database)
-npm run dev             # read-only API on :8787 + Vite on :5173
-```
-
-| Command | Behaviour |
-| --- | --- |
-| `npm run indexer` | one production reconciliation/catch-up, then exits |
-| `npm run indexer:watch` | writer every five minutes |
-| `npm run indexer:dev` | verbose, exits after one correct cycle |
-| `npm run indexer:dev:watch` | same checkpoints, 30-second cadence |
-
-The EVM and Solana lanes run in parallel when separate RPC services are configured.
+This repo is read-only against the database. The writer that fills it —
+and the schema it owns — is [darksol-backend](https://github.com/DarkSolPrivacy/darksol-backend),
+running as a container on its own VPS. Nothing here has to be running for it to
+index, and nothing has to be run by hand to see fresh data.
 
 ## Deploying
 
@@ -86,7 +75,7 @@ The dashboard is a Vite build; the API is the same Express app in both places. [
 
 Vercel needs the same `SUPABASE_DB_URL`, but pointed at the SQL database's **transaction pooler** (port 6543): the direct connection is IPv6-only without an IPv4 add-on and unreachable from a function. Each warm instance keeps its own pool, capped there at one connection.
 
-The indexer is not deployed. It is a long-running writer, run wherever you like, writing to the same SQL database.
+The indexer is deployed separately, from [darksol-backend](https://github.com/DarkSolPrivacy/darksol-backend): one container on a VPS, `git pull && docker compose up -d --build`. It uses the **direct connection** (port 5432) rather than the pooler, because it is one long-lived process rather than many warm functions.
 
 ## Data pipeline
 
@@ -117,7 +106,7 @@ The dashboard never presents fee revenue, only the published charge policy and a
 
 ### Storage and cursors
 
-Deposit and withdrawal volume are scoped to the selected timeframe. Cloakc pool size is cumulative indexed deposits minus withdrawals; PrivacyCash is read from its on-chain SOL pool PDA and USDC/USDT token accounts; Curvy from its Arbitrum Vault. Each chart reconstructs the window from the closing balance where a snapshot exists. Flows are stored in `pool_flows`, balances in `pool_snapshots`, USD prices in `token_prices`, all defined by versioned SQL in `supabase/migrations/`.
+Deposit and withdrawal volume are scoped to the selected timeframe. Cloakc pool size is cumulative indexed deposits minus withdrawals; PrivacyCash is read from its on-chain SOL pool PDA and USDC/USDT token accounts; Curvy from its Arbitrum Vault. Each chart reconstructs the window from the closing balance where a snapshot exists. Flows are stored in `pool_flows`, balances in `pool_snapshots`, USD prices in `token_prices`, all defined by versioned SQL in darksol-backend's `supabase/migrations/`.
 
 The dashboard API never calls Helius and never writes.
 
@@ -137,7 +126,7 @@ The dashboard API never calls Helius and never writes.
 | 30D | 1 day | 30 days |
 | 90D | 1 day | 90 days |
 
-90 days is the longest range, and it sets the flow retention window. The browser rereads the database through the API every 30 seconds. RPC service credentials are needed only by the indexer, stay server-side, and `.env.local` is ignored by Git.
+90 days is the longest range, and it sets the flow retention window. The browser rereads the database through the API every 30 seconds. RPC service credentials are needed only by the indexer, so they live in darksol-backend's `.env`, not here.
 
 ## Privacy planner
 

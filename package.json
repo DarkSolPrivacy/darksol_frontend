@@ -7,11 +7,6 @@
     "postinstall": "node scripts/copy-privacycash-wasm.js",
     "dev": "node scripts/check-node-version.js && concurrently -k -n api,web -c green,cyan \"node --watch server/api.js\" \"vite\"",
     "dev:api": "node scripts/check-node-version.js && node --watch server/api.js",
-    "indexer": "node scripts/check-node-version.js && node server/indexer.js",
-    "indexer:watch": "node scripts/check-node-version.js && node server/indexer.js --watch 300",
-    "indexer:dev": "node scripts/check-node-version.js && node server/indexer.js --dev",
-    "indexer:dev:watch": "node scripts/check-node-version.js && node server/indexer.js --dev --watch 30",
-    "migrate": "node scripts/check-node-version.js && node server/migrate.js",
     "wallets:create": "tsx scripts/private-sol.ts wallets:create",
     "protocol:check": "tsx scripts/private-sol.ts check all",
     "protocol:snapshot": "tsx scripts/private-sol.ts snapshot",
@@ -28,9 +23,6 @@
     "build": "vite build",
     "preview": "node scripts/check-node-version.js && node server/api.js",
     "start": "node scripts/check-node-version.js && node server/api.js",
-    "supabase:migrate": "node server/migrate.js",
-    "supabase:sync": "node server/sync.js",
-    "supabase:resync": "node server/sync.js --resync",
     "umbra:register": "tsx scripts/private-sol.ts umbra:register"
   },
   "dependencies": {
