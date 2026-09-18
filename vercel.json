@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/api/solana-rpc", "destination": "https://api.darksol.app/api/solana-rpc?k=REPLACE_WITH_RPC_KEY" },
+    { "source": "/api/solana-rpc", "destination": "https://api.darksol.app/api/solana-rpc?k=af77cc9602ddd1884fcc8f65258848b4" },
     { "source": "/api/:path*", "destination": "https://api.darksol.app/api/:path*" },
     { "source": "/robots.txt", "destination": "/robots.txt" },
     { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
