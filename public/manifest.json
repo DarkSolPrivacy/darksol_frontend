@@ -1,0 +1,13 @@
+{
+  "name": "DarkSol",
+  "short_name": "DarkSol",
+  "description": "DarkSol private routing and on-chain privacy analytics.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0A0A",
+  "theme_color": "#08110d",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" }
+  ]
+}

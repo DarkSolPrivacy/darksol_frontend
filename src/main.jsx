@@ -1041,6 +1041,15 @@ function App() {
     return () => window.removeEventListener('popstate', syncLocation)
   }, [])
   useEffect(() => {
+    const isAnalytics = view === 'analytics'
+    document.title = isAnalytics ? 'Analytics – DarkSol' : 'DarkSol'
+    const description = isAnalytics
+      ? 'On-chain privacy analytics for Solana and Arbitrum private routing protocols.'
+      : 'DarkSol private routing and on-chain privacy analytics.'
+    document.querySelector('meta[name="description"]')?.setAttribute('content', description)
+    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : '/'}`)
+  }, [view])
+  useEffect(() => {
     if (!drawerOpen) return
     const closeOnEscape = (event) => { if (event.key === 'Escape') setDrawerOpen(false) }
     const previousOverflow = document.body.style.overflow

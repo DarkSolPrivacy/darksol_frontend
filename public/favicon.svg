@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <radialGradient id="corona"><stop offset="52%" stop-color="#0A0A0A" /><stop offset="66%" stop-color="#FFC53D" stop-opacity=".95" /><stop offset="78%" stop-color="#FFC53D" stop-opacity=".16" /><stop offset="100%" stop-color="#FFC53D" stop-opacity="0" /></radialGradient>
+  </defs>
+  <circle cx="24" cy="24" r="22" fill="url(#corona)" />
+  <circle cx="24" cy="24" r="14.5" fill="#080808" stroke="#F0F0F0" stroke-width=".8" />
+</svg>
