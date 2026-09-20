@@ -678,3 +678,9 @@ html,body{overflow-x:clip}
 .bridgeTokens button[aria-selected=true]{border-color:var(--accent);background:var(--accent-03);color:#F0F0F0}
 .bridgeTokens .assetLogo{width:22px;height:22px;flex-basis:22px;font-size:11px}
 @media(max-width:520px){.bridgeTokens{grid-template-columns:1fr}}
+
+.recipientRow.needsAddress{border-color:var(--accent);animation:addressGlow 1.8s ease-in-out infinite}
+.recipientRow.needsAddress .recipientAddress::placeholder{color:var(--accent)}
+@keyframes addressGlow{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 1px var(--accent-33),0 0 16px var(--accent-13)}}
+@media(prefers-reduced-motion:reduce){.recipientRow.needsAddress{animation:none;box-shadow:0 0 0 1px var(--accent-33)}}
+.actionArea>button{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

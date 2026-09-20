@@ -58,6 +58,19 @@ async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   if (await connection.getBalance(publicKey, 'confirmed') === 0) throw new Error('A small SOL balance is required for network fees')
 }
 
+// The SDK exposes no progress callback, but it logs every UTXO page it scans and
+// every proof/relayer stage, so its logger is the only live progress there is.
+export function reportProgress(privacyCash, onStatus) {
+  privacyCash.setLogger?.((level, message) => {
+    if (level === 'warn' || level === 'error') console.log(`[${level}]`, message)
+    const page = /####fetch_utxo_offset\s+(\d+)/.exec(message)
+    if (page) return onStatus(`Scanning notes ${page[1]}…`)
+    const found = /Found (\d+) total UTXOs/.exec(message)
+    if (found) return onStatus(`Loaded ${found[1]} notes…`)
+    if (level === 'info') onStatus(message.replace(/\.*$/, '…').replace(/^./, (c) => c.toUpperCase()))
+  })
+}
+
 // Wallet check, circuit/WASM load and encryption-key derivation are identical for a
 // private transfer and a private bridge, so both entry points share this setup.
 export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus = () => {} }) {
@@ -72,6 +85,7 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
     import('@lightprotocol/hasher.rs'),
     import('privacycash/utils'),
   ])
+  reportProgress(privacyCash, onStatus)
   const lightWasm = await WasmFactory.getInstance()
   const encryptionService = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
