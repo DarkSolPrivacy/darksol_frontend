@@ -940,6 +940,14 @@ function subscribePoolSummary(listener) {
   }
 }
 
+// Pool chips and protocol tabs both rank by live TVL, biggest first. Until the
+// summary lands every pool reads 0 and the sort is stable, so the manifest
+// order shows through instead of an empty row.
+function sortByTvl(ids, pools) {
+  const tvl = (id) => pools.find((pool) => pool.protocol === id)?.tvl || 0
+  return [...ids].sort((first, second) => tvl(second) - tvl(first))
+}
+
 function usePoolSummary() {
   const state = useSyncExternalStore(subscribePoolSummary, () => poolSummary.state)
   useEffect(() => { if (Date.now() - poolSummary.fetchedAt > POOL_SUMMARY_TTL) loadPoolSummary() }, [])
@@ -965,11 +973,12 @@ function LiquidityUniverse() {
       <ObsidianLiquidity selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
       <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
     </div>
-    <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{SOLANA_POOL_IDS.map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{OTHER_POOL_IDS.map(poolButton)}</div></div></div>
+    <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{sortByTvl(SOLANA_POOL_IDS, summary.pools).map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{sortByTvl(OTHER_POOL_IDS, summary.pools).map(poolButton)}</div></div></div>
   </section>
 }
 
 function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLaunchApp }) {
+  const poolSizes = usePoolSummary()
   const [range, setRange] = useState('30D')
   const [token, setToken] = useState('USDC')
   const [analytics, setAnalytics] = useState(EMPTY)
@@ -1001,7 +1010,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   return <div className="protocolPage">
     <header className="analyticsHeader"><div><p className="eyebrow">PROJECT STATS</p><h1>Analytics database</h1></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Launch APP <ArrowUpRight /></a><a className="ghost" href={analytics.docs || meta.docs} target="_blank" rel="noreferrer">Protocol docs <ExternalLink /></a></div></header>
     <LiquidityUniverse />
-    <div className="analyticsProtocolTabs" aria-label="Analytics project">{Object.entries(PROTOCOLS).map(([id, item]) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={item.name} /><span>{item.name}</span></button>)}</div>
+    <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}</span></button>)}</div>
     <section className={`notice ${error ? 'error' : ''}`}>{error ? <ShieldX /> : <ShieldCheck />}<span>{error || `Reading ${meta.name} data from the analytics database`}</span><b>{loading ? 'Loading' : error ? 'Error' : isBackfilling ? 'Partial' : 'Ready'}</b><em>{analytics.indexedAt ? `Indexed ${new Date(analytics.indexedAt * 1000).toLocaleString()}` : 'Run the backend indexer to update'}</em></section>
     {meta.swap.routeBanner && <section className="route panel"><span>{meta.swap.routeBanner.from}</span><ArrowRight /><b>{meta.swap.routeBanner.via}</b><ArrowRight /><span>{meta.swap.routeBanner.to}</span><small>{meta.swap.routeBanner.note}</small></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
