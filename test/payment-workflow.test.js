@@ -75,7 +75,7 @@ test('checkout rejects wrong networks, settled invoices and mismatched public co
     connection: { getGenesisHash: async () => 'devnet', getBalance: async () => 1000000000 } }
   await assert.rejects(payPaymentInvoice(options), /mainnet/)
   await assert.rejects(payPaymentInvoice({ ...options, invoice: { ...invoice, status: 'paid' } }), /already paid/)
-  options.connection.getGenesisHash = async () => '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+  options.connection.getGenesisHash = async () => '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
   const corrupt = structuredClone(invoice)
   corrupt.outputs[0].commitment = '1'
   await assert.rejects(payPaymentInvoice({ ...options, invoice: corrupt }), /commitment does not match/)

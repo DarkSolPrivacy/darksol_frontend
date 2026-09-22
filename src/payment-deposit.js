@@ -2,7 +2,7 @@ import { Connection, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { getPaymentLink } from './payment-api.js'
 
-const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
 const FIELD_MAX = 21888242871839275222246405745257275088548364400416034343698204186575808495617n
 const integer = (value, max = FIELD_MAX) => typeof value === 'string' && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < max
 
@@ -35,7 +35,11 @@ function invoiceTerms(invoice) {
 
 // Payment transactions go directly to chain RPC, never to the DarkSol backend.
 export function paymentRpcUrl() {
-  const url = new URL(import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com')
+  // No default: api.mainnet-beta.solana.com answers browser origins with a raw
+  // 403, so falling back to it only hides a missing deployment setting.
+  const configured = import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL
+  if (!configured) throw new Error('This checkout is not configured with a Solana RPC endpoint. Ask the merchant to set VITE_PAYMENT_SOLANA_RPC_URL.')
+  const url = new URL(configured)
   if (url.protocol !== 'https:' || url.username || url.password
     || /(^|\.)darksol\.app$/.test(url.hostname)
     || (typeof window !== 'undefined' && url.origin === window.location.origin)) throw new Error('Payments require a direct HTTPS Solana RPC endpoint')
