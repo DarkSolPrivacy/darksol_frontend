@@ -790,6 +790,13 @@ html,body{overflow-x:clip}
 .paymentPagination { display: flex; justify-content: space-between; margin-top: 16px; }
 .paymentLocal { border-bottom: 1px solid var(--line); }
 .paymentDelete:hover:not(:disabled) { color: #BE7777; border-color: #BE7777; }
+.paymentPick { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+.paymentPick:disabled { cursor: not-allowed; opacity: .35; }
+.paymentPicked { background: #141414; }
+.paymentPickBar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.paymentPickBar > span { margin-right: auto; color: #AAA; font-size: 12px; }
+.paymentPickBar svg, .paymentHistoryHeading .paymentRowActions svg { width: 15px; height: 15px; }
+.paymentHistoryHeading .paymentRowActions { gap: 8px; }
 .paymentCheckoutBody { max-width: 540px; margin: 32px auto; }
 .paymentCheckoutPool { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .paymentCheckoutPool img { width: 28px; height: 28px; object-fit: contain; }
