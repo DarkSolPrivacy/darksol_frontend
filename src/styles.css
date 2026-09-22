@@ -789,6 +789,7 @@ html,body{overflow-x:clip}
 .paymentReport input { flex: 1; min-width: 150px; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 2px; background: #0A0A0A; color: var(--text); font-size: 12px; }
 .paymentPagination { display: flex; justify-content: space-between; margin-top: 16px; }
 .paymentLocal { border-bottom: 1px solid var(--line); }
+.paymentDelete:hover:not(:disabled) { color: #BE7777; border-color: #BE7777; }
 .paymentCheckoutBody { max-width: 540px; margin: 32px auto; }
 .paymentCheckoutPool { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .paymentCheckoutPool img { width: 28px; height: 28px; object-fit: contain; }

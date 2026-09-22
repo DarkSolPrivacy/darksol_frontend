@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Settings, Upload, Wallet, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Settings, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
 import { prepareMerchantAccess, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
-import { createPaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
+import { createPaymentLink, deletePaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
 import { usdText, useUsdPrices } from './token-price.js'
 
 const PRICED = ['SOL']
@@ -132,6 +132,18 @@ export default function PaymentLinks({ summary, walletSession }) {
     })
   }
 
+  function removeLink(payment) {
+    if (!confirm('Delete this payment link? The link stops working for anyone who has it.')) return
+    run(async (signal) => {
+      await deletePaymentLink(payment.payment_id, await merchantAccess(signal), signal)
+      signal.throwIfAborted()
+      setHistory((previous) => ({ ...previous, payments: previous.payments.filter((item) => item.payment_id !== payment.payment_id) }))
+      try { localStorage.removeItem(`darksol:published:${wallet.address}:${payment.record.invoice.id}`) } catch { /* The draft stays listed as unpublished. */ }
+      setRefresh((value) => value + 1)
+      setNotice('Payment link deleted')
+    })
+  }
+
   async function copyLink(url) {
     try { await navigator.clipboard.writeText(paymentLinkUrl(url)); setNotice('Payment link copied') }
     catch { setError('Could not copy the link. Open it to copy from the address bar.') }
@@ -238,6 +250,7 @@ export default function PaymentLinks({ summary, walletSession }) {
             <a className="ghost paymentIcon" title="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
             <button type="button" className="ghost paymentIcon" title="Download recovery backup" aria-label="Download recovery backup" onClick={() => downloadRecovery(payment.record)}><Download /></button>
             {payment.status !== 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => { setDepositFor(payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
+            {payment.status !== 'paid' && <button type="button" className="ghost paymentIcon paymentDelete" title="Delete payment link" aria-label="Delete payment link" disabled={busy} onClick={() => removeLink(payment)}><Trash2 /></button>}
           </div>
         </article>
         {depositFor === payment.payment_id && payment.status !== 'paid' && <form className="paymentReport" onSubmit={(event) => {

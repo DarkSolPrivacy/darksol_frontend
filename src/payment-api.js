@@ -27,6 +27,9 @@ export async function createPaymentLink({ record, access, signal, endpoint = '/a
   return result
 }
 
+export const deletePaymentLink = (id, access, signal) =>
+  request(`/api/payment-links/${id}`, { method: 'DELETE', access, signal })
+
 export const listPaymentLinks = ({ access, signal, offset = 0 }) => request(`/api/payment-links?limit=50&offset=${offset}`, { access, signal })
 export const getPaymentLink = (id, signal) => request(`/api/payment-links/${id}`, { signal })
 
