@@ -12,6 +12,7 @@ import PaymentCheckout from './payment-checkout.jsx'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
+import { usdText, useUsdPrices } from './token-price.js'
 import { BRIDGE_CHAINS, bridgeChain, bridgeEligibility, sanitizeBridgeAddress, validateBridgeAddress } from './bridge-routes.js'
 import {
   LOGOS as PROTOCOL_LOGOS, PROTOCOLS, PROVIDER_CAPABILITIES, listProtocols, resolveProtocolId,
@@ -324,6 +325,7 @@ function PrivacyHome({ walletSession }) {
   const { wallet, connecting, connectWallet: connectSession, disconnectWallet: disconnectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
+  const prices = useUsdPrices(ASSETS)
   const [amount, setAmount] = useState('')
   const [receiverAmounts, setReceiverAmounts] = useState([''])
   const [recipientAddresses, setRecipientAddresses] = useState([''])
@@ -554,6 +556,7 @@ function PrivacyHome({ walletSession }) {
     <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : 'Send privately'}</h1></header>
     <section className="sendCard panel">
       <div className="amountRow">
+        <span className="amountUsd">{usdText(amount, prices[asset])}</span>
         <input aria-label="Amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} onChange={(event) => { const nextAmount = sanitizeAmount(event.target.value); setAmount(nextAmount); if (receiverCount === 1) setReceiverAmounts([nextAmount]); setDirty(true); setReceipt(null) }} />
         {wallet && <button type="button" className="walletMax" onClick={useMaximumBalance} disabled={balanceLoading || !walletBalance?.spendableRaw} title={asset === 'SOL' ? 'Network fee reserve already deducted' : 'Use wallet balance'}>MAX {balanceLoading ? '…' : walletBalance ? rawTokenText(walletBalance.spendableRaw, asset) : '—'}</button>}
         <div className="assetPicker">

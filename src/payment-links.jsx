@@ -4,12 +4,15 @@ import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
 import { prepareMerchantAccess, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
 import { createPaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
+import { usdText, useUsdPrices } from './token-price.js'
 
+const PRICED = ['SOL']
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
 
 export default function PaymentLinks({ summary, walletSession }) {
   const [amount, setAmount] = useState('')
+  const prices = useUsdPrices(PRICED)
   const [reference, setReference] = useState('')
   const [pool, setPool] = useState('cloakc')
   const [sort, setSort] = useState('fees')
@@ -170,6 +173,7 @@ export default function PaymentLinks({ summary, walletSession }) {
       <div className="paymentSectionTitle"><Link2 aria-hidden="true" /><h2>Create a payment link</h2><span>Solana</span></div>
       <label className="paymentFieldLabel" htmlFor="paymentAmount">REQUEST AMOUNT</label>
       <div className="amountRow paymentAmountRow">
+        <span className="amountUsd">{usdText(amount, prices.SOL)}</span>
         <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
         <span className="paymentAsset"><img src="/logos/sol.svg" alt="" />SOL</span>
       </div>
