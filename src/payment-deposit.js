@@ -37,9 +37,11 @@ function invoiceTerms(invoice) {
 export function paymentRpcUrl() {
   // No default: api.mainnet-beta.solana.com answers browser origins with a raw
   // 403, so falling back to it only hides a missing deployment setting.
-  const configured = import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL
-  if (!configured) throw new Error('This checkout is not configured with a Solana RPC endpoint. Ask the merchant to set VITE_PAYMENT_SOLANA_RPC_URL.')
-  const url = new URL(configured)
+  // Unset and malformed are the same deployment mistake, so they read alike
+  // instead of surfacing a bare "Failed to construct 'URL'".
+  let url
+  try { url = new URL(import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL) }
+  catch { throw new Error('This checkout has no valid Solana RPC endpoint. VITE_PAYMENT_SOLANA_RPC_URL must be a full URL, for example https://mainnet.helius-rpc.com/?api-key=KEY') }
   if (url.protocol !== 'https:' || url.username || url.password
     || /(^|\.)darksol\.app$/.test(url.hostname)
     || (typeof window !== 'undefined' && url.origin === window.location.origin)) throw new Error('Payments require a direct HTTPS Solana RPC endpoint')
