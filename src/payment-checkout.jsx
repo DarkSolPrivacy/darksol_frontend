@@ -32,19 +32,22 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
     let timer
     async function update() {
       try {
-        let latest = validateCheckout(await getPaymentLink(paymentId, controller.signal))
-        if (reportedId && latest.status !== 'paid' && !busy) {
+        const latest = validateCheckout(await getPaymentLink(paymentId, controller.signal))
+        if (controller.signal.aborted) return
+        // Render the invoice before reporting. A verification outage must not
+        // replace a paying customer's whole checkout with a bare error.
+        setInvoice((previous) => previous?.status === 'paid' ? previous : latest)
+        setLoadError('')
+        if (latest.status === 'paid') return
+        if (reportedId && !busy) {
           try {
             const result = await reportPaymentDeposit(paymentId, reportedId, controller.signal)
-            if (result.status === 'paid') latest = { ...latest, status: 'paid' }
+            if (controller.signal.aborted) return
+            if (result.status === 'paid') { setInvoice({ ...latest, status: 'paid' }); return }
           } catch (cause) {
             if (cause.status !== 422) throw cause
           }
         }
-        if (controller.signal.aborted) return
-        setInvoice((previous) => previous?.status === 'paid' ? previous : latest)
-        setLoadError('')
-        if (latest.status === 'paid') return
       } catch (cause) {
         if (!controller.signal.aborted) setLoadError(cause.status === 404 ? 'Payment link not found' : cause.message || 'Unable to load payment')
       } finally {
