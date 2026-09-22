@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowRight, CheckCircle2, Download, Link2, LogOut, Settings, Wallet } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Settings, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
-import { preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
+import { prepareMerchantAccess, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
+import { createPaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
 
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
@@ -20,49 +21,117 @@ export default function PaymentLinks({ summary, walletSession }) {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
-  const [prepared, setPrepared] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [access, setAccess] = useState(null)
+  const [historyState, setHistory] = useState({ payments: [], next_offset: null })
+  const history = wallet && access?.address === wallet.address ? historyState : { payments: [], next_offset: null }
+  const [historyError, setHistoryError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const [refresh, setRefresh] = useState(0)
+  const [published, setPublished] = useState(new Set())
+  const [depositFor, setDepositFor] = useState(null)
+  const [transactionId, setTransactionId] = useState('')
   const operation = useRef(null)
 
   useEffect(() => {
-    setBusy(false); setStatus(''); setError(''); setPrepared(false); setDraftState({ address: wallet?.address ?? null, records: [] })
+    setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(null)
+    setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null)
+    setPublished(new Set()); setDraftState({ address: wallet?.address ?? null, records: [] })
     if (wallet) {
-      try { setDraftState({ address: wallet.address, records: readPaymentDrafts(localStorage, wallet.address) }) }
+      try {
+        const records = readPaymentDrafts(localStorage, wallet.address)
+        setDraftState({ address: wallet.address, records })
+        setPublished(new Set(records.filter((record) => localStorage.getItem(`darksol:published:${wallet.address}:${record.invoice.id}`)).map((record) => record.invoice.id)))
+      }
       catch { setError('Could not read saved payment notes. Check that browser storage is available.') }
     }
     return () => { operation.current?.abort(); operation.current = null }
   }, [wallet])
 
-  async function createPayment(event) {
-    event.preventDefault()
+  useEffect(() => {
+    if (!access || access.address !== wallet?.address) return
+    const controller = new AbortController()
+    let timer
+    async function load() {
+      setLoading(true)
+      try {
+        const result = await listPaymentLinks({ access, offset, signal: controller.signal })
+        if (controller.signal.aborted) return
+        setHistory(result); setHistoryError('')
+        setPublished((previous) => new Set([...previous, ...result.payments.map((payment) => payment.record.invoice.id)]))
+      } catch (cause) {
+        if (!controller.signal.aborted) setHistoryError(cause.message || 'Could not load payment links')
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false)
+          timer = setTimeout(load, 15000)
+        }
+      }
+    }
+    load()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [access, wallet, offset, refresh])
+
+  async function merchantAccess(signal) {
+    if (access?.address === wallet.address) return access
+    setStatus('Approve merchant access...')
+    const result = await prepareMerchantAccess({ ...wallet, signal })
+    signal.throwIfAborted()
+    const scoped = { ...result, address: wallet.address }
+    setAccess(scoped)
+    return scoped
+  }
+
+  async function run(action) {
     if (operation.current || connecting) return
-    setError('')
+    setError(''); setNotice('')
     if (!wallet) {
       try { await connectWallet() }
       catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not connect wallet') }
       return
     }
-    if (!amountResult.valid) return
     const controller = new AbortController()
     operation.current = controller
-    setBusy(true); setPrepared(false)
+    setBusy(true)
     try {
-      const draft = await preparePaymentNote({
-        provider: wallet.provider, address: wallet.address, protocol: pool,
-        amount, reference, signal: controller.signal,
-        onStatus: (message) => { if (!controller.signal.aborted) setStatus(message) },
-      })
-      if (!controller.signal.aborted) {
-        setDraftState((current) => ({ address: wallet.address, records: [draft, ...(current.address === wallet.address ? current.records : [])] }))
-        setPrepared(true)
-      }
+      await action(controller.signal)
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not prepare payment note')
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not complete payment request')
     } finally {
       if (operation.current === controller) {
         operation.current = null
         setBusy(false); setStatus('')
       }
     }
+  }
+
+  async function publish(record, signal, identity) {
+    setStatus('Creating payment link...')
+    const result = await createPaymentLink({ record, access: identity, signal })
+    signal.throwIfAborted()
+    setPublished((previous) => new Set([...previous, record.invoice.id]))
+    try { localStorage.setItem(`darksol:published:${wallet.address}:${record.invoice.id}`, result.payment_id) } catch { /* The encrypted draft and server record remain intact. */ }
+    setOffset(0); setRefresh((value) => value + 1)
+    setNotice('Payment link created')
+  }
+
+  function createPayment(event) {
+    event.preventDefault()
+    if (wallet && (!amountResult.valid || amountError)) return
+    run(async (signal) => {
+      const identity = await merchantAccess(signal)
+      const record = await preparePaymentNote({ ...wallet, protocol: pool, amount, reference, signal,
+        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+      signal.throwIfAborted()
+      setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
+      await publish(record, signal, identity)
+    })
+  }
+
+  async function copyLink(url) {
+    try { await navigator.clipboard.writeText(paymentLinkUrl(url)); setNotice('Payment link copied') }
+    catch { setError('Could not copy the link. Open it to copy from the address bar.') }
   }
 
   function downloadRecovery(draft) {
@@ -75,7 +144,8 @@ export default function PaymentLinks({ summary, walletSession }) {
   }
 
   const amountResult = parseAmount(amount, 'SOL')
-  const amountError = amount && !amountResult.valid ? amountResult.error : ''
+  const amountError = amount && !amountResult.valid ? amountResult.error
+    : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < 10000000n ? 'Cloak requires at least 0.01 SOL.' : ''
   const pools = POOLS.map((item) => {
     const fees = PROTOCOLS[item.id].fees
     const activity = summary.pools.find((entry) => entry.protocol === item.id)
@@ -135,21 +205,61 @@ export default function PaymentLinks({ summary, walletSession }) {
           : 'Based on total pool volume over 24 hours. Activity alone does not guarantee privacy.'}</p>
       {error && <p className="paymentError" role="alert">{error}</p>}
       <div className="paymentActions">
-        <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && !amountResult.valid)} aria-describedby="paymentAvailability">
+        <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && (!amountResult.valid || amountError))} aria-describedby="paymentAvailability">
           {connecting ? 'Connecting…' : busy ? status || 'Preparing note…' : !wallet ? <><Wallet aria-hidden="true" />Connect wallet</> : <>Create payment link <ArrowRight aria-hidden="true" /></>}
         </button>
         {wallet && <button className="paymentDisconnect" type="button" aria-label="Disconnect wallet" title="Disconnect wallet" disabled={busy} onClick={disconnectWallet}><LogOut /></button>}
       </div>
       <p className="paymentFormHint" id="paymentAvailability">{wallet ? `Connected: ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)} · Sign a message to prepare your payment note.` : 'Connect your Solana wallet to prepare a payment link.'}</p>
-      {prepared && drafts.length > 0 && <div className="paymentPrepared" role="status"><CheckCircle2 aria-hidden="true" /><div><strong>Payment note prepared</strong><p>Saved encrypted in this browser. A shareable link is not available yet.</p></div></div>}
+      {notice && <div className="paymentPrepared" role="status"><CheckCircle2 aria-hidden="true" /><strong>{notice}</strong></div>}
     </form>
 
     <section className="paymentHistory" aria-labelledby="paymentHistoryTitle">
-      <div className="paymentHistoryHeading"><h2 id="paymentHistoryTitle">Your payment links</h2></div>
-      {drafts.length ? <div className="paymentDrafts">{drafts.map((draft) => <article className="paymentDraft" key={draft.invoice.id}>
-        <div><strong>{draft.reference || 'Payment request'}</strong><span>{format(Number(draft.invoice.amount) / 1e9, 9)} SOL · {POOLS.find((item) => item.id === draft.invoice.protocol)?.name}</span><small>Prepared locally · {new Date(draft.createdAt).toLocaleDateString()}</small></div>
-        <button type="button" className="ghost" onClick={() => downloadRecovery(draft)}><Download aria-hidden="true" /><span>Recovery backup</span></button>
-      </article>)}</div> : <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>Your payments, in one place</h3><p>{wallet ? 'Prepared payment notes will appear here.' : 'Connect your wallet to view notes saved in this browser.'}</p></div>}
+      <div className="paymentHistoryHeading"><h2 id="paymentHistoryTitle">Your payment links</h2>
+        {wallet && <button className="ghost" type="button" disabled={busy || loading} onClick={() => run(async (signal) => { await merchantAccess(signal); setRefresh((value) => value + 1) })}>
+          <RefreshCw aria-hidden="true" />{access ? 'Refresh' : 'Load payment links'}
+        </button>}
+      </div>
+      {historyError && <p className="paymentError" role="alert">{historyError}</p>}
+      {loading && <p className="paymentLoading" role="status">Loading payment links...</p>}
+      {history.payments.length > 0 && <div className="paymentDrafts">{history.payments.map((payment) => <React.Fragment key={payment.payment_id}>
+        <article className="paymentDraft">
+          <div><strong>{payment.record.reference || 'Payment request'}</strong><span>{format(Number(payment.record.invoice.amount) / 1e9, 9)} SOL · {POOLS.find((item) => item.id === payment.record.invoice.protocol)?.name}</span>
+            <small>{new Date(payment.created_at).toLocaleDateString()}</small>
+            <span className={`paymentStatus ${payment.status}`}><span aria-hidden="true">{payment.status === 'paid' ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{payment.status === 'paid' ? 'Paid' : 'Awaiting payment'}</span>
+            {payment.deposit_transaction && <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(payment.deposit_transaction)}`} target="_blank" rel="noreferrer">Deposit receipt <ExternalLink /></a>}
+          </div>
+          <div className="paymentRowActions">
+            <button type="button" className="ghost paymentIcon" title="Copy payment link" aria-label="Copy payment link" onClick={() => copyLink(payment.payment_url)}><Copy /></button>
+            <a className="ghost paymentIcon" title="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
+            <button type="button" className="ghost paymentIcon" title="Download recovery backup" aria-label="Download recovery backup" onClick={() => downloadRecovery(payment.record)}><Download /></button>
+            {payment.status !== 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => { setDepositFor(payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
+          </div>
+        </article>
+        {depositFor === payment.payment_id && payment.status !== 'paid' && <form className="paymentReport" onSubmit={(event) => {
+          event.preventDefault()
+          run(async (signal) => {
+            setStatus('Verifying deposit...')
+            await reportPaymentDeposit(payment.payment_id, transactionId.trim(), signal)
+            signal.throwIfAborted()
+            setHistory((previous) => ({ ...previous, payments: previous.payments.map((item) => item.payment_id === payment.payment_id ? { ...item, status: 'paid' } : item) }))
+            setDepositFor(null); setRefresh((value) => value + 1); setNotice('Deposit verified')
+          })
+        }}><label htmlFor="merchantDeposit">Deposit transaction ID</label><input id="merchantDeposit" value={transactionId} onChange={(event) => setTransactionId(event.target.value)} disabled={busy} maxLength={88} autoComplete="off" required />
+          <button className="ghost" disabled={busy || !transactionId.trim()} type="submit">{busy ? 'Verifying...' : 'Verify deposit'}</button>
+          <button className="ghost paymentIcon" type="button" title="Cancel" aria-label="Cancel deposit verification" disabled={busy} onClick={() => setDepositFor(null)}><X /></button>
+        </form>}
+      </React.Fragment>)}</div>}
+      {(offset > 0 || history.next_offset !== null) && <div className="paymentPagination">
+        <button className="ghost" type="button" disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}><ArrowLeft />Previous</button>
+        <button className="ghost" type="button" disabled={loading || history.next_offset === null} onClick={() => setOffset(history.next_offset)}>Next<ArrowRight /></button>
+      </div>}
+      {drafts.filter((draft) => !published.has(draft.invoice.id)).map((draft) => <article className="paymentDraft paymentLocal" key={draft.invoice.id}>
+        <div><strong>{draft.reference || 'Payment request'}</strong><span>{format(Number(draft.invoice.amount) / 1e9, 9)} SOL</span><small>Not published</small></div>
+        <div className="paymentRowActions"><button type="button" className="ghost paymentIcon" title="Download recovery backup" aria-label="Download recovery backup" onClick={() => downloadRecovery(draft)}><Download /></button>
+          <button type="button" className="ghost" disabled={busy} onClick={() => run(async (signal) => publish(draft, signal, await merchantAccess(signal)))}><Upload />Publish link</button></div>
+      </article>)}
+      {!history.payments.length && !drafts.length && !loading && <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>{access ? 'No payment links yet' : 'Your payments, in one place'}</h3><p>{wallet ? 'Your payment requests will appear here.' : 'Connect your wallet to view your payment links.'}</p></div>}
     </section>
   </div>
 }

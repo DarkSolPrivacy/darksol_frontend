@@ -1,5 +1,6 @@
 import { PublicKey } from '@solana/web3.js'
 import { parseAmount } from './transfer-validation.js'
+import { MERCHANT_IDENTITY_MESSAGE, deriveMerchantAccess } from './merchant-identity.js'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -9,6 +10,17 @@ const hex = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2,
 const unhex = (value) => {
   if (typeof value !== 'string' || !/^(?:[0-9a-f]{2})+$/.test(value)) throw new Error('Invalid recovery data')
   return Uint8Array.from(value.match(/../g), (byte) => parseInt(byte, 16))
+}
+
+export async function prepareMerchantAccess({ provider, address, signal }) {
+  const signature = await sign(provider, address, MERCHANT_IDENTITY_MESSAGE, signal)
+  try {
+    const access = await deriveMerchantAccess(signature)
+    assertSession(provider, address, signal)
+    return access
+  } finally {
+    signature.fill(0)
+  }
 }
 
 function signingMessage(invoice) {

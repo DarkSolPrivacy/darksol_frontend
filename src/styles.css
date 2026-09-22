@@ -771,3 +771,35 @@ html,body{overflow-x:clip}
 .paymentDraft small { font-size: 10px; color: #999; }
 .paymentDraft > button { flex-shrink: 0; }
 @media(max-width:430px) { .paymentDraft { align-items: flex-start; flex-direction: column; } }
+.paymentHistoryHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.paymentLoading { color: #AAA; font-size: 12px; }
+.paymentRowActions { display: flex !important; flex-wrap: wrap; align-items: center; gap: 8px !important; }
+.paymentIcon { width: 36px; height: 36px; padding: 8px !important; display: inline-flex; justify-content: center; align-items: center; }
+.paymentIcon svg, .paymentRowActions svg, .paymentHistoryHeading svg, .paymentPagination svg, .paymentReport svg { width: 16px; height: 16px; flex-shrink: 0; }
+.paymentStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }
+.paymentStatus > span { display: inline-flex; }
+.paymentStatus svg { width: 14px; height: 14px; }
+.paymentStatus.paid, .paymentCheckoutState.paid { color: #96D4AD; }
+.paymentStatus.pending { color: #E3C878; }
+.paymentStatusDot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.paymentReceipt { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #96BCDB; overflow-wrap: anywhere; }
+.paymentReceipt svg { width: 13px; height: 13px; }
+.paymentReport { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 18px; border-top: 1px solid var(--line); }
+.paymentReport label { width: 100%; color: #BBB; font-size: 12px; }
+.paymentReport input { flex: 1; min-width: 150px; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 2px; background: #0A0A0A; color: var(--text); font-size: 12px; }
+.paymentPagination { display: flex; justify-content: space-between; margin-top: 16px; }
+.paymentLocal { border-bottom: 1px solid var(--line); }
+.paymentCheckoutBody { max-width: 540px; margin: 32px auto; }
+.paymentCheckoutPool { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.paymentCheckoutPool img { width: 28px; height: 28px; object-fit: contain; }
+.paymentCheckoutPool small { margin-left: auto; color: #AAA; font-size: 11px; }
+.paymentCheckoutAmount { margin: 32px 0 24px; font-size: 40px; line-height: 1.2; overflow-wrap: anywhere; }
+.paymentCheckoutAmount > span { display: inline-block; margin-left: 12px; font-size: 18px; color: #AAA; }
+.paymentCheckoutState { display: flex; align-items: center; gap: 10px; color: #E3C878; font-size: 14px; }
+.paymentCheckoutState svg { width: 20px; height: 20px; }
+.paymentCheckoutId { color: #999; font-size: 11px; margin: 18px 0 30px; }
+.checkoutReport { padding: 22px 0; margin-top: 24px; }
+.paymentCheckout .paymentReceipt { margin-top: 12px; }
+.paymentPrimary { white-space: normal; overflow-wrap: anywhere; }
+.paymentPrimary svg { flex-shrink: 0; }
+@media(max-width:600px) { .paymentDraft { flex-wrap: wrap; } .paymentCheckoutAmount { font-size: 32px; } }
