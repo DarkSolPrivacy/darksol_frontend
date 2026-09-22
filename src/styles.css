@@ -684,3 +684,70 @@ html,body{overflow-x:clip}
 @keyframes addressGlow{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 0 1px var(--accent-33),0 0 16px var(--accent-13)}}
 @media(prefers-reduced-motion:reduce){.recipientRow.needsAddress{animation:none;box-shadow:0 0 0 1px var(--accent-33)}}
 .actionArea>button{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+
+/* Payment links */
+.paymentLinksPage { padding-bottom: 36px; }
+.paymentLinksPage > header { height: 122px; }
+.paymentIntro { margin: 20px 0 26px; color: #999; font-size: 13px; line-height: 1.8; text-align: center; }
+.paymentCreate { margin-top: 0; padding: 24px; }
+.paymentSectionTitle { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+.paymentSectionTitle > svg { width: 18px; height: 18px; color: var(--accent); }
+.paymentSectionTitle > span { margin-left: auto; color: #888; font: 10px "JetBrains Mono", monospace; }
+.paymentFieldLabel { display: block; margin-bottom: 10px; color: #999; font: 10px "JetBrains Mono", monospace; letter-spacing: 1.3px; }
+.paymentFieldLabel > span { margin-left: 8px; color: #777; font: 11px Inter, sans-serif; letter-spacing: 0; }
+.paymentAmountRow { min-height: 90px; padding: 12px 16px; gap: 12px; border: 1px solid var(--line); }
+.paymentAmountRow > input { width: 100%; min-width: 0; font-size: 32px; }
+.paymentAmountRow:has([aria-invalid=true]) { border-color: #BE7777; }
+.paymentAmountError { margin: 8px 0 0; color: #E6AAAA; font-size: 11px; }
+.paymentAsset { display: flex; align-items: center; gap: 9px; font: 500 15px "JetBrains Mono", monospace; }
+.paymentAsset img { width: 26px; height: 26px; }
+.paymentReference { margin-top: 22px; }
+.paymentReference > input { width: 100%; height: 45px; padding: 0 14px; border: 1px solid var(--line); border-radius: 2px; background: #0A0A0A; color: var(--text); font-size: 12px; }
+.paymentReference > input::placeholder { color: #777; }
+.paymentPoolHeading { display: flex; align-items: center; gap: 8px; margin-top: 22px; margin-bottom: 10px; }
+.paymentPoolHeading > .paymentFieldLabel { margin: 0; }
+.paymentSort { position: relative; flex-shrink: 0; }
+.paymentSort > summary { display: grid; place-items: center; width: 32px; height: 32px; color: #999; list-style: none; cursor: pointer; border: 1px solid transparent; border-radius: 3px; }
+.paymentSort > summary::-webkit-details-marker { display: none; }
+.paymentSort > summary:hover, .paymentSort[open] > summary { color: var(--accent); border-color: var(--line); background: var(--surface-raised); }
+.paymentSort > summary svg { width: 16px; height: 16px; }
+.paymentSortLabel { margin-left: auto; color: #888; font-size: 10px; }
+.paymentSortOptions { position: absolute; top: calc(100% + 8px); left: -136px; z-index: 10; width: 290px; max-width: calc(100vw - 64px); margin: 0; padding: 16px; border: 1px solid #444; background: #151515; box-shadow: 0 12px 32px #0009; border-radius: 3px; }
+.paymentSortOptions legend { float: left; width: 100%; margin-bottom: 12px; padding: 0; color: #AAA; font-size: 11px; }
+.paymentSortOptions label { clear: both; display: flex; align-items: flex-start; gap: 10px; padding: 12px 0; cursor: pointer; }
+.paymentSortOptions label + label { border-top: 1px solid var(--line); }
+.paymentSortOptions input { margin: 2px 0 0; accent-color: var(--accent); }
+.paymentSortOptions strong { display: block; font-size: 12px; font-weight: 500; }
+.paymentSortOptions small { display: block; margin-top: 6px; color: #999; font-size: 11px; line-height: 1.6; }
+.paymentPoolPicker { min-width: 0; margin: 0; padding: 0; border: 0; }
+.paymentPoolPicker > div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.paymentPoolPicker label { display: flex; align-items: center; gap: 10px; min-height: 70px; padding: 12px; border: 1px solid var(--line); border-radius: 2px; cursor: pointer; font-size: 12px; color: #AAA; }
+.paymentPoolPicker label.selected { border-color: var(--accent); background: var(--accent-03); color: var(--text); }
+.paymentPoolPicker input { order: 3; margin-left: auto; accent-color: var(--accent); }
+.paymentPoolPicker img { width: 23px; height: 23px; object-fit: contain; border-radius: 5px; }
+.paymentPoolPicker label > span { min-width: 0; }
+.paymentPoolPicker small { display: block; margin-top: 6px; color: #999; font: 9px "JetBrains Mono", monospace; line-height: 1.6; overflow-wrap: anywhere; }
+.paymentPoolHint { margin: 12px 0 22px; color: #999; font-size: 10px; line-height: 1.7; }
+.paymentPrimary { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--accent); border-radius: 2px; background: var(--accent); color: #0A0A0A; font-size: 12px; font-weight: 600; }
+.paymentPrimary svg { width: 16px; }
+.paymentPrimary:disabled { border-color: #333; background: #252525; color: #888; cursor: not-allowed; }
+.paymentFormHint { margin: 12px 0 0; text-align: center; color: #888; font-size: 10px; line-height: 1.6; }
+.paymentHistory { margin-top: 36px; }
+.paymentHistoryHeading { margin-bottom: 18px; }
+.paymentHistoryHeading h2 { font-size: 17px; }
+.paymentEmpty { padding: 36px 20px; border: 1px dashed var(--line); text-align: center; }
+.paymentEmpty > svg { width: 24px; height: 24px; color: #777; stroke-width: 1.5; }
+.paymentEmpty h3 { margin: 16px 0 8px; font-size: 13px; }
+.paymentEmpty p { margin: 0; color: #999; font-size: 11px; line-height: 1.7; }
+.paymentLinksPage :is(button, input, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.paymentPoolPicker label:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media(max-width:760px) {
+  .paymentLinksPage > header { height: 105px; }
+  .paymentCreate { padding: 18px; }
+}
+@media(max-width:520px) {
+  .paymentPoolPicker > div { grid-template-columns: 1fr; }
+  .paymentPoolPicker label { min-height: 66px; }
+  .paymentSortLabel { font-size: 9px; }
+}

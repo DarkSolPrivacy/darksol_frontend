@@ -5,8 +5,9 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { ImprovedNoise } from 'three/examples/jsm/math/ImprovedNoise.js'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, Database, ExternalLink, Home, LogOut, Menu, Plus, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
+import PaymentLinks from './payment-links.jsx'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
 import { BRIDGE_CHAINS, bridgeChain, bridgeEligibility, sanitizeBridgeAddress, validateBridgeAddress } from './bridge-routes.js'
@@ -254,8 +255,8 @@ function MobileBar({ onOpen }) {
   return <div className="mobileBar"><button className="mobile" type="button" aria-label="Open navigation" aria-controls="primaryNav" onClick={onOpen}><Menu /></button><EclipseLogo /></div>
 }
 
-function Sidebar({ open, view, onToggle, onHome, onAnalytics, onClose }) {
-  return <aside id="primaryNav"><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button><button className="drawerClose" type="button" aria-label="Close navigation" onClick={onClose}><X /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className={view === 'analytics' ? 'analyticsNav active' : 'analyticsNav'} href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code></div></aside>
+function Sidebar({ open, view, onToggle, onHome, onPaymentLinks, onAnalytics, onClose }) {
+  return <aside id="primaryNav"><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button><button className="drawerClose" type="button" aria-label="Close navigation" onClick={onClose}><X /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className={view === 'payments' ? 'active' : ''} href="/payment-links" aria-label="Payment links" onClick={onPaymentLinks}><Link2 /><span>Payment links</span></a><a className={view === 'analytics' ? 'analyticsNav active' : 'analyticsNav'} href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code></div></aside>
 }
 
 function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selected, suggested, onSelect, onOpenProtocol }) {
@@ -1036,8 +1037,13 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   </div>
 }
 
+function PaymentLinksPage() {
+  const summary = usePoolSummary()
+  return <PaymentLinks summary={summary} />
+}
+
 function App() {
-  const getPage = () => window.location.pathname.replace(/\/+$/, '') === '/analytics' ? 'analytics' : 'home'
+  const getPage = () => ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -1051,12 +1057,12 @@ function App() {
   }, [])
   useEffect(() => {
     const isAnalytics = view === 'analytics'
-    document.title = isAnalytics ? 'Analytics – DarkSol' : 'DarkSol'
+    document.title = isAnalytics ? 'Analytics – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : 'DarkSol'
     const description = isAnalytics
       ? 'On-chain privacy analytics for Solana and Arbitrum private routing protocols.'
-      : 'DarkSol private routing and on-chain privacy analytics.'
+      : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.' : 'DarkSol private routing and on-chain privacy analytics.'
     document.querySelector('meta[name="description"]')?.setAttribute('content', description)
-    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : '/'}`)
+    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : '/'}`)
   }, [view])
   useEffect(() => {
     if (!drawerOpen) return
@@ -1066,19 +1072,20 @@ function App() {
     window.addEventListener('keydown', closeOnEscape)
     return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape) }
   }, [drawerOpen])
-  function navigate(path) { window.history.pushState({}, '', path); setView(path.startsWith('/analytics') ? 'analytics' : 'home') }
+  function navigate(path) { window.history.pushState({}, '', path); setView(getPage()) }
   function openAnalytics(id = protocol) { setProtocol(id); setSelectedEstimate(null); if (view !== 'analytics') navigate('/analytics') }
   function closeDrawer() { setDrawerOpen(false) }
   function launchApp(event) { event.preventDefault(); closeDrawer(); navigate('/') }
   function openHome(event) { event.preventDefault(); closeDrawer(); navigate('/') }
+  function openPaymentLinks(event) { event.preventDefault(); closeDrawer(); navigate('/payment-links') }
   function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
   const mobileNav = <>
     <MobileBar onOpen={() => setDrawerOpen(true)} />
-    <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
+    <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PrivacyHome /></main></div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage /> : <PrivacyHome />}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
