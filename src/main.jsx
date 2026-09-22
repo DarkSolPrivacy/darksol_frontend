@@ -8,6 +8,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, ResponsiveContaine
 import { ArrowLeftRight, ArrowRight, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks from './payment-links.jsx'
+import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
 import { BRIDGE_CHAINS, bridgeChain, bridgeEligibility, sanitizeBridgeAddress, validateBridgeAddress } from './bridge-routes.js'
@@ -318,7 +319,8 @@ function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open
   </section>
 }
 
-function PrivacyHome() {
+function PrivacyHome({ walletSession }) {
+  const { wallet, connecting, connectWallet: connectSession, disconnectWallet: disconnectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
   const [amount, setAmount] = useState('')
@@ -333,7 +335,6 @@ function PrivacyHome() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [dirty, setDirty] = useState(false)
-  const [wallet, setWallet] = useState(null)
   const [sending, setSending] = useState(false)
   const [sendStatus, setSendStatus] = useState('')
   const [sendError, setSendError] = useState('')
@@ -385,20 +386,8 @@ function PrivacyHome() {
   const plannedDestinationAsset = isBridge ? asset : destinationAsset
 
   useEffect(() => {
-    const provider = window.phantom?.solana || window.solana
-    if (!provider?.on) return undefined
-    const accountChanged = (publicKey) => {
-      setWallet(publicKey ? { provider, address: String(publicKey) } : null)
-      setReceipt(null); setSendError('')
-    }
-    const disconnected = () => { setWallet(null); setReceipt(null); setSendStatus('') }
-    provider.on('accountChanged', accountChanged)
-    provider.on('disconnect', disconnected)
-    return () => {
-      provider.off?.('accountChanged', accountChanged)
-      provider.off?.('disconnect', disconnected)
-    }
-  }, [])
+    setReceipt(null); setSendError(''); setSendStatus(''); setSendAttempted(false)
+  }, [wallet])
 
   useEffect(() => {
     const requestId = ++balanceSequence.current
@@ -490,27 +479,14 @@ function PrivacyHome() {
   }
 
   async function connectWallet() {
-    setSendError(''); setSendStatus('Connecting…')
-    try {
-      const provider = window.phantom?.solana || window.solana
-      if (!provider?.connect) throw new Error('Install Phantom or another compatible Solana wallet')
-      const connected = await provider.connect()
-      const publicKey = String(connected.publicKey || provider.publicKey || '')
-      if (!publicKey) throw new Error('Wallet did not provide an address')
-      setWallet({ provider, address: publicKey }); setSendStatus('')
-    } catch (connectError) {
-      setSendError(connectError instanceof Error ? connectError.message : String(connectError)); setSendStatus('')
-    }
+    setSendError('')
+    try { await connectSession() }
+    catch (error) { setSendError(error instanceof Error ? error.message : String(error)) }
   }
 
   async function disconnectWallet() {
-    const provider = wallet?.provider
-    setWallet(null); setReceipt(null); setSendError(''); setSendStatus(''); setSendAttempted(false)
-    try {
-      await provider?.disconnect?.()
-    } catch {
-      // The local session is already cleared even if the wallet extension rejects.
-    }
+    setReceipt(null); setSendError(''); setSendStatus(''); setSendAttempted(false)
+    await disconnectSession()
   }
 
   async function sendTransfer() {
@@ -615,7 +591,7 @@ function PrivacyHome() {
     {error && <section className="notice error"><ShieldX /><span>{error}</span></section>}
     <section className="sendAction panel">
       <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
-      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || Boolean(wallet && (receipt?.depositSignature || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
+      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (receipt?.depositSignature || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
     </section>
     {recommended && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
@@ -1037,12 +1013,13 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   </div>
 }
 
-function PaymentLinksPage() {
+function PaymentLinksPage({ walletSession }) {
   const summary = usePoolSummary()
-  return <PaymentLinks summary={summary} />
+  return <PaymentLinks summary={summary} walletSession={walletSession} />
 }
 
 function App() {
+  const walletSession = useWalletSession()
   const getPage = () => ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -1085,7 +1062,7 @@ function App() {
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage /> : <PrivacyHome />}</main></div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

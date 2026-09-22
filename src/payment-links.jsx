@@ -1,17 +1,79 @@
-import React, { useRef, useState } from 'react'
-import { ArrowRight, Link2, Settings } from 'lucide-react'
+import React, { useEffect, useRef, useState } from 'react'
+import { ArrowRight, CheckCircle2, Download, Link2, LogOut, Settings, Wallet } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
+import { preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
 
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
 
-export default function PaymentLinks({ summary }) {
+export default function PaymentLinks({ summary, walletSession }) {
   const [amount, setAmount] = useState('')
   const [reference, setReference] = useState('')
   const [pool, setPool] = useState('cloakc')
   const [sort, setSort] = useState('fees')
   const settings = useRef(null)
+
+  const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
+  const [draftState, setDraftState] = useState({ address: null, records: [] })
+  const drafts = wallet && draftState.address === wallet.address ? draftState.records : []
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
+  const [prepared, setPrepared] = useState(false)
+  const operation = useRef(null)
+
+  useEffect(() => {
+    setBusy(false); setStatus(''); setError(''); setPrepared(false); setDraftState({ address: wallet?.address ?? null, records: [] })
+    if (wallet) {
+      try { setDraftState({ address: wallet.address, records: readPaymentDrafts(localStorage, wallet.address) }) }
+      catch { setError('Could not read saved payment notes. Check that browser storage is available.') }
+    }
+    return () => { operation.current?.abort(); operation.current = null }
+  }, [wallet])
+
+  async function createPayment(event) {
+    event.preventDefault()
+    if (operation.current || connecting) return
+    setError('')
+    if (!wallet) {
+      try { await connectWallet() }
+      catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not connect wallet') }
+      return
+    }
+    if (!amountResult.valid) return
+    const controller = new AbortController()
+    operation.current = controller
+    setBusy(true); setPrepared(false)
+    try {
+      const draft = await preparePaymentNote({
+        provider: wallet.provider, address: wallet.address, protocol: pool,
+        amount, reference, signal: controller.signal,
+        onStatus: (message) => { if (!controller.signal.aborted) setStatus(message) },
+      })
+      if (!controller.signal.aborted) {
+        setDraftState((current) => ({ address: wallet.address, records: [draft, ...(current.address === wallet.address ? current.records : [])] }))
+        setPrepared(true)
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not prepare payment note')
+    } finally {
+      if (operation.current === controller) {
+        operation.current = null
+        setBusy(false); setStatus('')
+      }
+    }
+  }
+
+  function downloadRecovery(draft) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `darksol-payment-${draft.invoice.id}.json`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   const amountResult = parseAmount(amount, 'SOL')
   const amountError = amount && !amountResult.valid ? amountResult.error : ''
   const pools = POOLS.map((item) => {
@@ -34,15 +96,15 @@ export default function PaymentLinks({ summary }) {
     <header><div><p className="eyebrow">PAYMENT LINKS</p><h1>Receive privately</h1></div></header>
     <p className="paymentIntro">Get paid without sharing your wallet address with your customer.</p>
 
-    <form className="sendCard panel paymentCreate" onSubmit={(event) => event.preventDefault()}>
+    <form className="sendCard panel paymentCreate" onSubmit={createPayment}>
       <div className="paymentSectionTitle"><Link2 aria-hidden="true" /><h2>Create a payment link</h2><span>Solana</span></div>
       <label className="paymentFieldLabel" htmlFor="paymentAmount">REQUEST AMOUNT</label>
       <div className="amountRow paymentAmountRow">
-        <input id="paymentAmount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
+        <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
         <span className="paymentAsset"><img src="/logos/sol.svg" alt="" />SOL</span>
       </div>
       {amountError && <p className="paymentAmountError" id="paymentAmountError" role="status">{amountError}</p>}
-      <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">REFERENCE <span>Optional</span></label><input id="paymentReference" placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
+      <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">REFERENCE <span>Optional</span></label><input id="paymentReference" disabled={busy} placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
       <div className="paymentPoolHeading">
         <span className="paymentFieldLabel" id="paymentPoolLabel">RECEIVE THROUGH</span>
         {/* Closing on blur hides the radio during label activation and can crash Chrome. */}
@@ -62,7 +124,7 @@ export default function PaymentLinks({ summary }) {
         <span className="paymentSortLabel">{sort === 'fees' ? 'Lowest fees first' : 'Most active first'}</span>
       </div>
       <fieldset className="paymentPoolPicker" aria-labelledby="paymentPoolLabel"><div>{pools.map((item) => <label className={pool === item.id ? 'selected' : ''} key={item.id}>
-        <input type="radio" name="paymentPool" value={item.id} checked={pool === item.id} onChange={() => setPool(item.id)} />
+        <input type="radio" name="paymentPool" disabled={busy} value={item.id} checked={pool === item.id} onChange={() => setPool(item.id)} />
         <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{sort === 'fees'
           ? amountResult.valid ? `${format(item.fee, 9)} SOL est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} SOL`
           : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`}</small></span>
@@ -71,13 +133,23 @@ export default function PaymentLinks({ summary }) {
         ? 'Estimated withdrawal fees. Network and deposit costs are additional.'
         : summary.loading ? 'Loading pool activity…' : !volumeAvailable ? 'Activity ranking is unavailable right now. You can still choose a pool.'
           : 'Based on total pool volume over 24 hours. Activity alone does not guarantee privacy.'}</p>
-      <button className="paymentPrimary" type="submit" disabled aria-describedby="paymentAvailability">Create payment link <ArrowRight aria-hidden="true" /></button>
-      <p className="paymentFormHint" id="paymentAvailability">Payment link creation is coming soon.</p>
+      {error && <p className="paymentError" role="alert">{error}</p>}
+      <div className="paymentActions">
+        <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && !amountResult.valid)} aria-describedby="paymentAvailability">
+          {connecting ? 'Connecting…' : busy ? status || 'Preparing note…' : !wallet ? <><Wallet aria-hidden="true" />Connect wallet</> : <>Create payment link <ArrowRight aria-hidden="true" /></>}
+        </button>
+        {wallet && <button className="paymentDisconnect" type="button" aria-label="Disconnect wallet" title="Disconnect wallet" disabled={busy} onClick={disconnectWallet}><LogOut /></button>}
+      </div>
+      <p className="paymentFormHint" id="paymentAvailability">{wallet ? `Connected: ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)} · Sign a message to prepare your payment note.` : 'Connect your Solana wallet to prepare a payment link.'}</p>
+      {prepared && drafts.length > 0 && <div className="paymentPrepared" role="status"><CheckCircle2 aria-hidden="true" /><div><strong>Payment note prepared</strong><p>Saved encrypted in this browser. A shareable link is not available yet.</p></div></div>}
     </form>
 
     <section className="paymentHistory" aria-labelledby="paymentHistoryTitle">
       <div className="paymentHistoryHeading"><h2 id="paymentHistoryTitle">Your payment links</h2></div>
-      <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>Your payments, in one place</h3><p>Your links and payment confirmations will appear here.</p></div>
+      {drafts.length ? <div className="paymentDrafts">{drafts.map((draft) => <article className="paymentDraft" key={draft.invoice.id}>
+        <div><strong>{draft.reference || 'Payment request'}</strong><span>{format(Number(draft.invoice.amount) / 1e9, 9)} SOL · {POOLS.find((item) => item.id === draft.invoice.protocol)?.name}</span><small>Prepared locally · {new Date(draft.createdAt).toLocaleDateString()}</small></div>
+        <button type="button" className="ghost" onClick={() => downloadRecovery(draft)}><Download aria-hidden="true" /><span>Recovery backup</span></button>
+      </article>)}</div> : <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>Your payments, in one place</h3><p>{wallet ? 'Prepared payment notes will appear here.' : 'Connect your wallet to view notes saved in this browser.'}</p></div>}
     </section>
   </div>
 }
