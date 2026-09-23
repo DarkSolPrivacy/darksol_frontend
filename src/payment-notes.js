@@ -146,10 +146,10 @@ async function privacyCashTools(seed) {
 async function buildNote(keys, index, protocol, amount) {
   if (protocol === 'privacycash') {
     const { wasm, encryption, keypair, Utxo } = await privacyCashTools(await privacyCashSeed(keys, index))
-    // The SDK's default blinding uses Math.random(); supply secure randomness.
+    // The SDK's default blinding uses Math.random(); supply secure randomness. 16 bytes, not 31: the blinding is sealed on-chain as decimal text, and 31 left the deposit no room for Phantom's Lighthouse guard.
     const notes = [amount, 0n].map((value) => new Utxo({
       lightWasm: wasm, keypair, amount: value,
-      blinding: BigInt('0x' + hex(crypto.getRandomValues(new Uint8Array(31)))).toString(),
+      blinding: BigInt('0x' + hex(crypto.getRandomValues(new Uint8Array(16)))).toString(),
     }))
     return Promise.all(notes.map(async (note, output) => ({
       amount: note.amount.toString(), mint: note.mintAddress,
