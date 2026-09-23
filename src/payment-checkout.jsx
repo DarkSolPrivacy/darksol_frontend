@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, ExternalLink, Link2, LogOut, RefreshCw, Wallet } from 'lucide-react'
 import { getPaymentLink, reportPaymentDeposit, validDepositId } from './payment-api.js'
-import { payPaymentInvoice, validateCheckout } from './payment-deposit.js'
+import { depositExpired, payPaymentInvoice, validateCheckout } from './payment-deposit.js'
 import { LOGOS } from '../protocols/registry.js'
+import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
 export default function PaymentCheckout({ paymentId, walletSession }) {
   const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
@@ -59,8 +60,9 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
     return () => { controller.abort(); clearTimeout(timer) }
   }, [paymentId, reportedId, refresh, busy])
 
-  function rememberDeposit(id) {
+  function rememberDeposit(id, blockhash) {
     // Keep an uncertain broadcast retryable as a status check, never a second payment.
+    if (blockhash) localStorage.setItem(`${receiptKey}:blockhash`, blockhash)
     localStorage.setItem(receiptKey, id)
     if (localStorage.getItem(receiptKey) !== id) throw new Error('Could not save deposit transaction ID')
     setTransactionId(id); setReportedId(id)
@@ -68,7 +70,12 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
 
   async function fund(signal) {
     const existing = localStorage.getItem(receiptKey)
-    if (existing) throw new Error('A deposit is already awaiting confirmation. Verify it before paying again.')
+    if (existing) {
+      if (!await depositExpired(existing, localStorage.getItem(`${receiptKey}:blockhash`))) {
+        throw new Error('A deposit is already awaiting confirmation. Verify it before paying again.')
+      }
+      localStorage.removeItem(receiptKey); localStorage.removeItem(`${receiptKey}:blockhash`)
+    }
     const id = await payPaymentInvoice({ invoice, ...wallet, signal,
       onStatus: (message) => { if (!signal.aborted) setStatus(message) }, onSigned: rememberDeposit })
     rememberDeposit(id)
@@ -126,7 +133,7 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
   }
 
   const paid = invoice?.status === 'paid'
-  const tooSmall = invoice?.protocol === 'cloakc' && BigInt(invoice.amount) < 10000000n
+  const tooSmall = invoice?.protocol === 'cloakc' && BigInt(invoice.amount) < PAYMENT_ASSETS[invoice.asset].cloakMin
   return <div className="homePage paymentLinksPage paymentCheckout">
     <header><div><p className="eyebrow">DARKSOL PAYMENT</p><h1>{paid ? 'Payment received' : 'Private checkout'}</h1></div></header>
     {loading && <p className="paymentLoading" role="status">Loading payment...</p>}
@@ -134,16 +141,16 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
     {!loading && !invoice && <button className="ghost" onClick={() => setRefresh((value) => value + 1)}><RefreshCw />Retry</button>}
     {invoice && <section className="paymentCheckoutBody">
       <div className="paymentCheckoutPool"><img src={LOGOS[invoice.protocol].src} alt="" /><span>{invoice.protocol === 'cloakc' ? 'Cloak' : 'Privacy Cash'}</span><small>Solana mainnet</small></div>
-      <p className="paymentCheckoutAmount">{(Number(invoice.amount) / 1e9).toLocaleString('en-US', { maximumFractionDigits: 9 })}<span>SOL</span></p>
+      <p className="paymentCheckoutAmount">{assetAmount(invoice.amount, invoice.asset).toLocaleString('en-US', { maximumFractionDigits: 9 })}<span>{invoice.asset}</span></p>
       <div className={`paymentCheckoutState ${paid ? 'paid' : ''}`} role="status">{paid ? <CheckCircle2 /> : <Link2 />}<span>{paid ? 'Paid' : reportedId ? 'Awaiting deposit confirmation' : 'Awaiting payment'}</span></div>
       <p className="paymentCheckoutId">Invoice <code>{paymentId.slice(0, 12)}</code></p>
       {paid ? <p className="paymentFormHint">This invoice is settled.</p> : <>
-        {tooSmall && <p className="paymentError">Cloak requires at least 0.01 SOL. Ask the merchant for a new link.</p>}
+        {tooSmall && <p className="paymentError">Cloak requires at least {cloakMinimum(invoice.asset)}. Ask the merchant for a new link.</p>}
         {!reportedId && <div className="paymentActions"><button type="button" className="paymentPrimary" disabled={busy || connecting || Boolean(loadError) || tooSmall} onClick={pay}>
           <Wallet />{connecting ? 'Connecting...' : busy ? status || 'Preparing payment...' : wallet ? 'Pay invoice' : 'Connect wallet to pay'}
         </button>{wallet && <button className="paymentDisconnect" type="button" disabled={busy} title="Disconnect wallet" aria-label="Disconnect wallet" onClick={disconnectWallet}><LogOut /></button>}</div>}
         {busy && reportedId && <p className="paymentLoading" role="status">{status || 'Verifying deposit...'}</p>}
-        {!reportedId && <p className="paymentFormHint">Network fees are additional.</p>}
+        {!reportedId && <p className="paymentFormHint">{invoice.asset === 'SOL' ? 'Network fees are additional.' : 'Network fees are paid in SOL.'}</p>}
         <form className="paymentReport checkoutReport" onSubmit={verify}><label htmlFor="checkoutDeposit">{reportedId ? 'Deposit transaction ID' : 'Already paid? Verify your deposit'}</label>
           <input id="checkoutDeposit" value={transactionId} maxLength={88} autoComplete="off" disabled={busy} onChange={(event) => setTransactionId(event.target.value)} placeholder="Solana transaction ID" required />
           <button className="ghost" type="submit" disabled={busy || !transactionId.trim()}><RefreshCw />Verify deposit</button>

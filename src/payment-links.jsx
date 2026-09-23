@@ -3,18 +3,22 @@ import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
 import { Connection } from '@solana/web3.js'
-import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
+import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts, removePaymentDraft } from './payment-notes.js'
 import { createPaymentLink, deletePaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
 import { paymentRpcUrl } from './payment-deposit.js'
 import { SCAN_GAP, scanPrivacyCashNotes, withdrawPaymentNote } from './payment-withdraw.js'
 import { usdText, useUsdPrices } from './token-price.js'
+import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
-const PRICED = ['SOL']
+const PRICED = Object.keys(PAYMENT_ASSETS)
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
+const short = (value) => `${value.slice(0, 6)}…${value.slice(-6)}`
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
+const invoiceAmount = ({ amount, asset }) => `${format(assetAmount(amount, asset), 9)} ${asset}`
 
 export default function PaymentLinks({ summary, walletSession }) {
   const [amount, setAmount] = useState('')
+  const [asset, setAsset] = useState('SOL')
   const prices = useUsdPrices(PRICED)
   const [reference, setReference] = useState('')
   const [pool, setPool] = useState('cloakc')
@@ -44,18 +48,24 @@ export default function PaymentLinks({ summary, walletSession }) {
   const [withdrawFor, setWithdrawFor] = useState(null)
   const [recipient, setRecipient] = useState('')
   const [recovered, setRecovered] = useState(null)
+  // Kept in this browser only: telling the server would link the withdrawal to the deposit.
+  const [withdrawn, setWithdrawn] = useState(new Map())
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const dialog = useRef(null)
   const operation = useRef(null)
 
   useEffect(() => {
     setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(null)
     setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null)
     setPublished(new Set()); setDraftState({ address: wallet?.address ?? null, records: [] })
-    setPicking(null); setSelected(new Set()); setNoteKeys(null); setWithdrawFor(null); setRecovered(null)
+    setPicking(null); setSelected(new Set()); setNoteKeys(null); setWithdrawFor(null); setRecovered(null); setWithdrawn(new Map())
     if (wallet) {
       try {
         const records = readPaymentDrafts(localStorage, wallet.address)
         setDraftState({ address: wallet.address, records })
         setPublished(new Set(records.filter((record) => localStorage.getItem(`darksol:published:${wallet.address}:${record.invoice.id}`)).map((record) => record.invoice.id)))
+        const prefix = `darksol:withdrawn:${wallet.address}:`
+        setWithdrawn(new Map(Object.keys(localStorage).filter((key) => key.startsWith(prefix)).map((key) => [key.slice(prefix.length), localStorage.getItem(key)])))
       }
       catch { setError('Could not read saved payment notes. Check that browser storage is available.') }
     }
@@ -151,7 +161,7 @@ export default function PaymentLinks({ summary, walletSession }) {
       setStatus('Reserving a payment note...')
       // Read fresh: a key reused across two invoices would link them and share an IV.
       const { next_index } = await listPaymentLinks({ access: identity, signal })
-      const record = await preparePaymentNote({ ...wallet, keys, index: usedIndexes(next_index), protocol: pool, amount, reference, signal,
+      const record = await preparePaymentNote({ ...wallet, keys, index: usedIndexes(next_index), protocol: pool, asset, amount, reference, signal,
         onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
       signal.throwIfAborted()
       setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
@@ -177,9 +187,9 @@ export default function PaymentLinks({ summary, walletSession }) {
 
   // One file for a batch: a version 1 record is the only way to reach its note,
   // and a Cloak note is found from its record, so keep backups easy to keep.
-  function downloadSelected(payments) {
-    saveFile(payments.map((payment) => payment.record), `darksol-payments-${new Date().toISOString().slice(0, 10)}.json`)
-    setNotice(`Saved ${payments.length} recovery record${payments.length === 1 ? '' : 's'}`)
+  function downloadSelected(records) {
+    saveFile(records, `darksol-payments-${new Date().toISOString().slice(0, 10)}.json`)
+    setNotice(`Saved ${records.length} recovery record${records.length === 1 ? '' : 's'}`)
   }
 
   function startPicking(mode) {
@@ -194,24 +204,41 @@ export default function PaymentLinks({ summary, walletSession }) {
     })
   }
 
-  function confirmPicked(payments) {
+  // Pressing the active Download or Delete button again acts on the selection;
+  // with nothing selected it leaves the mode.
+  function confirmPicked() {
+    const payments = history.payments.filter((payment) => selected.has(payment.payment_id) && selectable(payment))
+    const local = unpublished.filter((draft) => selected.has(draft.invoice.id))
+    if (!payments.length && !local.length) { setPicking(null); return }
     if (picking === 'download') {
-      downloadSelected(payments)
+      downloadSelected([...payments.map((payment) => payment.record), ...local])
       setPicking(null); setSelected(new Set())
       return
     }
-    if (!confirm(`Delete ${payments.length} payment link${payments.length === 1 ? '' : 's'}? The links stop working for anyone who has them.`)) return
-    // Offered before the records are gone, not after.
-    if (confirm('Save a recovery backup of these first? Recommended.')) downloadSelected(payments)
+    setPendingDelete({ payments, local })
+    dialog.current.showModal()
+  }
+
+  function removePicked(backup) {
+    const { payments, local } = pendingDelete
+    dialog.current.close()
+    if (backup) downloadSelected([...payments.map((payment) => payment.record), ...local])
     run(async (signal) => {
-      const identity = await merchantAccess(signal)
-      for (const payment of payments) {
-        await deletePaymentLink(payment.payment_id, identity, signal)
-        signal.throwIfAborted()
-        try { localStorage.removeItem(`darksol:published:${wallet.address}:${payment.record.invoice.id}`) } catch { /* The draft stays listed as unpublished. */ }
+      if (payments.length) {
+        const identity = await merchantAccess(signal)
+        for (const payment of payments) {
+          await deletePaymentLink(payment.payment_id, identity, signal)
+          signal.throwIfAborted()
+          try { localStorage.removeItem(`darksol:published:${wallet.address}:${payment.record.invoice.id}`) } catch { /* The draft stays listed as unpublished. */ }
+        }
       }
+      // Never published, so nobody holds a link to pay them.
+      for (const draft of local) removePaymentDraft(localStorage, wallet.address, draft.invoice.id)
+      const gone = new Set(local.map((draft) => draft.invoice.id))
+      setDraftState((current) => ({ ...current, records: current.records.filter((record) => !gone.has(record.invoice.id)) }))
       setPicking(null); setSelected(new Set()); setRefresh((value) => value + 1)
-      setNotice(`Deleted ${payments.length} payment link${payments.length === 1 ? '' : 's'}`)
+      const count = payments.length + local.length
+      setNotice(`Removed ${count} payment link${count === 1 ? '' : 's'}`)
     })
   }
 
@@ -219,15 +246,27 @@ export default function PaymentLinks({ summary, walletSession }) {
     setWithdrawFor(id); setRecipient(''); setError(''); setNotice('')
   }
 
-  function withdrawRecord(record) {
+  function markWithdrawn(id, signature = '') {
+    setWithdrawn((previous) => new Map(previous).set(id, signature))
+    try { localStorage.setItem(`darksol:withdrawn:${wallet.address}:${id}`, signature) } catch { /* Shown until reload. */ }
+  }
+
+  function withdrawRecord(record, paid) {
     run(async (signal) => {
       const keys = record.version === 2 ? await paymentKeys(signal) : undefined
-      const signature = await withdrawPaymentNote({ ...wallet, record, keys, recipient, signal,
-        connection: new Connection(paymentRpcUrl(), 'confirmed'),
-        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+      let signature
+      try {
+        signature = await withdrawPaymentNote({ ...wallet, record, keys, recipient, signal,
+          connection: new Connection(paymentRpcUrl(), 'confirmed'),
+          onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+      } catch (cause) {
+        // A verified deposit with nothing unspent was withdrawn, likely from another device.
+        if (paid && /No unspent funds/.test(cause.message)) { markWithdrawn(record.invoice.id); setWithdrawFor(null) }
+        throw cause
+      }
       setWithdrawFor(null)
-      setRecovered((previous) => previous?.map((item) => item.record.invoice.id === record.invoice.id ? { ...item, spent: true } : item) ?? null)
-      setNotice(`Withdrawal submitted: ${signature}`)
+      markWithdrawn(record.invoice.id, signature)
+      setNotice(<>Withdrawal submitted · <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(signature)}`} target="_blank" rel="noreferrer">{short(signature)} <ExternalLink /></a></>)
     })
   }
 
@@ -242,7 +281,9 @@ export default function PaymentLinks({ summary, walletSession }) {
     })
   }
 
-  const withdrawForm = (record) => withdrawFor === record.invoice.id && <form className="paymentReport" onSubmit={(event) => { event.preventDefault(); withdrawRecord(record) }}>
+  const isWithdrawn = (record) => withdrawn.has(record.invoice.id)
+  const withdrawalReceipt = (record) => withdrawn.get(record.invoice.id) && <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(withdrawn.get(record.invoice.id))}`} target="_blank" rel="noreferrer">Withdrawal receipt <ExternalLink /></a>
+  const withdrawForm = (record, paid) => withdrawFor === record.invoice.id && <form className="paymentReport" onSubmit={(event) => { event.preventDefault(); withdrawRecord(record, paid) }}>
     <label htmlFor="paymentRecipient">Withdraw to address</label>
     <input id="paymentRecipient" value={recipient} onChange={(event) => setRecipient(event.target.value)} disabled={busy} maxLength={44} autoComplete="off" required
       placeholder="A fresh address keeps this payment unlinked" />
@@ -251,24 +292,30 @@ export default function PaymentLinks({ summary, walletSession }) {
   </form>
 
   const selectable = (payment) => picking === 'download' || payment.status !== 'paid'
-  const amountResult = parseAmount(amount, 'SOL')
+  const unpublished = drafts.filter((draft) => !published.has(draft.invoice.id))
+  const pickBox = (id, label, enabled = true) => picking && <input type="checkbox" className="paymentPick" aria-label={`Select ${label || 'payment request'}`}
+    checked={selected.has(id)} disabled={busy || !enabled} onChange={() => toggle(id)} />
+  const amountResult = parseAmount(amount, asset)
   const amountError = amount && !amountResult.valid ? amountResult.error
-    : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < 10000000n ? 'Cloak requires at least 0.01 SOL.' : ''
+    : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < PAYMENT_ASSETS[asset].cloakMin ? `Cloak requires at least ${cloakMinimum(asset)}.` : ''
   const pools = POOLS.map((item) => {
-    const fees = PROTOCOLS[item.id].fees
+    const fees = asset !== 'SOL' && item.id === 'cloakc' ? { ...PROTOCOLS[item.id].fees, fixedAmount: 0.45 } : PROTOCOLS[item.id].fees
+    const fixedToken = asset !== 'SOL' && item.id === 'cloakc' ? asset : 'SOL'
     const activity = summary.pools.find((entry) => entry.protocol === item.id)
     const hasVolume = !summary.loading && !summary.error && activity
       && Number.isFinite(activity.inflow) && activity.inflow >= 0
       && Number.isFinite(activity.outflow) && activity.outflow >= 0
     return {
-      ...item, fees,
-      fee: fees.fixedAmount + (amountResult.valid ? Number(amountResult.normalized) * fees.variableRate : 0),
+      ...item, fees, fixedToken,
+      // A fee in the requested asset: the SOL-denominated fixed part is converted at the current price.
+      fee: (fixedToken === asset ? fees.fixedAmount : prices.SOL && prices[asset] ? fees.fixedAmount * prices.SOL / prices[asset] : NaN)
+        + (amountResult.valid ? Number(amountResult.normalized) * fees.variableRate : 0),
       volume: hasVolume ? activity.inflow + activity.outflow : null,
     }
   })
   const volumeAvailable = pools.every((item) => item.volume !== null)
   // Keep the known order when activity is unavailable; missing data is not zero volume.
-  pools.sort((a, b) => sort === 'fees' ? a.fee - b.fee : volumeAvailable ? b.volume - a.volume : 0)
+  pools.sort((a, b) => sort === 'fees' ? a.fee - b.fee || 0 : volumeAvailable ? b.volume - a.volume : 0)
 
   return <div className="homePage paymentLinksPage">
     <header><div><p className="eyebrow">PAYMENT LINKS</p><h1>Receive privately</h1></div></header>
@@ -278,9 +325,12 @@ export default function PaymentLinks({ summary, walletSession }) {
       <div className="paymentSectionTitle"><Link2 aria-hidden="true" /><h2>Create a payment link</h2><span>Solana</span></div>
       <label className="paymentFieldLabel" htmlFor="paymentAmount">REQUEST AMOUNT</label>
       <div className="amountRow paymentAmountRow">
-        <span className="amountUsd">{usdText(amount, prices.SOL)}</span>
+        <span className="amountUsd">{usdText(amount, prices[asset])}</span>
         <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
-        <span className="paymentAsset"><img src="/logos/sol.svg" alt="" />SOL</span>
+        <label className="paymentAsset"><img src={`/logos/${asset.toLowerCase()}.svg`} alt="" />
+          <select aria-label="Request asset" disabled={busy} value={asset} onChange={(event) => setAsset(event.target.value)}>
+            {PRICED.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+          </select></label>
       </div>
       {amountError && <p className="paymentAmountError" id="paymentAmountError" role="status">{amountError}</p>}
       <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">REFERENCE <span>Optional</span></label><input id="paymentReference" disabled={busy} placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
@@ -305,7 +355,7 @@ export default function PaymentLinks({ summary, walletSession }) {
       <fieldset className="paymentPoolPicker" aria-labelledby="paymentPoolLabel"><div>{pools.map((item) => <label className={pool === item.id ? 'selected' : ''} key={item.id}>
         <input type="radio" name="paymentPool" disabled={busy} value={item.id} checked={pool === item.id} onChange={() => setPool(item.id)} />
         <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{sort === 'fees'
-          ? amountResult.valid ? `${format(item.fee, 9)} SOL est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} SOL`
+          ? amountResult.valid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fixedToken}`
           : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`}</small></span>
       </label>)}</div></fieldset>
       <p className="paymentPoolHint" role="status">{sort === 'fees'
@@ -330,34 +380,36 @@ export default function PaymentLinks({ summary, walletSession }) {
             <RefreshCw aria-hidden="true" />{access ? 'Refresh' : 'Load payment links'}
           </button>
           <button className="ghost" type="button" disabled={busy} title="Find Privacy Cash payments from your wallet signature alone" onClick={recoverFromChain}><Search aria-hidden="true" />Find on-chain</button>
-          {history.payments.length > 0 && <>
-            <button className="ghost" type="button" aria-pressed={picking === 'download'} disabled={busy} onClick={() => startPicking(picking === 'download' ? null : 'download')}><Download aria-hidden="true" />Download</button>
-            <button className="ghost paymentDelete" type="button" aria-pressed={picking === 'delete'} disabled={busy} onClick={() => startPicking(picking === 'delete' ? null : 'delete')}><Trash2 aria-hidden="true" />Delete</button>
+          {(history.payments.length > 0 || unpublished.length > 0) && <>
+            <button className={`ghost${picking === 'download' ? ' paymentActive' : ''}`} type="button" aria-pressed={picking === 'download'} disabled={busy}
+              onClick={() => picking === 'download' ? confirmPicked() : startPicking('download')}><Download aria-hidden="true" />Download{picking === 'download' && selected.size ? ` ${selected.size}` : ''}</button>
+            <button className={`ghost paymentDelete${picking === 'delete' ? ' paymentDanger' : ''}`} type="button" aria-pressed={picking === 'delete'} disabled={busy}
+              onClick={() => picking === 'delete' ? confirmPicked() : startPicking('delete')}><Trash2 aria-hidden="true" />Delete{picking === 'delete' && selected.size ? ` ${selected.size}` : ''}</button>
           </>}
         </div>}
       </div>
       {picking && <p className="paymentFormHint" role="status">{picking === 'download'
-        ? 'Choose the payment links to save a recovery backup for.'
-        : 'Choose the payment links to delete. Paid links cannot be deleted.'}</p>}
+        ? 'Select links to back up, then press Download again.'
+        : 'Select links to remove, then press Delete again. Paid links cannot be deleted.'}</p>}
       {historyError && <p className="paymentError" role="alert">{historyError}</p>}
       {loading && <p className="paymentLoading" role="status">Loading payment links...</p>}
       {history.payments.length > 0 && <div className="paymentDrafts">{history.payments.map((payment) => <React.Fragment key={payment.payment_id}>
-        <article className={`paymentDraft${picking && selected.has(payment.payment_id) ? ' paymentPicked' : ''}`}>
-          {picking && <input type="checkbox" className="paymentPick" aria-label={`Select ${payment.record.reference || 'payment request'}`}
-            checked={selected.has(payment.payment_id)} disabled={busy || !selectable(payment)} onChange={() => toggle(payment.payment_id)} />}
-          <div><strong>{payment.record.reference || 'Payment request'}</strong><span>{format(Number(payment.record.invoice.amount) / 1e9, 9)} SOL · {POOLS.find((item) => item.id === payment.record.invoice.protocol)?.name}</span>
+        <article className={`paymentDraft${picking && selected.has(payment.payment_id) ? ' paymentPicked' : ''}${isWithdrawn(payment.record) ? ' paymentDone' : ''}`}>
+          {pickBox(payment.payment_id, payment.record.reference, selectable(payment))}
+          <div><strong>{payment.record.reference || 'Payment request'}</strong><span>{invoiceAmount(payment.record.invoice)} · {POOLS.find((item) => item.id === payment.record.invoice.protocol)?.name}</span>
             <small>{new Date(payment.created_at).toLocaleDateString()}</small>
-            <span className={`paymentStatus ${payment.status}`}><span aria-hidden="true">{payment.status === 'paid' ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{payment.status === 'paid' ? 'Paid' : 'Awaiting payment'}</span>
+            <span className={`paymentStatus ${payment.status}`}><span aria-hidden="true">{payment.status === 'paid' ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{isWithdrawn(payment.record) ? 'Withdrawn' : payment.status === 'paid' ? 'Paid' : 'Awaiting payment'}</span>
             {payment.deposit_transaction && <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(payment.deposit_transaction)}`} target="_blank" rel="noreferrer">Deposit receipt <ExternalLink /></a>}
+            {withdrawalReceipt(payment.record)}
           </div>
           <div className="paymentRowActions">
             <button type="button" className="ghost paymentIcon" title="Copy payment link" aria-label="Copy payment link" onClick={() => copyLink(payment.payment_url)}><Copy /></button>
             <a className="ghost paymentIcon" title="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
             {payment.status !== 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => { setDepositFor(payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
-            {payment.status === 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(payment.record.invoice.id)}>Withdraw</button>}
+            {payment.status === 'paid' && !isWithdrawn(payment.record) && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(payment.record.invoice.id)}>Withdraw</button>}
           </div>
         </article>
-        {withdrawForm(payment.record)}
+        {withdrawForm(payment.record, payment.status === 'paid')}
         {depositFor === payment.payment_id && payment.status !== 'paid' && <form className="paymentReport" onSubmit={(event) => {
           event.preventDefault()
           run(async (signal) => {
@@ -372,32 +424,36 @@ export default function PaymentLinks({ summary, walletSession }) {
           <button className="ghost paymentIcon" type="button" title="Cancel" aria-label="Cancel deposit verification" disabled={busy} onClick={() => setDepositFor(null)}><X /></button>
         </form>}
       </React.Fragment>)}</div>}
-      {picking && <div className="paymentPickBar">
-        <span>{selected.size} selected</span>
-        <button className="ghost" type="button" disabled={busy} onClick={() => { setPicking(null); setSelected(new Set()) }}>Cancel</button>
-        <button className={`ghost${picking === 'delete' ? ' paymentDelete' : ''}`} type="button" disabled={busy || selected.size === 0}
-          onClick={() => confirmPicked(history.payments.filter((payment) => selected.has(payment.payment_id) && selectable(payment)))}>
-          {picking === 'download' ? <><Download aria-hidden="true" />Download {selected.size || ''}</> : <><Trash2 aria-hidden="true" />Delete {selected.size || ''}</>}
-        </button>
-      </div>}
-      {recovered?.length > 0 && <div className="paymentDrafts">{recovered.map(({ record, spent }) => <React.Fragment key={record.invoice.id}>
-        <article className="paymentDraft paymentLocal">
-          <div><strong>Found on-chain</strong><span>{format(Number(record.invoice.amount) / 1e9, 9)} SOL · Privacy Cash</span><small>Payment note {record.index + 1}</small>
-            <span className={`paymentStatus ${spent ? 'paid' : 'pending'}`}><span aria-hidden="true">{spent ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{spent ? 'Withdrawn' : 'Ready to withdraw'}</span></div>
+      {recovered?.length > 0 && <div className="paymentDrafts">{recovered.map(({ record, spent: onChain }) => { const spent = onChain || isWithdrawn(record); return <React.Fragment key={record.invoice.id}>
+        <article className={`paymentDraft paymentLocal${spent ? ' paymentDone' : ''}`}>
+          <div><strong>Found on-chain</strong><span>{invoiceAmount(record.invoice)} · Privacy Cash</span><small>Payment note {record.index + 1}</small>
+            <span className={`paymentStatus ${spent ? 'paid' : 'pending'}`}><span aria-hidden="true">{spent ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{spent ? 'Withdrawn' : 'Ready to withdraw'}</span>{withdrawalReceipt(record)}</div>
           <div className="paymentRowActions">{!spent && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(record.invoice.id)}>Withdraw</button>}</div>
         </article>
-        {withdrawForm(record)}
-      </React.Fragment>)}</div>}
+        {withdrawForm(record, true)}
+      </React.Fragment> })}</div>}
       {(offset > 0 || history.next_offset !== null) && <div className="paymentPagination">
         <button className="ghost" type="button" disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}><ArrowLeft />Previous</button>
         <button className="ghost" type="button" disabled={loading || history.next_offset === null} onClick={() => setOffset(history.next_offset)}>Next<ArrowRight /></button>
       </div>}
-      {drafts.filter((draft) => !published.has(draft.invoice.id)).map((draft) => <article className="paymentDraft paymentLocal" key={draft.invoice.id}>
-        <div><strong>{draft.reference || 'Payment request'}</strong><span>{format(Number(draft.invoice.amount) / 1e9, 9)} SOL</span><small>Not published</small></div>
+      {unpublished.map((draft) => <article className={`paymentDraft paymentLocal${picking && selected.has(draft.invoice.id) ? ' paymentPicked' : ''}`} key={draft.invoice.id}>
+        {pickBox(draft.invoice.id, draft.reference)}
+        <div><strong>{draft.reference || 'Payment request'}</strong><span>{invoiceAmount(draft.invoice)}</span><small>Not published</small></div>
         <div className="paymentRowActions"><button type="button" className="ghost paymentIcon" title="Download recovery backup" aria-label="Download recovery backup" onClick={() => downloadRecovery(draft)}><Download /></button>
           <button type="button" className="ghost" disabled={busy} onClick={() => run(async (signal) => publish(draft, signal, await merchantAccess(signal)))}><Upload />Publish link</button></div>
       </article>)}
       {!history.payments.length && !drafts.length && !loading && <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>{access ? 'No payment links yet' : 'Your payments, in one place'}</h3><p>{wallet ? 'Your payment requests will appear here.' : 'Connect your wallet to view your payment links.'}</p></div>}
     </section>
+    <dialog className="paymentDialog" ref={dialog} aria-labelledby="paymentDialogTitle" onClose={() => setPendingDelete(null)}>
+      {pendingDelete && <>
+        <h3 id="paymentDialogTitle">Remove {pendingDelete.payments.length + pendingDelete.local.length} payment link{pendingDelete.payments.length + pendingDelete.local.length === 1 ? '' : 's'}?</h3>
+        <p>Removed links stop working for anyone who has them. A downloaded copy keeps each note's recovery record.</p>
+        <div className="paymentDialogActions">
+          <button className="ghost" type="button" autoFocus onClick={() => dialog.current.close()}>Cancel</button>
+          <button className="ghost" type="button" onClick={() => removePicked(true)}><Download aria-hidden="true" />Download copy and remove</button>
+          <button className="ghost paymentDanger" type="button" onClick={() => removePicked(false)}><Trash2 aria-hidden="true" />Remove</button>
+        </div>
+      </>}
+    </dialog>
   </div>
 }

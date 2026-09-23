@@ -1,10 +1,11 @@
 import { PublicKey } from '@solana/web3.js'
 import { recoverPaymentNote, derivedInvoiceId, privacyCashIv, privacyCashNotes } from './payment-notes.js'
 import { validateSolanaAddress } from './transfer-validation.js'
+import { PAYMENT_ASSETS } from './payment-assets.js'
 
-// Version 2 notes did not exist before this PrivacyCash output count, so a
-// cold scan starts here instead of downloading the pool's whole history.
-export const PRIVACYCASH_FIRST_OUTPUT = 813000
+// Version 2 notes did not exist before these output counts in each PrivacyCash
+// tree, so a cold scan starts there instead of downloading the pool's history.
+export const PRIVACYCASH_FIRST_OUTPUT = Object.freeze({ SOL: 813000, USDC: 90500, USDT: 8800 })
 // ponytail: fixed gap limit, like a wallet's address gap; raise it if merchants
 // leave more than this many unpaid links in a row after their last known one.
 export const SCAN_GAP = 50
@@ -16,30 +17,36 @@ const memoryStorage = (entries) => ({
 })
 
 async function withdrawPrivacyCash({ record, encryption, address, recipient, connection, onStatus }) {
-  const [{ WasmFactory }, { withdraw }, { localstorageKey }, { queryRemoteTreeState }, { LSK_ENCRYPTED_OUTPUTS, LSK_FETCH_OFFSET }, { setLogger }] = await Promise.all([
+  const { asset, amount, outputs } = record.invoice
+  const { token, pcMint } = PAYMENT_ASSETS[asset]
+  const [{ WasmFactory }, { withdraw }, { withdrawSPL }, { localstorageKey }, { queryRemoteTreeState }, { LSK_ENCRYPTED_OUTPUTS, LSK_FETCH_OFFSET }, { setLogger }, { getAssociatedTokenAddressSync }] = await Promise.all([
     import('@lightprotocol/hasher.rs'),
     import('../node_modules/privacycash/dist/withdraw.js'),
+    import('../node_modules/privacycash/dist/withdrawSPL.js'),
     import('../node_modules/privacycash/dist/getUtxos.js'),
     import('../node_modules/privacycash/dist/utils/utils.js'),
     import('../node_modules/privacycash/dist/utils/constants.js'),
     import('../node_modules/privacycash/dist/utils/logger.js'),
+    import('@solana/spl-token'),
   ])
   const publicKey = new PublicKey(address)
-  const { nextIndex } = await queryRemoteTreeState()
+  const { nextIndex } = await queryRemoteTreeState(token ?? undefined)
+  // The SPL cache is keyed by the owner's token account, the SOL cache by the owner.
+  const owner = token ? getAssociatedTokenAddressSync(new PublicKey(pcMint), publicKey) : publicKey
   // The SDK's own UTXO cache, seeded with this invoice's note and a fetch offset
   // at the tip: withdraw() then spends the known note instead of trial-decrypting
   // every output in the pool.
   const storage = memoryStorage(new Map([
-    [LSK_FETCH_OFFSET + localstorageKey(publicKey), nextIndex],
-    [LSK_ENCRYPTED_OUTPUTS + localstorageKey(publicKey), JSON.stringify([record.invoice.outputs[0].encryptedNote])],
+    [LSK_FETCH_OFFSET + localstorageKey(owner), nextIndex],
+    [LSK_ENCRYPTED_OUTPUTS + localstorageKey(owner), JSON.stringify([outputs[0].encryptedNote])],
   ]))
   setLogger((level, message) => { if (level === 'info') onStatus(message) })
   try {
-    const result = await withdraw({
-      recipient, publicKey, connection, storage, encryptionService: encryption,
-      lightWasm: await WasmFactory.getInstance(), amount_in_lamports: Number(record.invoice.amount),
-      keyBasePath: '/circuit2/transaction2',
-    })
+    const common = { recipient, publicKey, connection, storage, encryptionService: encryption,
+      lightWasm: await WasmFactory.getInstance(), keyBasePath: '/circuit2/transaction2' }
+    const result = token
+      ? await withdrawSPL({ ...common, mintAddress: pcMint, base_units: Number(amount) })
+      : await withdraw({ ...common, amount_in_lamports: Number(amount) })
     return result.tx
   } catch (error) {
     if (/unspent UTXO|no balance/.test(error.message)) throw new Error('No unspent funds: this payment is not deposited yet or was already withdrawn')
@@ -93,38 +100,41 @@ export async function scanPrivacyCashNotes({ keys, connection, fromIndex = 0, to
   for (let index = fromIndex; index < toIndex; index++) {
     for (const output of [0, 1]) wanted.set(await privacyCashIv(keys, index, output), { index, output })
   }
+  // Each asset has its own tree; an index is used once, so it lands in only one.
   const found = new Map()
-  for (let start = PRIVACYCASH_FIRST_OUTPUT, more = true; more; start += 10000) {
-    signal?.throwIfAborted()
-    onStatus(`Scanning PrivacyCash outputs from ${start}...`)
-    const response = await fetch(`${RELAYER_API_URL}/utxos/range?start=${start}&end=${start + 10000}`, { signal })
-    if (!response.ok) throw new Error('PrivacyCash indexer is unavailable')
-    const page = await response.json()
-    for (const encrypted of page.encrypted_outputs || []) {
-      const match = typeof encrypted === 'string' && wanted.get(encrypted.slice(16, 40))
-      if (match) {
-        if (!found.has(match.index)) found.set(match.index, [])
-        found.get(match.index)[match.output] = encrypted
+  for (const [asset, { token }] of Object.entries(PAYMENT_ASSETS)) {
+    for (let start = PRIVACYCASH_FIRST_OUTPUT[asset], more = true; more; start += 10000) {
+      signal?.throwIfAborted()
+      onStatus(`Scanning PrivacyCash ${asset} outputs from ${start}...`)
+      const response = await fetch(`${RELAYER_API_URL}/utxos/range?${token ? `token=${token}&` : ''}start=${start}&end=${start + 10000}`, { signal })
+      if (!response.ok) throw new Error('PrivacyCash indexer is unavailable')
+      const page = await response.json()
+      for (const encrypted of page.encrypted_outputs || []) {
+        const match = typeof encrypted === 'string' && wanted.get(encrypted.slice(16, 40))
+        if (match) {
+          if (!found.has(match.index)) found.set(match.index, { asset, sealed: [] })
+          found.get(match.index).sealed[match.output] = encrypted
+        }
       }
+      more = Boolean(page.hasMore && page.encrypted_outputs?.length)
     }
-    more = Boolean(page.hasMore && page.encrypted_outputs?.length)
   }
   const records = []
-  for (const [index, sealed] of [...found].sort((a, b) => a[0] - b[0])) {
+  for (const [index, { asset, sealed }] of [...found].sort((a, b) => a[0] - b[0])) {
     if (!sealed[0] || !sealed[1]) continue
     const notes = await privacyCashNotes(keys, index, sealed).then((result) => result.notes, () => null)
-    if (!notes || notes[0].mintAddress !== '11111111111111111111111111111112') continue
+    if (!notes || notes[0].mintAddress !== PAYMENT_ASSETS[asset].pcMint) continue
     const outputs = notes.map((note, output) => ({ amount: note.amount.toString(), mint: note.mintAddress,
       publicKey: note.keypair.pubkey.toString(), blinding: note.blinding.toString(),
       commitment: note.getCommitment().toString(), encryptedNote: sealed[output] }))
     // A nullifier binds the leaf index, which the note only learns once deposited.
     const indices = await fetch(`${RELAYER_API_URL}/utxos/indices`, { method: 'POST', signal,
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ encrypted_outputs: [sealed[0]] }) }).then((result) => result.json())
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ encrypted_outputs: [sealed[0]], ...(PAYMENT_ASSETS[asset].token && { token: PAYMENT_ASSETS[asset].token }) }) }).then((result) => result.json())
     if (typeof indices.indices?.[0] !== 'number') throw new Error('PrivacyCash indexer is unavailable')
     notes[0].index = indices.indices[0]
     records.push({
       record: { version: 2, index, invoice: { version: 1, id: await derivedInvoiceId(keys, index), network: 'solana-mainnet',
-        protocol: 'privacycash', asset: 'SOL', amount: outputs[0].amount, outputs }, reference: 'Recovered from chain', createdAt: new Date().toISOString() },
+        protocol: 'privacycash', asset, amount: outputs[0].amount, outputs }, reference: 'Recovered from chain', createdAt: new Date().toISOString() },
       spent: await isUtxoSpent(connection, notes[0]),
     })
   }

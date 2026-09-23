@@ -1,13 +1,15 @@
-import { Connection, PublicKey } from '@solana/web3.js'
+import { AddressLookupTableProgram, Connection, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
+import { getAssociatedTokenAddressSync } from '@solana/spl-token'
 import { getPaymentLink } from './payment-api.js'
+import { PAYMENT_ASSETS, cloakMinimum, paymentMint } from './payment-assets.js'
 
 const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
 const FIELD_MAX = 21888242871839275222246405745257275088548364400416034343698204186575808495617n
 const integer = (value, max = FIELD_MAX) => typeof value === 'string' && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < max
 
 export function validateCheckout(invoice) {
-  if (!invoice || invoice.version !== 1 || invoice.network !== 'solana-mainnet' || invoice.asset !== 'SOL'
+  if (!invoice || invoice.version !== 1 || invoice.network !== 'solana-mainnet' || !Object.hasOwn(PAYMENT_ASSETS, invoice.asset)
     || !['cloakc', 'privacycash'].includes(invoice.protocol) || !/^[0-9a-f]{64}$/.test(invoice.payment_id)
     || !integer(invoice.amount, BigInt(Number.MAX_SAFE_INTEGER) + 1n) || BigInt(invoice.amount) <= 0n
     || !['pending', 'paid'].includes(invoice.status)) throw new Error('Unsupported payment invoice')
@@ -15,7 +17,7 @@ export function validateCheckout(invoice) {
   if (!Array.isArray(invoice.outputs) || invoice.outputs.length !== (privacycash ? 2 : 1)) throw new Error('Invalid payment outputs')
   for (const [index, output] of invoice.outputs.entries()) {
     if (output.amount !== (index ? '0' : invoice.amount)
-      || output.mint !== (privacycash ? '11111111111111111111111111111112' : 'So11111111111111111111111111111111111111112')
+      || output.mint !== paymentMint(invoice.protocol, invoice.asset)
       || !['publicKey', 'blinding', 'commitment'].every((key) => integer(output[key]))
       || BigInt(output.publicKey) === 0n || BigInt(output.commitment) === 0n
       || (privacycash && (typeof output.encryptedNote !== 'string' || !/^(?:[0-9a-f]{2}){16,4096}$/.test(output.encryptedNote)))) throw new Error('Invalid payment output')
@@ -48,18 +50,45 @@ export function paymentRpcUrl() {
   return url.href
 }
 
+// A signed deposit can land only while its blockhash is valid. Check expiry first,
+// then history: unseen after expiry means it can never land and a retry is safe.
+export async function depositExpired(id, blockhash, connection = new Connection(paymentRpcUrl(), 'confirmed')) {
+  if (!blockhash || (await connection.isBlockhashValid(blockhash)).value) return false
+  const { value: [status] } = await connection.getSignatureStatuses([id], { searchTransactionHistory: true })
+  return !status
+}
+
 export async function payPaymentInvoice({ invoice, provider, address, signal, onStatus = () => {}, onSigned, connection = new Connection(paymentRpcUrl(), 'confirmed') }) {
   validateCheckout(invoice)
   session(provider, address, signal)
   if (typeof provider.signTransaction !== 'function') throw new Error('This wallet does not support transaction signing')
   if (invoice.status === 'paid') throw new Error('This invoice is already paid')
-  if (invoice.protocol === 'cloakc' && BigInt(invoice.amount) < 10000000n) throw new Error('Cloak requires a minimum payment of 0.01 SOL')
+  if (invoice.protocol === 'cloakc' && BigInt(invoice.amount) < PAYMENT_ASSETS[invoice.asset].cloakMin) throw new Error(`Cloak requires a minimum payment of ${cloakMinimum(invoice.asset)}`)
   if (await connection.getGenesisHash() !== MAINNET_GENESIS) throw new Error('Connect to Solana mainnet to pay this invoice')
   const publicKey = new PublicKey(address)
-  if (BigInt(await connection.getBalance(publicKey)) < BigInt(invoice.amount) + 1000000n) throw new Error('Not enough SOL for this payment and network fees')
+  const mint = new PublicKey(paymentMint(invoice.protocol, invoice.asset))
+  const lamports = BigInt(await connection.getBalance(publicKey))
+  if (invoice.asset === 'SOL') {
+    if (lamports < BigInt(invoice.amount) + 1000000n) throw new Error('Not enough SOL for this payment and network fees')
+  } else {
+    const account = await connection.getTokenAccountBalance(getAssociatedTokenAddressSync(mint, publicKey)).catch(() => null)
+    if (!account || BigInt(account.value.amount) < BigInt(invoice.amount)) throw new Error(`Not enough ${invoice.asset} for this payment`)
+    // Cloak SPL deposits also pay rent for a supplemental lookup table (about 0.0056 SOL).
+    if (lamports < (invoice.protocol === 'cloakc' ? 8000000n : 2000000n)) throw new Error('Not enough SOL for network fees')
+  }
   let signedId = null
   const signTransaction = async (transaction) => {
     session(provider, address, signal)
+    // Cloak's SPL deposit first creates a lookup table in a legacy transaction.
+    // It moves no funds and is not the deposit, so it takes no invoice guard.
+    if (transaction.version === undefined) {
+      if (invoice.protocol !== 'cloakc' || invoice.asset === 'SOL' || !transaction.instructions?.length
+        || !transaction.instructions.every((instruction) => instruction.programId.equals(AddressLookupTableProgram.programId))) throw new Error('Unexpected transaction to sign')
+      onStatus('Approve lookup table setup in your wallet...')
+      const signed = await provider.signTransaction(transaction)
+      session(provider, address, signal)
+      return signed
+    }
     if (signedId) throw new Error('A deposit is already awaiting confirmation. Check its status before paying again.')
     const latest = validateCheckout(await getPaymentLink(invoice.payment_id, signal))
     if (latest.status === 'paid') throw new Error('This invoice is already paid')
@@ -73,7 +102,7 @@ export async function payPaymentInvoice({ invoice, provider, address, signal, on
     if (!signed.signatures[0]?.some((byte) => byte !== 0)) throw new Error('Wallet did not sign the payment')
     signedId = bs58.encode(signed.signatures[0])
     // The caller persists this public transaction ID before any broadcast can occur.
-    await onSigned(signedId)
+    await onSigned(signedId, signed.message.recentBlockhash)
     return signed
   }
   try {
@@ -89,7 +118,7 @@ export async function payPaymentInvoice({ invoice, provider, address, signal, on
     if ((await sdk.computeUtxoCommitment(note)).toString() !== output.commitment) throw new Error('Payment note commitment does not match')
     session(provider, address, signal)
     const result = await sdk.transact({
-      inputUtxos: [await sdk.createZeroUtxo(sdk.NATIVE_SOL_MINT)], outputUtxos: [note],
+      inputUtxos: [await sdk.createZeroUtxo(mint)], outputUtxos: [note],
       externalAmount: BigInt(invoice.amount), depositor: publicKey,
     }, {
       connection, programId: sdk.CLOAK_PROGRAM_ID, relayUrl: sdk.CLOAK_PRODUCTION_RELAY_URL,

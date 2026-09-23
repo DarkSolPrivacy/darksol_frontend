@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js'
 import { parseAmount } from './transfer-validation.js'
 import { MERCHANT_IDENTITY_MESSAGE, deriveMerchantAccess } from './merchant-identity.js'
+import { PAYMENT_ASSETS, paymentMint } from './payment-assets.js'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -143,12 +144,13 @@ async function privacyCashTools(seed) {
   return { wasm, encryption, keypair, Utxo }
 }
 
-async function buildNote(keys, index, protocol, amount) {
+async function buildNote(keys, index, protocol, amount, asset) {
+  const mintAddress = paymentMint(protocol, asset)
   if (protocol === 'privacycash') {
     const { wasm, encryption, keypair, Utxo } = await privacyCashTools(await privacyCashSeed(keys, index))
     // The SDK's default blinding uses Math.random(); supply secure randomness. 16 bytes, not 31: the blinding is sealed on-chain as decimal text, and 31 left the deposit no room for Phantom's Lighthouse guard.
     const notes = [amount, 0n].map((value) => new Utxo({
-      lightWasm: wasm, keypair, amount: value,
+      lightWasm: wasm, keypair, amount: value, mintAddress,
       blinding: BigInt('0x' + hex(crypto.getRandomValues(new Uint8Array(16)))).toString(),
     }))
     return Promise.all(notes.map(async (note, output) => ({
@@ -160,7 +162,7 @@ async function buildNote(keys, index, protocol, amount) {
   }
   // Cloak's own recoverable deposit shape: key and blinding are PRF(nk, salt).
   const sdk = await import('@cloak.dev/sdk')
-  const { utxo } = await sdk.createRecoverableDepositUtxo(amount, await cloakNk(keys), sdk.NATIVE_SOL_MINT, await cloakSalt(keys, index))
+  const { utxo } = await sdk.createRecoverableDepositUtxo(amount, await cloakNk(keys), new PublicKey(mintAddress), await cloakSalt(keys, index))
   return [{
     amount: utxo.amount.toString(), mint: utxo.mintAddress.toBase58(),
     publicKey: utxo.keypair.publicKey.toString(), blinding: utxo.blinding.toString(),
@@ -191,11 +193,14 @@ export function readPaymentDrafts(storage, address) {
   return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
+export const removePaymentDraft = (storage, address, id) => storage.removeItem(`${STORAGE_PREFIX}${address}:${id}`)
+
 // `index` must be unused: pass max(server next_index, highest local draft + 1).
-export async function preparePaymentNote({ provider, address, keys, index, protocol, amount, reference = '', storage = localStorage, signal, onStatus = () => {} }) {
+export async function preparePaymentNote({ provider, address, keys, index, protocol, asset = 'SOL', amount, reference = '', storage = localStorage, signal, onStatus = () => {} }) {
   if (!crypto?.subtle) throw new Error('Payment links require HTTPS or localhost')
   if (!PROTOCOLS.includes(protocol)) throw new Error('Unsupported payment pool')
-  const parsed = parseAmount(amount, 'SOL')
+  if (!Object.hasOwn(PAYMENT_ASSETS, asset)) throw new Error('Unsupported payment asset')
+  const parsed = parseAmount(amount, asset)
   if (!parsed.valid) throw new Error(parsed.error)
   if (typeof reference !== 'string' || reference.length > 80) throw new Error('Reference must be 80 characters or fewer')
   if (!Number.isSafeInteger(index) || index < 0 || index >= 2 ** 31) throw new Error('Invalid payment note index')
@@ -204,8 +209,8 @@ export async function preparePaymentNote({ provider, address, keys, index, proto
   onStatus('Preparing your private note…')
   const invoice = {
     version: 1, id: await derivedInvoiceId(keys, index),
-    network: 'solana-mainnet', protocol, asset: 'SOL', amount: parsed.baseUnits.toString(),
-    outputs: await buildNote(keys, index, protocol, parsed.baseUnits),
+    network: 'solana-mainnet', protocol, asset, amount: parsed.baseUnits.toString(),
+    outputs: await buildNote(keys, index, protocol, parsed.baseUnits, asset),
   }
   assertSession(provider, address, signal)
   const record = { version: 2, index, invoice, reference: reference.trim(), createdAt: new Date().toISOString() }

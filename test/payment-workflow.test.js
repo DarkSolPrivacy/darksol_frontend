@@ -8,6 +8,7 @@ import { createPaymentLink, listPaymentLinks, getPaymentLink, reportPaymentDepos
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote } from '../src/payment-notes.js'
 import { payPaymentInvoice, validateCheckout } from '../src/payment-deposit.js'
 import { privacyCashDepositInput } from '../src/payment-privacycash.js'
+import { MINTS } from '../protocols/addresses.js'
 
 async function owner() {
   const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
@@ -20,11 +21,11 @@ async function owner() {
   return { provider, address: publicKey.toBase58(), messages }
 }
 
-async function draft(protocol) {
+async function draft(protocol, asset = 'SOL', amount = '0.02') {
   const wallet = await owner()
   const entries = new Map()
   const storage = { getItem: (key) => entries.get(key), setItem: (key, value) => entries.set(key, value) }
-  const record = await preparePaymentNote({ ...wallet, keys: await preparePaymentKeys(wallet), index: 0, protocol, amount: '0.02', storage })
+  const record = await preparePaymentNote({ ...wallet, keys: await preparePaymentKeys(wallet), index: 0, protocol, asset, amount, storage })
   const { id, ...terms } = record.invoice
   return { wallet, record, invoice: { ...terms, payment_id: id, status: 'pending' } }
 }
@@ -98,9 +99,40 @@ test('PrivacyCash proof input binds the original merchant outputs and ciphertext
   await assert.rejects(privacyCashDepositInput(changed, '0'), /commitment does not match/)
 })
 
-test('PrivacyCash invoice proof verifies using the installed SDK circuit', { skip: !process.env.PAYMENT_PROOF_CHECK }, async (t) => {
+test('USDC and USDT invoices carry each pool mint and asset-specific limits', async () => {
+  const mainnet = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d'
+  for (const asset of ['USDC', 'USDT']) {
+    for (const protocol of ['privacycash', 'cloakc']) {
+      const { wallet, invoice } = await draft(protocol, asset, '2.5')
+      assert.equal(invoice.amount, '2500000')
+      assert.equal(invoice.outputs[0].mint, MINTS[asset])
+      validateCheckout(invoice)
+      const swapped = structuredClone(invoice)
+      swapped.asset = 'SOL'
+      assert.throws(() => validateCheckout(swapped), /Invalid payment output/)
+      const connection = { getGenesisHash: async () => mainnet, getBalance: async () => 1000000000,
+        getTokenAccountBalance: async () => ({ value: { amount: '2499999' } }) }
+      await assert.rejects(payPaymentInvoice({ invoice, ...wallet, connection, onSigned: () => {} }), new RegExp(`Not enough ${asset}`))
+    }
+  }
+  const { wallet, invoice } = await draft('cloakc', 'USDC', '0.5')
+  await assert.rejects(payPaymentInvoice({ invoice, ...wallet, connection: {}, onSigned: () => {} }), /minimum payment of 1 USDC/)
+})
+
+test('PrivacyCash USDC proof input uses the mint field and the fee recipient token account', async () => {
+  const { getMintAddressField } = await import('../node_modules/privacycash/dist/utils/utils.js')
+  const { getAssociatedTokenAddressSync } = await import('@solana/spl-token')
+  const { FEE_RECIPIENT } = await import('../node_modules/privacycash/dist/utils/constants.js')
+  const { invoice } = await draft('privacycash', 'USDC', '2.5')
+  const { input, extData } = await privacyCashDepositInput(invoice, '0')
+  assert.equal(input.mintAddress, getMintAddressField(new PublicKey(MINTS.USDC)))
+  assert.deepEqual(input.outputCommitment, invoice.outputs.map((output) => output.commitment))
+  assert.equal(extData.recipient, getAssociatedTokenAddressSync(new PublicKey(MINTS.USDC), FEE_RECIPIENT, true).toBase58())
+})
+
+for (const asset of ['SOL', 'USDC']) test(`PrivacyCash ${asset} invoice proof verifies using the installed SDK circuit`, { skip: !process.env.PAYMENT_PROOF_CHECK }, async (t) => {
   t.after(async () => { await globalThis.curve_bn128?.terminate() })
-  const { invoice } = await draft('privacycash')
+  const { invoice } = await draft('privacycash', asset, '2.5')
   const { input } = await privacyCashDepositInput(invoice, '0')
   const { prove } = await import('../node_modules/privacycash/dist/utils/prover.js')
   const { zKey, groth16 } = await import('snarkjs')

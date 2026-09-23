@@ -161,26 +161,30 @@ test('a cold scan finds PrivacyCash notes by their derived IVs, with nothing sto
   const keys = await preparePaymentKeys(owner)
   const records = []
   for (const index of [0, 3]) records.push(await preparePaymentNote({ ...owner, keys, index, protocol: 'privacycash', amount: `0.0${index + 1}`, storage: storage() }))
+  const usdc = await preparePaymentNote({ ...owner, keys, index: 4, protocol: 'privacycash', asset: 'USDC', amount: '2.5', storage: storage() })
   const stranger = await wallet()
   const theirs = await preparePaymentNote({ ...stranger, keys: await preparePaymentKeys(stranger), index: 0, protocol: 'privacycash', amount: '0.5', storage: storage() })
   const pool = [...theirs.invoice.outputs, ...records[0].invoice.outputs, { encryptedNote: 'ab'.repeat(80) }, ...records[1].invoice.outputs]
     .map((output) => output.encryptedNote)
   const calls = stubFetch(t, [
     [/utxos\/range/, (url) => {
-      const start = Number(new URL(url).searchParams.get('start')) - PRIVACYCASH_FIRST_OUTPUT
-      return { encrypted_outputs: pool.slice(start, start + 10000), hasMore: false }
+      const params = new URL(url).searchParams
+      const tree = { usdc: usdc.invoice.outputs.map((output) => output.encryptedNote), usdt: [] }[params.get('token')] ?? pool
+      const start = Number(params.get('start')) - PRIVACYCASH_FIRST_OUTPUT[params.get('token')?.toUpperCase() ?? 'SOL']
+      return { encrypted_outputs: tree.slice(start, start + 10000), hasMore: false }
     }],
-    [/utxos\/indices/, () => ({ indices: [42] })],
+    [/utxos\/indices/, (_url, init) => ({ indices: [JSON.parse(init.body).token === 'usdc' ? 7 : 42] })],
   ])
   const connection = { getAccountInfo: async () => null }
   const found = await scanPrivacyCashNotes({ keys, connection, toIndex: 5 })
-  assert.deepEqual(found.map((item) => item.record.index), [0, 3])
-  assert.deepEqual(found.map((item) => item.spent), [false, false])
+  assert.deepEqual(found.map((item) => item.record.index), [0, 3, 4])
+  assert.deepEqual(found.map((item) => item.spent), [false, false, false])
+  records.push(usdc)
   for (const [position, item] of found.entries()) {
     assert.equal(JSON.stringify(item.record.invoice), JSON.stringify(records[position].invoice))
     assert.equal((await recoverPaymentNote({ ...owner, record: item.record, keys })).notes[0].amount.toString(), records[position].invoice.amount)
   }
-  assert.equal(calls.filter((call) => call.url.includes('range')).length, 1)
+  assert.equal(calls.filter((call) => call.url.includes('range')).length, 3)
 })
 
 test('PrivacyCash withdraw spends the known note through the SDK without scanning the pool', async (t) => {
