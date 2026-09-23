@@ -15,6 +15,17 @@ const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name
 const short = (value) => `${value.slice(0, 6)}…${value.slice(-6)}`
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
 const invoiceAmount = ({ amount, asset }) => `${format(assetAmount(amount, asset), 9)} ${asset}`
+// The merchant credential lists and deletes links; it cannot spend, so this browser
+// keeps it until Disconnect. Payment note keys can spend and are never stored.
+const accessKey = (address) => `darksol:merchant-access:v1:${address}`
+function savedAccess(address) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(accessKey(address)))
+    return /^[0-9a-f]{64}$/.test(saved?.merchant_id) && /^[0-9a-f]{64}$/.test(saved?.credential)
+      ? { merchant_id: saved.merchant_id, credential: saved.credential, address } : null
+  } catch { return null }
+}
+const forgetAccess = (address) => { try { localStorage.removeItem(accessKey(address)) } catch { /* Nothing was saved. */ } }
 
 export default function PaymentLinks({ summary, walletSession }) {
   const [amount, setAmount] = useState('')
@@ -55,7 +66,7 @@ export default function PaymentLinks({ summary, walletSession }) {
   const operation = useRef(null)
 
   useEffect(() => {
-    setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(null)
+    setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(wallet ? savedAccess(wallet.address) : null)
     setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null)
     setPublished(new Set()); setDraftState({ address: wallet?.address ?? null, records: [] })
     setPicking(null); setSelected(new Set()); setNoteKeys(null); setWithdrawFor(null); setRecovered(null); setWithdrawn(new Map())
@@ -84,7 +95,10 @@ export default function PaymentLinks({ summary, walletSession }) {
         setHistory(result); setHistoryError('')
         setPublished((previous) => new Set([...previous, ...result.payments.map((payment) => payment.record.invoice.id)]))
       } catch (cause) {
-        if (!controller.signal.aborted) setHistoryError(cause.message || 'Could not load payment links')
+        if (controller.signal.aborted) return
+        // A saved credential the server no longer accepts: sign again on the next load.
+        if (cause.status === 401) { forgetAccess(access.address); setAccess(null); return }
+        setHistoryError(cause.message || 'Could not load payment links')
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false)
@@ -103,6 +117,7 @@ export default function PaymentLinks({ summary, walletSession }) {
     signal.throwIfAborted()
     const scoped = { ...result, address: wallet.address }
     setAccess(scoped)
+    try { localStorage.setItem(accessKey(wallet.address), JSON.stringify({ merchant_id: result.merchant_id, credential: result.credential })) } catch { /* Sign again next visit. */ }
     return scoped
   }
 
@@ -367,7 +382,7 @@ export default function PaymentLinks({ summary, walletSession }) {
         <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && (!amountResult.valid || amountError))} aria-describedby="paymentAvailability">
           {connecting ? 'Connecting…' : busy ? status || 'Preparing note…' : !wallet ? <><Wallet aria-hidden="true" />Connect wallet</> : <>Create payment link <ArrowRight aria-hidden="true" /></>}
         </button>
-        {wallet && <button className="paymentDisconnect" type="button" aria-label="Disconnect wallet" title="Disconnect wallet" disabled={busy} onClick={disconnectWallet}><LogOut /></button>}
+        {wallet && <button className="paymentDisconnect" type="button" aria-label="Disconnect wallet" title="Disconnect wallet" disabled={busy} onClick={() => { forgetAccess(wallet.address); disconnectWallet() }}><LogOut /></button>}
       </div>
       <p className="paymentFormHint" id="paymentAvailability">{wallet ? `Connected: ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)} · Sign a message to prepare your payment note.` : 'Connect your Solana wallet to prepare a payment link.'}</p>
       {notice && <div className="paymentPrepared" role="status"><CheckCircle2 aria-hidden="true" /><strong>{notice}</strong></div>}
@@ -392,7 +407,8 @@ export default function PaymentLinks({ summary, walletSession }) {
         ? 'Select links to back up, then press Download again.'
         : 'Select links to remove, then press Delete again. Paid links cannot be deleted.'}</p>}
       {historyError && <p className="paymentError" role="alert">{historyError}</p>}
-      {loading && <p className="paymentLoading" role="status">Loading payment links...</p>}
+      {/* Only the first load shows this; the 15s refresh updates rows in place. */}
+      {loading && !history.payments.length && <p className="paymentLoading" role="status">Loading payment links...</p>}
       {history.payments.length > 0 && <div className="paymentDrafts">{history.payments.map((payment) => <React.Fragment key={payment.payment_id}>
         <article className={`paymentDraft${picking && selected.has(payment.payment_id) ? ' paymentPicked' : ''}${isWithdrawn(payment.record) ? ' paymentDone' : ''}`}>
           {pickBox(payment.payment_id, payment.record.reference, selectable(payment))}

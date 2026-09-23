@@ -4,7 +4,7 @@ import { PublicKey } from '@solana/web3.js'
 import { randomBytes } from 'node:crypto'
 import bs58 from 'bs58'
 import { fileURLToPath } from 'node:url'
-import { createPaymentLink, listPaymentLinks, getPaymentLink, reportPaymentDeposit, paymentLinkUrl } from '../src/payment-api.js'
+import { createPaymentLink, deletePaymentLink, listPaymentLinks, getPaymentLink, reportPaymentDeposit, paymentLinkUrl, validatePaymentRecord } from '../src/payment-api.js'
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote } from '../src/payment-notes.js'
 import { payPaymentInvoice, validateCheckout } from '../src/payment-deposit.js'
 import { privacyCashDepositInput } from '../src/payment-privacycash.js'
@@ -61,6 +61,30 @@ test('API calls scope credentials to merchant routes and submit only the saved r
   assert.deepEqual(JSON.parse(requests[4].body), { transaction_id: transaction })
   assert.throws(() => reportPaymentDeposit(invoice.payment_id, 'invalid'), /transaction ID/)
   assert.throws(() => paymentLinkUrl('javascript:alert(1)'), /Invalid payment URL/)
+})
+
+test('malformed records, payment IDs and offsets never leave the browser', async (t) => {
+  const { record } = await draft('privacycash', 'USDC', '2.5')
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async (url) => { requests.push(url); return new Response('{}') })
+  assert.equal(validatePaymentRecord(record), record)
+  for (const change of [
+    (x) => { x.merchantAddress = 'leak' }, (x) => { x.invoice.id = "'; DROP TABLE payment_links; --" },
+    (x) => { x.invoice.outputs[0].privateKey = '1' }, (x) => { x.invoice.amount = '1 OR 1=1' },
+    (x) => { x.invoice.asset = 'ZEC' }, (x) => { x.reference = 'x'.repeat(81) }, (x) => { x.reference = 7 },
+    (x) => { x.createdAt = 'yesterday' }, (x) => { x.index = '0' },
+  ]) {
+    const changed = structuredClone(record)
+    change(changed)
+    await assert.rejects(createPaymentLink({ record: changed, access: null }), /invalid|Unsupported|Invalid/)
+  }
+  for (const id of ['../admin', 'A'.repeat(64), "1' OR '1'='1", undefined]) {
+    assert.throws(() => getPaymentLink(id), /Invalid payment ID/)
+    assert.throws(() => deletePaymentLink(id), /Invalid payment ID/)
+    assert.throws(() => reportPaymentDeposit(id, bs58.encode(randomBytes(64))), /Invalid payment ID/)
+  }
+  for (const offset of [-1, 1.5, '0;DROP', Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => listPaymentLinks({ offset }), /offset/)
+  assert.equal(requests.length, 0)
 })
 
 test('backend errors stay errors; HTML outages do not produce a successful payment', async (t) => {

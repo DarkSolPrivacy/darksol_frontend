@@ -1022,8 +1022,24 @@ function PaymentLinksPage({ walletSession }) {
   return <PaymentLinks summary={summary} walletSession={walletSession} />
 }
 
+// Opens when Connect finds more than one installed wallet.
+function WalletPicker({ picker }) {
+  const dialog = useRef(null)
+  useEffect(() => { picker ? dialog.current?.showModal() : dialog.current?.close() }, [picker])
+  return <dialog className="paymentDialog walletPicker" ref={dialog} aria-labelledby="walletPickerTitle" onClose={() => picker?.resolve(null)}>
+    {picker && <>
+      <h3 id="walletPickerTitle">Connect a wallet</h3>
+      <div className="walletChoices">{picker.options.map((option) => <button key={option.name} className="ghost" type="button" onClick={() => picker.resolve(option)}>
+        {option.icon && <img src={option.icon} alt="" />}{option.name}
+      </button>)}</div>
+      <div className="paymentDialogActions"><button className="ghost" type="button" onClick={() => dialog.current.close()}>Cancel</button></div>
+    </>}
+  </dialog>
+}
+
 function App() {
   const walletSession = useWalletSession()
+  const walletPicker = <WalletPicker picker={walletSession.picker} />
   const getPage = () => window.location.pathname.startsWith('/pay/') ? 'checkout' : ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -1070,9 +1086,9 @@ function App() {
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
-  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main></div>
-  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main></div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main></div>
+  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main>{walletPicker}</div>
+  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletPicker}</div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletPicker}</div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
