@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import bs58 from 'bs58'
 import { fileURLToPath } from 'node:url'
 import { createPaymentLink, listPaymentLinks, getPaymentLink, reportPaymentDeposit, paymentLinkUrl } from '../src/payment-api.js'
-import { prepareMerchantAccess, preparePaymentNote } from '../src/payment-notes.js'
+import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote } from '../src/payment-notes.js'
 import { payPaymentInvoice, validateCheckout } from '../src/payment-deposit.js'
 import { privacyCashDepositInput } from '../src/payment-privacycash.js'
 
@@ -24,7 +24,7 @@ async function draft(protocol) {
   const wallet = await owner()
   const entries = new Map()
   const storage = { getItem: (key) => entries.get(key), setItem: (key, value) => entries.set(key, value) }
-  const record = await preparePaymentNote({ ...wallet, protocol, amount: '0.02', storage })
+  const record = await preparePaymentNote({ ...wallet, keys: await preparePaymentKeys(wallet), index: 0, protocol, amount: '0.02', storage })
   const { id, ...terms } = record.invoice
   return { wallet, record, invoice: { ...terms, payment_id: id, status: 'pending' } }
 }

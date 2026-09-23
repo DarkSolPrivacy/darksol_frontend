@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Settings, Trash2, Upload, Wallet, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Search, Settings, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount } from './transfer-validation.js'
-import { prepareMerchantAccess, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
+import { Connection } from '@solana/web3.js'
+import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts } from './payment-notes.js'
 import { createPaymentLink, deletePaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
+import { paymentRpcUrl } from './payment-deposit.js'
+import { SCAN_GAP, scanPrivacyCashNotes, withdrawPaymentNote } from './payment-withdraw.js'
 import { usdText, useUsdPrices } from './token-price.js'
 
 const PRICED = ['SOL']
@@ -37,13 +40,17 @@ export default function PaymentLinks({ summary, walletSession }) {
   const [transactionId, setTransactionId] = useState('')
   const [picking, setPicking] = useState(null)
   const [selected, setSelected] = useState(new Set())
+  const [noteKeys, setNoteKeys] = useState(null)
+  const [withdrawFor, setWithdrawFor] = useState(null)
+  const [recipient, setRecipient] = useState('')
+  const [recovered, setRecovered] = useState(null)
   const operation = useRef(null)
 
   useEffect(() => {
     setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(null)
     setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null)
     setPublished(new Set()); setDraftState({ address: wallet?.address ?? null, records: [] })
-    setPicking(null); setSelected(new Set())
+    setPicking(null); setSelected(new Set()); setNoteKeys(null); setWithdrawFor(null); setRecovered(null)
     if (wallet) {
       try {
         const records = readPaymentDrafts(localStorage, wallet.address)
@@ -89,6 +96,19 @@ export default function PaymentLinks({ summary, walletSession }) {
     return scoped
   }
 
+  async function paymentKeys(signal) {
+    if (noteKeys?.address === wallet.address) return noteKeys
+    setStatus('Approve your payment note keys...')
+    const keys = await preparePaymentKeys({ ...wallet, signal })
+    signal.throwIfAborted()
+    setNoteKeys(keys)
+    return keys
+  }
+
+  // Every derived index this browser or the server has used; the next note takes the one after.
+  const usedIndexes = (serverNext) => Math.max(serverNext ?? 0,
+    ...draftState.records.filter((record) => record.version === 2).map((record) => record.index + 1))
+
   async function run(action) {
     if (operation.current || connecting) return
     setError(''); setNotice('')
@@ -127,7 +147,11 @@ export default function PaymentLinks({ summary, walletSession }) {
     if (wallet && (!amountResult.valid || amountError)) return
     run(async (signal) => {
       const identity = await merchantAccess(signal)
-      const record = await preparePaymentNote({ ...wallet, protocol: pool, amount, reference, signal,
+      const keys = await paymentKeys(signal)
+      setStatus('Reserving a payment note...')
+      // Read fresh: a key reused across two invoices would link them and share an IV.
+      const { next_index } = await listPaymentLinks({ access: identity, signal })
+      const record = await preparePaymentNote({ ...wallet, keys, index: usedIndexes(next_index), protocol: pool, amount, reference, signal,
         onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
       signal.throwIfAborted()
       setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
@@ -151,8 +175,8 @@ export default function PaymentLinks({ summary, walletSession }) {
 
   const downloadRecovery = (draft) => saveFile(draft, `darksol-payment-${draft.invoice.id}.json`)
 
-  // One file for a batch: these records are the only way to reach a funded
-  // note, so a backup that is easy to keep is worth more than tidy filenames.
+  // One file for a batch: a version 1 record is the only way to reach its note,
+  // and a Cloak note is found from its record, so keep backups easy to keep.
   function downloadSelected(payments) {
     saveFile(payments.map((payment) => payment.record), `darksol-payments-${new Date().toISOString().slice(0, 10)}.json`)
     setNotice(`Saved ${payments.length} recovery record${payments.length === 1 ? '' : 's'}`)
@@ -190,6 +214,41 @@ export default function PaymentLinks({ summary, walletSession }) {
       setNotice(`Deleted ${payments.length} payment link${payments.length === 1 ? '' : 's'}`)
     })
   }
+
+  function openWithdraw(id) {
+    setWithdrawFor(id); setRecipient(''); setError(''); setNotice('')
+  }
+
+  function withdrawRecord(record) {
+    run(async (signal) => {
+      const keys = record.version === 2 ? await paymentKeys(signal) : undefined
+      const signature = await withdrawPaymentNote({ ...wallet, record, keys, recipient, signal,
+        connection: new Connection(paymentRpcUrl(), 'confirmed'),
+        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+      setWithdrawFor(null)
+      setRecovered((previous) => previous?.map((item) => item.record.invoice.id === record.invoice.id ? { ...item, spent: true } : item) ?? null)
+      setNotice(`Withdrawal submitted: ${signature}`)
+    })
+  }
+
+  function recoverFromChain() {
+    run(async (signal) => {
+      const keys = await paymentKeys(signal)
+      const found = await scanPrivacyCashNotes({ keys, signal, toIndex: usedIndexes(history.next_index) + SCAN_GAP,
+        connection: new Connection(paymentRpcUrl(), 'confirmed'),
+        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+      setRecovered(found)
+      setNotice(found.length ? `Found ${found.length} Privacy Cash payment${found.length === 1 ? '' : 's'} on-chain` : 'No Privacy Cash payments found on-chain')
+    })
+  }
+
+  const withdrawForm = (record) => withdrawFor === record.invoice.id && <form className="paymentReport" onSubmit={(event) => { event.preventDefault(); withdrawRecord(record) }}>
+    <label htmlFor="paymentRecipient">Withdraw to address</label>
+    <input id="paymentRecipient" value={recipient} onChange={(event) => setRecipient(event.target.value)} disabled={busy} maxLength={44} autoComplete="off" required
+      placeholder="A fresh address keeps this payment unlinked" />
+    <button className="ghost" disabled={busy || !recipient.trim()} type="submit">{busy ? status || 'Withdrawing...' : 'Withdraw'}</button>
+    <button className="ghost paymentIcon" type="button" title="Cancel" aria-label="Cancel withdrawal" disabled={busy} onClick={() => setWithdrawFor(null)}><X /></button>
+  </form>
 
   const selectable = (payment) => picking === 'download' || payment.status !== 'paid'
   const amountResult = parseAmount(amount, 'SOL')
@@ -270,6 +329,7 @@ export default function PaymentLinks({ summary, walletSession }) {
           <button className="ghost" type="button" disabled={busy || loading} onClick={() => run(async (signal) => { await merchantAccess(signal); setRefresh((value) => value + 1) })}>
             <RefreshCw aria-hidden="true" />{access ? 'Refresh' : 'Load payment links'}
           </button>
+          <button className="ghost" type="button" disabled={busy} title="Find Privacy Cash payments from your wallet signature alone" onClick={recoverFromChain}><Search aria-hidden="true" />Find on-chain</button>
           {history.payments.length > 0 && <>
             <button className="ghost" type="button" aria-pressed={picking === 'download'} disabled={busy} onClick={() => startPicking(picking === 'download' ? null : 'download')}><Download aria-hidden="true" />Download</button>
             <button className="ghost paymentDelete" type="button" aria-pressed={picking === 'delete'} disabled={busy} onClick={() => startPicking(picking === 'delete' ? null : 'delete')}><Trash2 aria-hidden="true" />Delete</button>
@@ -278,7 +338,7 @@ export default function PaymentLinks({ summary, walletSession }) {
       </div>
       {picking && <p className="paymentFormHint" role="status">{picking === 'download'
         ? 'Choose the payment links to save a recovery backup for.'
-        : 'Choose the payment links to delete. Paid links cannot be deleted while their funds are unwithdrawn.'}</p>}
+        : 'Choose the payment links to delete. Paid links cannot be deleted.'}</p>}
       {historyError && <p className="paymentError" role="alert">{historyError}</p>}
       {loading && <p className="paymentLoading" role="status">Loading payment links...</p>}
       {history.payments.length > 0 && <div className="paymentDrafts">{history.payments.map((payment) => <React.Fragment key={payment.payment_id}>
@@ -294,8 +354,10 @@ export default function PaymentLinks({ summary, walletSession }) {
             <button type="button" className="ghost paymentIcon" title="Copy payment link" aria-label="Copy payment link" onClick={() => copyLink(payment.payment_url)}><Copy /></button>
             <a className="ghost paymentIcon" title="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
             {payment.status !== 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => { setDepositFor(payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
+            {payment.status === 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(payment.record.invoice.id)}>Withdraw</button>}
           </div>
         </article>
+        {withdrawForm(payment.record)}
         {depositFor === payment.payment_id && payment.status !== 'paid' && <form className="paymentReport" onSubmit={(event) => {
           event.preventDefault()
           run(async (signal) => {
@@ -318,6 +380,14 @@ export default function PaymentLinks({ summary, walletSession }) {
           {picking === 'download' ? <><Download aria-hidden="true" />Download {selected.size || ''}</> : <><Trash2 aria-hidden="true" />Delete {selected.size || ''}</>}
         </button>
       </div>}
+      {recovered?.length > 0 && <div className="paymentDrafts">{recovered.map(({ record, spent }) => <React.Fragment key={record.invoice.id}>
+        <article className="paymentDraft paymentLocal">
+          <div><strong>Found on-chain</strong><span>{format(Number(record.invoice.amount) / 1e9, 9)} SOL · Privacy Cash</span><small>Payment note {record.index + 1}</small>
+            <span className={`paymentStatus ${spent ? 'paid' : 'pending'}`}><span aria-hidden="true">{spent ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{spent ? 'Withdrawn' : 'Ready to withdraw'}</span></div>
+          <div className="paymentRowActions">{!spent && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(record.invoice.id)}>Withdraw</button>}</div>
+        </article>
+        {withdrawForm(record)}
+      </React.Fragment>)}</div>}
       {(offset > 0 || history.next_offset !== null) && <div className="paymentPagination">
         <button className="ghost" type="button" disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}><ArrowLeft />Previous</button>
         <button className="ghost" type="button" disabled={loading || history.next_offset === null} onClick={() => setOffset(history.next_offset)}>Next<ArrowRight /></button>
