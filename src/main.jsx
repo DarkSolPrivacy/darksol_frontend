@@ -1086,9 +1086,10 @@ function App() {
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
-  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /></main>{walletPicker}</div>
-  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletPicker}</div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletPicker}</div>
+  const socialFoot = <footer className="socialFoot"><a href="https://x.com/DarkSolapp" target="_blank" rel="noopener noreferrer" aria-label="DarkSol on X"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>@DarkSolapp</a></footer>
+  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} />{socialFoot}</main>{walletPicker}</div>
+  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} />{socialFoot}</main>{walletPicker}</div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}{socialFoot}</main>{walletPicker}</div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

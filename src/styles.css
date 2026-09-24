@@ -824,3 +824,4 @@ html,body{overflow-x:clip}
 .paymentPrimary { white-space: normal; overflow-wrap: anywhere; }
 .paymentPrimary svg { flex-shrink: 0; }
 @media(max-width:600px) { .paymentDraft { flex-wrap: wrap; } .paymentCheckoutAmount { font-size: 32px; } }
+.socialFoot{margin-top:28px}.socialFoot a{display:inline-flex;align-items:center;gap:7px;color:#888888;text-decoration:none;font-size:11px}.socialFoot a:hover{color:var(--accent)}.socialFoot svg{width:14px;height:14px}
