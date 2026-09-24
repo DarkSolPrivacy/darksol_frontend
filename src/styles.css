@@ -824,4 +824,4 @@ html,body{overflow-x:clip}
 .paymentPrimary { white-space: normal; overflow-wrap: anywhere; }
 .paymentPrimary svg { flex-shrink: 0; }
 @media(max-width:600px) { .paymentDraft { flex-wrap: wrap; } .paymentCheckoutAmount { font-size: 32px; } }
-.socialFoot{margin-top:28px}.socialFoot a,.sideBottom .xLink{display:inline-flex;align-items:center;gap:7px;color:#888888;text-decoration:none;font-size:11px}.sideBottom .xLink{display:flex;width:fit-content;margin-top:14px;font-size:10px;color:#777777}.sideBottom .xLink svg{width:12px;height:12px}.socialFoot a:hover,.sideBottom .xLink:hover{color:var(--accent)}.socialFoot svg,.sideBottom .xLink svg{width:14px;height:14px}
+.socialFoot{margin-top:28px}.socialFoot a,.sideBottom .xLink{display:inline-flex;align-items:center;gap:7px;color:#888888;text-decoration:none;font-size:11px}.sideBottom .xLink{display:flex;width:fit-content;margin-top:14px;font-size:10px;color:#777777}.sideBottom .xLink svg{width:12px;height:12px}.socialFoot a:hover,.sideBottom .xLink:hover{color:var(--accent)}.socialFoot svg{width:14px;height:14px}
