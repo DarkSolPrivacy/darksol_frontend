@@ -76,6 +76,7 @@ export const PROVIDER_CAPABILITIES = Object.freeze(Object.fromEntries(manifests.
     network: manifest.network,
     supportsMultiRecipient: manifest.recipients.multi,
     maxRecipients: manifest.recipients.max,
+    supportsDeadline: manifest.send.deadline === true,
     supportsPrivateSwap: manifest.swap.execution === 'sdk',
     swapAggregator: manifest.swap.aggregator,
     protocolExecution: Object.freeze({ label: 'historical p50 / p95 when available' }),

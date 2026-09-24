@@ -32,7 +32,10 @@ export default Object.freeze({
   }),
   recipients: Object.freeze({ multi: true, max: null }),
 
-  send: Object.freeze({ execution: 'sdk' }),
+  // deadline: the browser proves the withdrawal and the backend relays it later.
+  // One recipient only: each later withdrawal spends the change note the
+  // previous one creates when it lands, so it cannot be proved ahead.
+  send: Object.freeze({ execution: 'sdk', deadline: true }),
   swap: Object.freeze({
     execution: 'documented-only',
     aggregator: 'Jupiter',

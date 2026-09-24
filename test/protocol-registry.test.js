@@ -59,7 +59,7 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
   assert.deepEqual(pick(PROVIDER_CAPABILITIES), {
     privacycash: {
       id: 'privacycash', name: 'PrivacyCash', network: 'Solana',
-      supportsMultiRecipient: true, maxRecipients: null,
+      supportsMultiRecipient: true, maxRecipients: null, supportsDeadline: true,
       supportsPrivateSwap: false, documentsPrivateSwap: true,
       privateSwapIntegration: 'Unavailable in privacycash@1.2.2 public SDK',
       swapAggregator: 'Jupiter',
@@ -71,7 +71,7 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
     },
     cloakc: {
       id: 'cloakc', name: 'CLOAKC', network: 'Solana',
-      supportsMultiRecipient: false, maxRecipients: 1,
+      supportsMultiRecipient: false, maxRecipients: 1, supportsDeadline: false,
       supportsPrivateSwap: true, swapAggregator: 'Jupiter',
       capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
       protocolExecution: { label: 'historical p50 / p95 when available' },
@@ -82,7 +82,7 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
     },
     curvy: {
       id: 'curvy', name: 'Curvy', network: 'Arbitrum One', chainId: 42161,
-      supportsMultiRecipient: false, maxRecipients: 1,
+      supportsMultiRecipient: false, maxRecipients: 1, supportsDeadline: false,
       supportsPrivateSwap: true, swapAggregator: 'LiFi',
       supportedTokens: ['USDC', 'SOL', 'USDT'],
       capabilityNote: 'The current integration treats each public unshield as a single-recipient exit.',

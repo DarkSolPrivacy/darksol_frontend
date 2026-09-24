@@ -148,11 +148,21 @@ nav .externalNav{padding-left:41px}nav .externalNav:hover{color:#F0F0F0;backgrou
 nav .externalNav{padding-left:12px}
 .sidebarClosed nav .externalNav{display:grid}
 .sidebarClosed nav .externalNav .navArrow{display:none}
-.delayControl{position:absolute;right:4px;bottom:48px;width:32px;height:32px;display:grid;place-items:center;border:1px solid #2A2A2A;border-radius:50%;background:#151515;color:#666666;cursor:not-allowed}
-.delayControl.solo{bottom:9px}
+.delayControl{position:absolute;right:4px;bottom:48px;width:32px;height:32px;display:grid;place-items:center;border:1px solid #2A2A2A;border-radius:50%;background:#151515;color:#666666;font:500 9px JetBrains Mono}
+.delayControl[aria-disabled=true]{cursor:not-allowed}.delayControl[aria-disabled=true] svg{opacity:.45}
+.delayControl.on,.delayControl[aria-disabled=false]:hover{color:var(--gold);border-color:var(--gold)}
 .delayControl svg{width:14px}
 .delayControl:after{content:attr(data-tooltip);position:absolute;right:40px;top:50%;z-index:8;width:max-content;padding:7px 9px;border:1px solid #2A2A2A;border-radius:6px;background:#111a15;color:#999999;font:500 9px JetBrains Mono;letter-spacing:.3px;box-shadow:0 8px 24px #0008;opacity:0;pointer-events:none;transform:translate(5px,-50%);transition:opacity .15s,transform .15s}
 .delayControl:hover:after,.delayControl:focus-visible:after{opacity:1;transform:translate(0,-50%)}
+.delayControl[aria-expanded=true]:after{opacity:0}
+.delayMenu{position:absolute;z-index:9;right:4px;top:calc(100% - 44px);width:150px;padding:6px;border:1px solid var(--line);border-radius:2px;background:#151515;box-shadow:0 18px 50px #000}
+.delayMenu button{width:100%;height:36px;padding:0 10px;border:0;border-radius:2px;background:transparent;color:var(--muted);font:500 11px JetBrains Mono;text-align:left}
+.delayMenu button:hover,.delayMenu button[aria-checked=true]{color:var(--text);background:#1E1E1E}
+.transferResult.delivery{flex-wrap:wrap}
+.transferResult.delivery>span{flex:1 1 220px}
+.transferResult.delivery>button{height:26px;padding:0 10px;display:grid;place-items:center;border:1px solid var(--line);border-radius:2px;background:transparent;color:var(--gold);font:500 10px JetBrains Mono}
+.transferResult.delivery>button:disabled{opacity:.45}
+.transferResult.delivery>button svg{width:12px}
 @media(max-width:760px){.app>main{min-height:100svh;padding-top:14px;padding-bottom:14px}.delayControl:after{right:38px}}
 
 /* DarkSol premium monochrome system */

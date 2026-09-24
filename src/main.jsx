@@ -19,6 +19,7 @@ import {
 } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
+import { DELAY_MINUTES, cancelScheduled, loadScheduled, saveScheduled, scheduleWithdrawal, scheduledStatus } from './scheduled-send.js'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
 // bridge picker named privacycash directly. Both follow the manifests now.
@@ -48,6 +49,14 @@ const LOGOS = {
     USDT: { src: '/logos/usdt.svg', source: 'https://tether.to/en/media/' },
   },
   protocols: PROTOCOL_LOGOS,
+}
+// Every state but pending and sent leaves the deposit shielded, so each offers Send now.
+const DELIVERY_TEXT = {
+  sent: 'Transfer delivered',
+  failed: 'Delivery failed · funds are still shielded',
+  expired: 'Delivery window passed · funds are still shielded',
+  cancelled: 'Delivery cancelled · funds are still shielded',
+  unknown: 'Delivery status unavailable · Send now checks the chain first',
 }
 const EMPTY_ASSETS = { USDC: 0, SOL: 0, USDT: 0 }
 const EMPTY = { buckets: [], totals: { deposits: EMPTY_ASSETS, withdrawals: EMPTY_ASSETS, swapIn: EMPTY_ASSETS, swapOut: EMPTY_ASSETS, poolSize: EMPTY_ASSETS, count: 0, counts: { byAsset: EMPTY_ASSETS } }, poolState: { balances: EMPTY_ASSETS, usd: EMPTY_ASSETS, totalUsd: 0 }, externalFlows: {}, activity: { txCount: 0, uniqueAmounts: 0, amountDistribution: [], recentVolume: {}, timeDistribution: [] }, recent: [] }
@@ -116,13 +125,15 @@ function providerKey(item) {
   return resolveProtocolId(item?.provider || item?.protocol || '')
 }
 
-function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge) {
+function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, delayed = false) {
   const protocol = providerKey(item)
   const configured = PROVIDER_CAPABILITIES[protocol] || {}
   const poolMetrics = item?.poolMetrics || {}
   const capabilities = { ...configured, ...(item?.capabilities || {}) }
   // A server response must not widen a protocol past what its manifest declares.
   if (!configured.supportsMultiRecipient) capabilities.supportsMultiRecipient = false
+  if (!configured.supportsDeadline) capabilities.supportsDeadline = false
+  const deadlineBlocked = delayed && !capabilities.supportsDeadline
   // A bridge is ranked on its own route table: the swap table would report the
   // wrong answer, since bridging leaves Solana entirely.
   const route = bridge ? bridgeEligibility(protocol, inputAsset, bridge.chainId, bridge.token)
@@ -137,9 +148,10 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge) {
     ...item,
     protocol,
     protocolName: item?.protocolName || item?.providerName || PROTOCOLS[protocol]?.name || item?.provider || item?.protocol || 'Unknown pool',
-    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked,
+    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked && !deadlineBlocked,
     unavailableReason: capabilityBlocked
       ? 'Multiple-recipient withdrawal is not currently supported by this provider.'
+      : deadlineBlocked ? 'A delivery deadline is not supported by this provider.'
       : routeBlocked ? route.reason
       : item?.unavailableReason || item?.ineligibleReason || item?.reason,
     capabilities,
@@ -349,6 +361,10 @@ function PrivacyHome({ walletSession }) {
   const [selectedProtocol, setSelectedProtocol] = useState(null)
   const [walletBalance, setWalletBalance] = useState(null)
   const [balanceLoading, setBalanceLoading] = useState(false)
+  const [delay, setDelay] = useState(0)
+  const [delayMenuOpen, setDelayMenuOpen] = useState(false)
+  // A delayed delivery outlives this page: it is reloaded from localStorage.
+  const [scheduled, setScheduled] = useState(loadScheduled)
   const requestSequence = useRef(0)
   const balanceSequence = useRef(0)
   const receiverCount = receiverAmounts.length
@@ -357,6 +373,9 @@ function PrivacyHome({ walletSession }) {
   const isSwap = !isBridge && asset !== destinationAsset
   const selectedBridgeChain = bridgeChain(bridgeChainId)
   const bridgeRoute = isBridge ? bridgeEligibility(BRIDGE_PROTOCOL_ID, asset, bridgeChainId, bridgeToken) : null
+  // Only a plain send to one recipient can be proved ahead and delivered later.
+  const deadlineMinutes = !isSwap && !isBridge && receiverCount === 1 ? delay : 0
+  const delayLabel = receiverCount > 1 ? 'Delay supports one recipient' : deadlineMinutes ? `Arrives within ${deadlineMinutes} min` : 'Delay'
 
   const total = finite(amount)
   const totalRaw = rawTokenAmount(amount, asset)
@@ -393,6 +412,20 @@ function PrivacyHome({ walletSession }) {
   useEffect(() => {
     setReceipt(null); setSendError(''); setSendStatus(''); setSendAttempted(false)
   }, [wallet])
+
+  useEffect(() => saveScheduled(scheduled), [scheduled])
+
+  const pendingId = scheduled?.status === 'pending' ? scheduled.id : null
+  useEffect(() => {
+    if (!pendingId) return undefined
+    let live = true
+    const poll = () => scheduledStatus(pendingId)
+      .then((next) => { if (live && next.status !== 'pending') setScheduled((job) => job?.id === pendingId ? { ...job, ...next } : job) })
+      .catch(() => {})
+    poll()
+    const timer = setInterval(poll, 15_000)
+    return () => { live = false; clearInterval(timer) }
+  }, [pendingId])
 
   useEffect(() => {
     const requestId = ++balanceSequence.current
@@ -504,6 +537,7 @@ function PrivacyHome({ walletSession }) {
     if (!browserCanRun(recommended?.protocol, kind)) {
       return setSendError('This recommended route is not enabled for browser execution yet')
     }
+    if (scheduledBlocks) return setSendError('Finish or dismiss the delayed delivery above first.')
     setSending(true)
     try {
       // One dispatch for every protocol and every capability. The adapter is
@@ -520,8 +554,22 @@ function PrivacyHome({ walletSession }) {
         recipient: isBridge ? activeValidation.recipient : transferValidation.rows[0]?.address.publicKey,
         recipients: transferValidation.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
         totalBaseUnits: activeValidation.total.baseUnits,
+        delayMinutes: kind === 'send' ? deadlineMinutes : 0,
         onStatus: setSendStatus,
       })
+      if (kind === 'send' && deadlineMinutes) {
+        const [row] = transferValidation.rows
+        const job = { protocol: recommended.protocol, owner: wallet.address, asset, recipient: row.address.sanitized,
+          baseUnits: String(row.amount.baseUnits), depositSignature: result.depositSignature, status: 'failed' }
+        if (result.withdrawal) {
+          job.nullifiers = [result.withdrawal.nullifier0PDA, result.withdrawal.nullifier1PDA]
+          setSendStatus('Scheduling delivery…')
+          // Either way the deposit stands and the funds stay shielded; failed offers Send now.
+          try { Object.assign(job, await scheduleWithdrawal(result.withdrawal, deadlineMinutes), { status: 'pending' }) } catch {}
+        }
+        setScheduled(job); setSendStatus('')
+        return
+      }
       setReceipt(result); setSendStatus('Sent')
     } catch (transferError) {
       if (transferError?.receipt) setReceipt(transferError.receipt)
@@ -530,10 +578,32 @@ function PrivacyHome({ walletSession }) {
     } finally { setSending(false) }
   }
 
+  async function deliverNow() {
+    setSendError('')
+    if (!wallet) return connectWallet()
+    if (wallet.address !== scheduled.owner) return setSendError(`Connect ${short(scheduled.owner)}, the wallet that made this deposit`)
+    setSending(true)
+    try {
+      const { sendScheduledNow } = await loadBrowserAdapter(scheduled.protocol)
+      const result = await sendScheduledNow({ provider: wallet.provider, job: scheduled, onStatus: setSendStatus })
+      setScheduled((job) => ({ ...job, status: 'sent', signature: result.tx || undefined }))
+    } catch (deliveryError) {
+      setSendError(deliveryError instanceof Error ? deliveryError.message : String(deliveryError))
+    } finally { setSending(false); setSendStatus('') }
+  }
+
+  async function cancelDelivery() {
+    const { id } = scheduled
+    const update = (next) => setScheduled((job) => job?.id === id ? { ...job, ...next } : job)
+    if (await cancelScheduled(id).catch(() => false)) return update({ status: 'cancelled' })
+    // Refused: already sending or done, so show where it got to.
+    scheduledStatus(id).then(update).catch(() => {})
+  }
+
   const rankings = useMemo(() => {
     if (!comparison) return []
     const bridge = isBridge ? { chainId: bridgeChainId, token: bridgeToken } : null
-    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge))
+    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0))
     if (strategy === 'multiple') {
       for (const id of SINGLE_RECIPIENT_IDS) {
         if (normalized.some((item) => item.protocol === id)) continue
@@ -541,7 +611,7 @@ function PrivacyHome({ walletSession }) {
       }
     }
     return normalized
-  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken])
+  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken, deadlineMinutes])
   const suggestedProtocol = rankings.find((item) => item.available)?.protocol
   const selectedIsAvailable = rankings.some((item) => item.available && item.protocol === selectedProtocol)
   const activeProtocol = selectedIsAvailable ? selectedProtocol : suggestedProtocol
@@ -551,6 +621,10 @@ function PrivacyHome({ walletSession }) {
   const recommended = rankings.find((item) => item.available && item.protocol === activeProtocol)
   const alternatives = rankings.filter((item) => item.protocol !== activeProtocol)
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
+  // Any deposit consolidates the wallet's notes, including the one a queued proof
+  // spends, and would replace the job whose Send now the user still needs. So the
+  // same pool stays off limits until the delivery lands or is dismissed.
+  const scheduledBlocks = Boolean(scheduled) && scheduled.status !== 'sent' && scheduled.protocol === recommended?.protocol && scheduled.asset === asset
   const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : 'Send'
   const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : 'Sending...'
 
@@ -589,18 +663,25 @@ function PrivacyHome({ walletSession }) {
       </div>}
       <div className="recipientRows">
         {receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name?.toUpperCase()}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>OUTPUT</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
-        <button type="button" className={`delayControl ${isSwap || isBridge ? 'solo' : ''}`} aria-disabled="true" aria-label="Delay, coming soon" data-tooltip="Delay [SOON]"><Clock3 /></button>
-        {!isSwap && !isBridge && <button type="button" className="addReceiver" aria-label="Add receiver" onClick={addReceiver}><Plus /></button>}
+        {!isSwap && !isBridge && <>
+          <button type="button" className={`delayControl ${deadlineMinutes ? 'on' : ''}`} aria-haspopup="menu" aria-expanded={delayMenuOpen && receiverCount === 1} aria-disabled={receiverCount > 1} aria-label={delayLabel} data-tooltip={delayLabel} onClick={() => receiverCount === 1 && setDelayMenuOpen(!delayMenuOpen)}>{deadlineMinutes ? `${deadlineMinutes}m` : <Clock3 />}</button>
+          {delayMenuOpen && receiverCount === 1 && <div className="delayMenu" role="menu">{[0, ...DELAY_MINUTES].map((minutes) => <button type="button" role="menuitemradio" aria-checked={delay === minutes} key={minutes} onClick={() => { setDelay(minutes); setDelayMenuOpen(false); setReceipt(null) }}>{minutes ? `Within ${minutes} min` : 'Now'}</button>)}</div>}
+          <button type="button" className="addReceiver" aria-label="Add receiver" onClick={addReceiver}><Plus /></button>
+        </>}
       </div>
       {(sendAttempted || amount) && !activeValidation.valid && <div className="splitStatus">{!isBridge && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error}</div>}
     </section>
     {error && <section className="notice error"><ShieldX /><span>{error}</span></section>}
     <section className="sendAction panel">
       <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
-      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (receipt?.depositSignature || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
+      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (receipt?.depositSignature || scheduledBlocks || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
     </section>
     {recommended && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
+    {scheduled && <section className="transferResult delivery">{scheduled.status === 'sent' ? <CheckCircle2 /> : <Clock3 />}<span>{scheduled.status === 'pending' ? `Deposit confirmed · arrives by ${new Date(scheduled.sendBy).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} · you can close this page` : DELIVERY_TEXT[scheduled.status]}</span>
+      <a href={`https://solscan.io/tx/${scheduled.signature || scheduled.depositSignature}`} target="_blank" rel="noreferrer">{scheduled.signature ? 'View transfer' : 'View deposit'} <ExternalLink /></a>
+      {scheduled.status === 'pending' ? <button type="button" onClick={cancelDelivery}>Cancel</button> : scheduled.status !== 'sent' && <button type="button" onClick={deliverNow} disabled={sending}>Send now</button>}
+      {scheduled.status !== 'pending' && <button type="button" aria-label="Dismiss" onClick={() => setScheduled(null)} disabled={sending}><X /></button>}</section>}
   </div>
 }
 

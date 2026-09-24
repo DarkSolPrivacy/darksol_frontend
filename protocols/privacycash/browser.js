@@ -98,7 +98,33 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
   }
 }
 
-export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, onStatus = () => {} }) {
+function withdrawTo(privacyCash, common, asset, recipient) {
+  return asset === 'SOL'
+    ? privacyCash.withdraw({ ...common, recipient: recipient.publicKey, amount_in_lamports: Number(recipient.baseUnits) })
+    : privacyCash.withdrawSPL({ ...common, recipient: recipient.publicKey, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(recipient.baseUnits) })
+}
+
+// Runs the SDK's own withdraw up to its relayer POST and returns that body
+// unsent. The proof binds recipient, amount and fee, so whoever relays it later
+// can deliver it or drop it, never redirect it. Stopping there also skips the
+// SDK's confirmation polling and leaves its note cache alone: getUtxos re-reads
+// spent-ness from the nullifier accounts on chain, so a retry still finds the note.
+export async function captureWithdrawal(run) {
+  const realFetch = globalThis.fetch
+  const captured = new Error('Withdrawal captured')
+  let body = null
+  globalThis.fetch = async (input, init) => {
+    if (init?.method !== 'POST' || !/\/withdraw(\/spl)?$/.test(String(input?.url ?? input))) return realFetch(input, init)
+    body = JSON.parse(init.body)
+    throw captured
+  }
+  try { await run() } catch (error) { if (error !== captured) throw error } finally { globalThis.fetch = realFetch }
+  if (!body) throw new Error('PrivacyCash built no withdrawal to schedule')
+  return body
+}
+
+export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, onStatus = () => {} }) {
+  if (delayMinutes && recipients.length !== 1) throw new Error('A delivery deadline supports one recipient')
   const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus })
 
   onStatus('Approve deposit in your wallet…')
@@ -107,14 +133,16 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
     : await privacyCash.depositSPL({ ...common, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(totalBaseUnits), transactionSigner })
 
   const receipt = { provider: 'privacycash', asset, depositSignature: deposit.tx, withdrawals: [] }
+  if (delayMinutes) {
+    onStatus('Preparing delayed delivery…')
+    // A failed proof leaves the funds shielded, and the page offers Send now.
+    try { receipt.withdrawal = await captureWithdrawal(() => withdrawTo(privacyCash, common, asset, recipients[0])) } catch {}
+    return receipt
+  }
   try {
     for (let index = 0; index < recipients.length; index += 1) {
-      const recipient = recipients[index]
       onStatus(`Sending ${index + 1} of ${recipients.length}…`)
-      const result = asset === 'SOL'
-        ? await privacyCash.withdraw({ ...common, recipient: recipient.publicKey, amount_in_lamports: Number(recipient.baseUnits) })
-        : await privacyCash.withdrawSPL({ ...common, recipient: recipient.publicKey, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(recipient.baseUnits) })
-      receipt.withdrawals.push(result)
+      receipt.withdrawals.push(await withdrawTo(privacyCash, common, asset, recipients[index]))
     }
   } catch (error) {
     const partialError = new Error(`Deposit succeeded, but withdrawal ${receipt.withdrawals.length + 1} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -122,6 +150,20 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
     throw partialError
   }
   return receipt
+}
+
+// Send now, for a delayed delivery that failed, expired, was cancelled or that
+// the server forgot. Both of the proof's nullifier accounts existing means it
+// landed after all (a relay that timed out, a purged status), and a second
+// withdrawal would pay the recipient twice.
+export async function sendScheduledNow({ provider, job, onStatus = () => {} }) {
+  const { privacyCash, common, connection } = await openPrivacyCashSession({ provider, asset: job.asset, totalBaseUnits: 0n, onStatus })
+  if (job.nullifiers) {
+    const accounts = await connection.getMultipleAccountsInfo(job.nullifiers.map((key) => new PublicKey(key)), 'confirmed')
+    if (accounts.every(Boolean)) return { tx: null }
+  }
+  onStatus('Sending…')
+  return withdrawTo(privacyCash, common, job.asset, { publicKey: new PublicKey(job.recipient), baseUnits: BigInt(job.baseUnits) })
 }
 
 // The one entry point the UI calls. Bridging lives in bridge.js and is loaded
