@@ -1,13 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
-import * as THREE from 'three'
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
-import { ImprovedNoise } from 'three/examples/jsm/math/ImprovedNoise.js'
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, CheckCircle2, ChevronDown, Clock3, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
-import PaymentLinks from './payment-links.jsx'
+import PaymentLinks, { forgetAccess, uncollectedTotals } from './payment-links.jsx'
 import PaymentCheckout from './payment-checkout.jsx'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
@@ -27,6 +23,55 @@ const SOLANA_POOL_IDS = listProtocols({ chain: 'solana' }).map(({ id }) => id)
 const OTHER_POOL_IDS = listProtocols().filter(({ chain }) => chain !== 'solana').map(({ id }) => id)
 const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || null
 const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
+const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
+const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
+const sourceName = (source) => source === 'links' ? 'Payment links' : PROTOCOLS[source]?.name || source
+// The last shielded reading per wallet address, shared by the wallet panel and
+// the send form, so either shows it at once while a fresh read runs underneath.
+const shieldedCache = new Map()
+
+// Each pool's shielded balance for `wallet`: { state: loading | ready | locked |
+// error, balances, spendable }, per pool id. Locked means the pool needs a
+// signature: reading never asks the wallet to sign, reveal() does.
+function useShieldedPools(wallet, active = true) {
+  const address = wallet?.address
+  const [state, setState] = useState({ address: null, pools: {} })
+  const [status, setStatus] = useState('')
+  const [round, setRound] = useState(0)
+  const scan = useRef(null)
+  const pools = state.address === address ? state.pools : shieldedCache.get(address) ?? {}
+
+  useEffect(() => { if (state.address) shieldedCache.set(state.address, state.pools) }, [state])
+
+  function read(id, prompt, signal) {
+    const settle = (next) => {
+      if (signal.aborted) return
+      setState((current) => {
+        const base = current.address === address ? current.pools : shieldedCache.get(address) ?? {}
+        return { address, pools: { ...base, [id]: { ...base[id], ...next } } }
+      })
+    }
+    settle({ state: 'loading' })
+    loadBrowserAdapter(id)
+      .then((adapter) => adapter.shieldedBalances({ provider: wallet.provider, prompt, signal,
+        onStatus: (message) => { if (!signal.aborted) setStatus(`${sourceName(id)} · ${message}`) } }))
+      .then((result) => settle(result ? { state: 'ready', ...result } : { state: 'locked', balances: undefined, spendable: undefined }),
+        () => settle({ state: 'error' }))
+      .finally(() => { if (!signal.aborted) setStatus('') })
+  }
+
+  useEffect(() => {
+    if (!active || !address) return undefined
+    const controller = new AbortController()
+    scan.current = controller
+    for (const id of SHIELDED_POOL_IDS) read(id, false, controller.signal)
+    return () => controller.abort()
+  }, [active, address, round])
+
+  const reveal = () => SHIELDED_POOL_IDS.filter((id) => ['locked', 'error'].includes(pools[id]?.state))
+    .forEach((id) => read(id, true, scan.current.signal))
+  return { pools, status, reveal, refresh: () => setRound((value) => value + 1) }
+}
 
 // A route runs in the browser only if the protocol ships the module for it and
 // declares that capability as actually executing, not merely documented.
@@ -83,6 +128,8 @@ const pickNumber = (...values) => values.map(finite).find((value) => value !== n
 const scoreText = (value) => finite(value) === null ? '—' : `${Math.round(Number(value))}/100`
 const bandClass = (value) => String(value || '').toLowerCase().replace(/\s+/g, '-')
 const displayBand = (value) => value ? String(value).replaceAll('_', ' ').toUpperCase() : 'UNAVAILABLE'
+// The band as a word in a sentence-case UI: "VERY_HIGH" reads "Very high".
+const bandLabel = (value) => { const text = displayBand(value).toLowerCase(); return text.charAt(0).toUpperCase() + text.slice(1) }
 const explanationText = (entry) => typeof entry === 'string' ? entry : entry?.text || entry?.message || entry?.label
 const explanationTone = (entry, text) => entry && typeof entry === 'object' ? entry.type || entry.tone || entry.impact : String(text).trim().startsWith('-') ? 'negative' : 'positive'
 const formatMetricMoney = (value) => finite(value) === null ? 'Unavailable' : money(Number(value))
@@ -125,9 +172,25 @@ function providerKey(item) {
   return resolveProtocolId(item?.provider || item?.protocol || '')
 }
 
-function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, delayed = false) {
+// Why a pool cannot pay `sentRaw` of `asset` from the wallet's shielded balance, or null.
+function fromShieldedReason(entry, asset, sentRaw) {
+  if (!entry || entry.state === 'loading') return 'Reading your shielded balance…'
+  if (entry.state === 'locked') return 'Reveal your shielded balance to pay from it.'
+  if (entry.state === 'error') return 'Your shielded balance could not be read.'
+  const available = BigInt(entry.spendable?.[asset] ?? 0n)
+  if (sentRaw === null || available >= sentRaw) return null
+  return available ? `Your shielded ${asset} here can send at most ${rawTokenText(available, asset)} at once.` : `No shielded ${asset} in this pool.`
+}
+
+// `shield` is null for a plain send, or { mode: 'keep' | 'use', pools, sentRaw }:
+// keep deposits more than it sends, use pays from the shielded balance.
+function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, delayed = false, shield = null) {
   const protocol = providerKey(item)
   const configured = PROVIDER_CAPABILITIES[protocol] || {}
+  const send = PROTOCOLS[protocol]?.send || {}
+  const shieldBlocked = !shield ? null
+    : shield.mode === 'keep' ? (send.keepShielded ? null : 'Keeping part of a send shielded is not supported by this provider.')
+      : send.fromShielded ? fromShieldedReason(shield.pools[protocol], inputAsset, shield.sentRaw) : 'Paying from shielded funds is not supported by this provider.'
   const poolMetrics = item?.poolMetrics || {}
   const capabilities = { ...configured, ...(item?.capabilities || {}) }
   // A server response must not widen a protocol past what its manifest declares.
@@ -148,10 +211,11 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, dela
     ...item,
     protocol,
     protocolName: item?.protocolName || item?.providerName || PROTOCOLS[protocol]?.name || item?.provider || item?.protocol || 'Unknown pool',
-    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked && !deadlineBlocked,
+    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked && !deadlineBlocked && !shieldBlocked,
     unavailableReason: capabilityBlocked
       ? 'Multiple-recipient withdrawal is not currently supported by this provider.'
       : deadlineBlocked ? 'A delivery deadline is not supported by this provider.'
+      : shieldBlocked ? shieldBlocked
       : routeBlocked ? route.reason
       : item?.unavailableReason || item?.ineligibleReason || item?.reason,
     capabilities,
@@ -229,7 +293,7 @@ function EstimateTimeline({ timeline, targetScore }) {
 
 function ReceiverBreakdown({ receivers, asset, targetLabel }) {
   if (!receivers?.length) return null
-  return <div className="receiverResults"><p>RECEIVER PRIVACY</p>{receivers.map((receiver, index) => {
+  return <div className="receiverResults"><p>Receiver privacy</p>{receivers.map((receiver, index) => {
     const receiverEstimate = receiver.estimate || receiver
     const receiverScore = pickNumber(receiver.score, receiver.privacyScore, receiverEstimate.score, receiverEstimate.privacyScore)
     const receiverBand = receiver.band || receiver.privacy || receiverEstimate.band || receiverEstimate.privacy
@@ -255,14 +319,11 @@ function ProtocolLogo({ protocol, name }) {
     : <span className="protocolLogo fallback" role="img" aria-label={name} title={name}>{String(name || '?').slice(0, 1)}</span>
 }
 
+// The eclipse mark is generated by scripts/eclipse-mark.mjs.
 function EclipseLogo() {
   return <div className="brandLockup" aria-label="DarkSol">
-    <svg className="eclipseMark" viewBox="0 0 48 48" aria-hidden="true">
-      <defs><radialGradient id="eclipseCorona"><stop offset="52%" stopColor="#0A0A0A" /><stop offset="66%" stopColor="var(--accent)" stopOpacity=".95" /><stop offset="78%" stopColor="var(--accent)" stopOpacity=".16" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></radialGradient></defs>
-      <circle cx="24" cy="24" r="22" fill="url(#eclipseCorona)" />
-      <circle cx="24" cy="24" r="14.5" fill="#080808" stroke="#F0F0F0" strokeWidth=".8" />
-    </svg>
-    <span>DARKSOL<small>PRIVATE ROUTING</small></span>
+    <img className="eclipseMark" src="/logo.svg" alt="" aria-hidden="true" />
+    <span>DARKSOL<small>Private routing</small></span>
   </div>
 }
 
@@ -315,8 +376,8 @@ function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open
     <button type="button" className="routeDetailsToggle" aria-expanded={open} onClick={onToggle}>Details <ChevronDown /></button>
     {open && <div className="routeDetailsBody panel">
       <div className="routeDetailsHead">
-        <div><p className="eyebrow">WHY THIS ROUTE</p><h3>{estimate.protocolName} ranks first{planAmount === null ? '' : ` for ${compact(planAmount, 6)} ${asset}`}</h3></div>
-        <div className={`privacy ${bandClass(estimate.band)}`}><span>ESTIMATED PRIVACY</span><strong>{displayBand(estimate.band)}</strong><em>{scoreText(estimate.score)}</em></div>
+        <h3>{estimate.protocolName} ranks first{planAmount === null ? '' : ` for ${compact(planAmount, 6)} ${asset}`}</h3>
+        <div className={`privacy ${bandClass(estimate.band)}`}><span>Estimated privacy</span><strong>{bandLabel(estimate.band)}</strong><em>{scoreText(estimate.score)}</em></div>
       </div>
       <ul className="routeReasons">
         <li className={margin > 0 || !runnerUp ? 'positive' : 'neutral'}><i>{margin > 0 || !runnerUp ? '+' : '='}</i><span>{leadReason}</span></li>
@@ -329,14 +390,14 @@ function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open
         <div><dt>{targetLabel} wait</dt><dd>{formatDuration(targetWait)}</dd></div>
         <div><dt>Estimated fee</dt><dd>{fee.primary}</dd></div>
       </dl>
-      {alternatives.length > 0 && <div className="routeAlternatives"><p>COMPARED AGAINST</p>{alternatives.map((item) => <div key={item.protocol}><ProtocolLogo protocol={item.protocol} name={item.protocolName} /><span>{item.protocolName}</span>{item.available ? <b>{scoreText(item.score)} <small>{displayBand(item.band)}</small></b> : <small className="routeUnavailable">{item.unavailableReason || 'Unavailable for this transfer'}</small>}</div>)}</div>}
+      {alternatives.length > 0 && <div className="routeAlternatives"><p>Compared against</p>{alternatives.map((item) => <div key={item.protocol}><ProtocolLogo protocol={item.protocol} name={item.protocolName} /><span>{item.protocolName}</span>{item.available ? <b>{scoreText(item.score)} <small>{bandLabel(item.band)}</small></b> : <small className="routeUnavailable">{item.unavailableReason || 'Unavailable for this transfer'}</small>}</div>)}</div>}
       <p className="estimateDisclaimer">This is an estimate, not a guarantee of anonymity.</p>
     </div>}
   </section>
 }
 
 function PrivacyHome({ walletSession }) {
-  const { wallet, connecting, connectWallet: connectSession, disconnectWallet: disconnectSession } = walletSession
+  const { wallet, connecting, connectWallet: connectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
   const prices = useUsdPrices(ASSETS)
@@ -363,6 +424,11 @@ function PrivacyHome({ walletSession }) {
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [delay, setDelay] = useState(0)
   const [delayMenuOpen, setDelayMenuOpen] = useState(false)
+  // off: deposit and send it all. keep: deposit the amount, send part of it and
+  // leave the rest in the wallet's shielded balance. use: pay from that balance.
+  const [shieldMode, setShieldMode] = useState('off')
+  const [keepAmount, setKeepAmount] = useState('')
+  const [shieldMenuOpen, setShieldMenuOpen] = useState(false)
   // A delayed delivery outlives this page: it is reloaded from localStorage.
   const [scheduled, setScheduled] = useState(loadScheduled)
   const requestSequence = useRef(0)
@@ -373,24 +439,42 @@ function PrivacyHome({ walletSession }) {
   const isSwap = !isBridge && asset !== destinationAsset
   const selectedBridgeChain = bridgeChain(bridgeChainId)
   const bridgeRoute = isBridge ? bridgeEligibility(BRIDGE_PROTOCOL_ID, asset, bridgeChainId, bridgeToken) : null
-  // Only a plain send to one recipient can be proved ahead and delivered later.
-  const deadlineMinutes = !isSwap && !isBridge && receiverCount === 1 ? delay : 0
-  const delayLabel = receiverCount > 1 ? 'Delay supports one recipient' : deadlineMinutes ? `Arrives within ${deadlineMinutes} min` : 'Delay'
+  // Shielding applies to a plain send; a swap or bridge always sends everything.
+  const activeShield = !isSwap && !isBridge ? shieldMode : 'off'
+  const keeping = activeShield === 'keep'
+  const payingShielded = activeShield === 'use'
+  const shielded = useShieldedPools(wallet, payingShielded)
+  // Only a plain send to one recipient can be proved ahead and delivered later,
+  // and the proof spends the deposit it follows, so shielded funds cannot wait.
+  const deadlineMinutes = !isSwap && !isBridge && receiverCount === 1 && !payingShielded ? delay : 0
+  const delayLabel = receiverCount > 1 ? 'Delay supports one recipient' : payingShielded ? 'Delay needs a fresh deposit' : deadlineMinutes ? `Arrives within ${deadlineMinutes} min` : 'Delay'
 
   const total = finite(amount)
   const totalRaw = rawTokenAmount(amount, asset)
+  // An empty keep amount counts as nothing kept until one is typed.
+  const keepRaw = !keeping ? 0n : keepAmount.trim() ? rawTokenAmount(keepAmount, asset) : 0n
+  // What leaves the pool for the recipients: the amount, less what stays shielded.
+  const sentRaw = totalRaw === null || keepRaw === null ? null : totalRaw - keepRaw
+  const sentAmount = keeping ? (sentRaw !== null && sentRaw > 0n ? rawTokenText(sentRaw, asset) : '') : amount
+  const keepError = !keeping ? '' : keepRaw === null ? 'Enter a valid amount to keep shielded'
+    : !keepRaw ? 'Enter how much to keep shielded' : sentRaw !== null && sentRaw <= 0n ? 'Keep less than the full amount' : ''
   const receiverRaws = receiverAmounts.map((value) => rawTokenAmount(value, asset))
   const receiverTotalRaw = receiverRaws.every((value) => value !== null) ? receiverRaws.reduce((sum, value) => sum + value, 0n) : null
   const receiverTotal = receiverTotalRaw === null ? null : Number(rawTokenText(receiverTotalRaw, asset))
-  const remainingRaw = totalRaw === null || receiverTotalRaw === null ? null : totalRaw - receiverTotalRaw
+  const remainingRaw = sentRaw === null || receiverTotalRaw === null ? null : sentRaw - receiverTotalRaw
   const remaining = remainingRaw === null ? null : Number(rawTokenText(remainingRaw < 0n ? -remainingRaw : remainingRaw, asset)) * (remainingRaw < 0n ? -1 : 1)
-  const amountsMatch = totalRaw !== null && receiverTotalRaw === totalRaw
+  const amountsMatch = sentRaw !== null && receiverTotalRaw === sentRaw
   const receiversValid = receiverRaws.every((value) => value !== null && value > 0n) && amountsMatch
-  const formValid = totalRaw !== null && totalRaw > 0n && receiversValid
+  const formValid = sentRaw !== null && sentRaw > 0n && receiversValid && !keepError
+  // The most one withdrawal can pay from the shielded balance, in the pool holding the most.
+  const shieldedSpendable = FROM_SHIELDED_IDS.map((id) => shielded.pools[id]).filter((entry) => entry?.state === 'ready')
+    .reduce((best, entry) => { const value = BigInt(entry.spendable?.[asset] ?? 0n); return value > best ? value : best }, 0n)
+  const shieldedLocked = FROM_SHIELDED_IDS.some((id) => ['locked', 'error'].includes(shielded.pools[id]?.state))
+  const shieldedReading = FROM_SHIELDED_IDS.some((id) => !shielded.pools[id] || shielded.pools[id].state === 'loading')
   const selectedTarget = PRIVACY_TARGETS.find((target) => target.value === privacyTarget) || PRIVACY_TARGETS[0]
   const transferValidation = validateTransfer({
     asset,
-    amount,
+    amount: sentAmount,
     recipients: receiverAmounts.map((receiverAmount, index) => ({ address: recipientAddresses[index], amount: receiverAmount })),
     senderAddress: wallet?.address,
   })
@@ -459,9 +543,9 @@ function PrivacyHome({ walletSession }) {
     requestPlan({
       asset,
       destinationAsset: plannedDestinationAsset,
-      amount,
+      amount: sentAmount,
       strategy,
-      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [amount],
+      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [sentAmount],
       privacyTarget,
     })
   }
@@ -472,31 +556,47 @@ function PrivacyHome({ walletSession }) {
     if (!formValid) { setLoading(false); return undefined }
     const controller = new AbortController()
     setLoading(true)
+    // Scored on what leaves the pool: a kept part never reaches a recipient.
     const timeout = setTimeout(() => requestPlan({
       asset,
       destinationAsset: plannedDestinationAsset,
-      amount,
+      amount: sentAmount,
       strategy,
-      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [amount],
+      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [sentAmount],
       privacyTarget,
     }, controller.signal), 350)
     return () => { clearTimeout(timeout); controller.abort() }
-  }, [asset, plannedDestinationAsset, amount, strategy, receiverAmounts, privacyTarget, formValid])
+  }, [asset, plannedDestinationAsset, sentAmount, strategy, receiverAmounts, privacyTarget, formValid])
 
-  function splitEvenly(count = receiverCount) {
-    if (totalRaw === null || totalRaw <= 0n) return setReceiverAmounts(Array.from({ length: count }, () => ''))
-    const shareRaw = totalRaw / BigInt(count)
-    const next = Array.from({ length: count }, (_, index) => rawTokenText(index === count - 1 ? totalRaw - shareRaw * BigInt(count - 1) : shareRaw, asset))
-    setReceiverAmounts(next); setDirty(true)
+  // `raw` split across `count` recipients, the last taking the remainder.
+  const shares = (raw, count) => {
+    const shareRaw = raw / BigInt(count)
+    return Array.from({ length: count }, (_, index) => rawTokenText(index === count - 1 ? raw - shareRaw * BigInt(count - 1) : shareRaw, asset))
+  }
+  // a − b in the current asset, floored at zero; '' while either is not an amount.
+  const minus = (a, b) => {
+    const left = rawTokenAmount(a, asset)
+    const right = b.trim() ? rawTokenAmount(b, asset) : 0n
+    return left === null || right === null ? '' : rawTokenText(left > right ? left - right : 0n, asset)
   }
 
-  function useMaximumBalance() {
-    const raw = walletBalance?.spendableRaw
-    if (raw === undefined || raw <= 0n) return
-    const nextAmount = rawTokenText(raw, asset)
-    const shareRaw = raw / BigInt(receiverCount)
-    const nextReceivers = Array.from({ length: receiverCount }, (_, index) => rawTokenText(index === receiverCount - 1 ? raw - shareRaw * BigInt(receiverCount - 1) : shareRaw, asset))
-    setAmount(nextAmount); setReceiverAmounts(nextReceivers); setDirty(true); setReceipt(null)
+  function splitEvenly(count = receiverCount) {
+    if (sentRaw === null || sentRaw <= 0n) return setReceiverAmounts(Array.from({ length: count }, () => ''))
+    setReceiverAmounts(shares(sentRaw, count)); setDirty(true)
+  }
+
+  // Fills the amount with `raw`; recipients split what is not kept shielded.
+  function useMaximum(raw) {
+    if (raw === undefined || raw === null || raw <= 0n) return
+    const kept = keeping && keepRaw !== null && keepRaw < raw ? keepRaw : 0n
+    setAmount(rawTokenText(raw, asset)); setReceiverAmounts(shares(raw - kept, receiverCount)); setDirty(true); setReceipt(null)
+  }
+
+  function chooseShield(mode) {
+    setShieldMode(mode); setShieldMenuOpen(false); setReceipt(null); setDirty(true)
+    if (mode === 'use') setDelay(0)
+    if (mode !== 'keep') setKeepAmount('')
+    if (receiverCount === 1) setReceiverAmounts([mode === 'keep' ? minus(amount, keepAmount) : amount])
   }
 
   function addReceiver() {
@@ -508,9 +608,9 @@ function PrivacyHome({ walletSession }) {
     if (receiverCount === 1) return
     const next = receiverAmounts.filter((_, receiverIndex) => receiverIndex !== index)
     const nextRaws = next.map((value) => rawTokenAmount(value, asset))
-    if (totalRaw !== null && nextRaws.every((value) => value !== null)) {
+    if (sentRaw !== null && nextRaws.every((value) => value !== null)) {
       const nextTotal = nextRaws.reduce((sum, value) => sum + value, 0n)
-      if (totalRaw >= nextTotal) next[next.length - 1] = rawTokenText(nextRaws[nextRaws.length - 1] + totalRaw - nextTotal, asset)
+      if (sentRaw >= nextTotal) next[next.length - 1] = rawTokenText(nextRaws[nextRaws.length - 1] + sentRaw - nextTotal, asset)
     }
     setReceiverAmounts(next); setDirty(true)
     setRecipientAddresses((current) => current.filter((_, receiverIndex) => receiverIndex !== index))
@@ -522,14 +622,9 @@ function PrivacyHome({ walletSession }) {
     catch (error) { setSendError(error instanceof Error ? error.message : String(error)) }
   }
 
-  async function disconnectWallet() {
-    setReceipt(null); setSendError(''); setSendStatus(''); setSendAttempted(false)
-    await disconnectSession()
-  }
-
   async function sendTransfer() {
     setSendAttempted(true); setSendError('')
-    if (receipt?.depositSignature) return setSendError('This deposit was already submitted. Do not send it again.')
+    if (submitted) return setSendError(receipt.depositSignature ? 'This deposit was already submitted. Do not send it again.' : 'This payment was already sent. Do not send it again.')
     setReceipt(null)
     if (!wallet) return connectWallet()
     if (!activeValidation.valid) return setSendError(activeValidation.error)
@@ -553,10 +648,14 @@ function PrivacyHome({ walletSession }) {
         outputToken: bridgeToken,
         recipient: isBridge ? activeValidation.recipient : transferValidation.rows[0]?.address.publicKey,
         recipients: transferValidation.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
-        totalBaseUnits: activeValidation.total.baseUnits,
+        // Keeping part shielded deposits the full amount; the recipients take the rest.
+        totalBaseUnits: keeping ? totalRaw : activeValidation.total.baseUnits,
+        source: payingShielded ? 'shielded' : 'wallet',
         delayMinutes: kind === 'send' ? deadlineMinutes : 0,
         onStatus: setSendStatus,
       })
+      // The shielded balance changed; the next read must not start from the old figure.
+      if (keeping || payingShielded) { shieldedCache.delete(wallet.address); shielded.refresh() }
       if (kind === 'send' && deadlineMinutes) {
         const [row] = transferValidation.rows
         const job = { protocol: recommended.protocol, owner: wallet.address, asset, recipient: row.address.sanitized,
@@ -570,7 +669,7 @@ function PrivacyHome({ walletSession }) {
         setScheduled(job); setSendStatus('')
         return
       }
-      setReceipt(result); setSendStatus('Sent')
+      setReceipt({ ...result, kept: keeping ? `${rawTokenText(keepRaw, asset)} ${asset}` : null }); setSendStatus('Sent')
     } catch (transferError) {
       if (transferError?.receipt) setReceipt(transferError.receipt)
       const message = transferError instanceof Error ? transferError.message : String(transferError)
@@ -603,7 +702,8 @@ function PrivacyHome({ walletSession }) {
   const rankings = useMemo(() => {
     if (!comparison) return []
     const bridge = isBridge ? { chainId: bridgeChainId, token: bridgeToken } : null
-    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0))
+    const shield = activeShield === 'off' ? null : { mode: activeShield, pools: shielded.pools, sentRaw }
+    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0, shield))
     if (strategy === 'multiple') {
       for (const id of SINGLE_RECIPIENT_IDS) {
         if (normalized.some((item) => item.protocol === id)) continue
@@ -611,7 +711,7 @@ function PrivacyHome({ walletSession }) {
       }
     }
     return normalized
-  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken, deadlineMinutes])
+  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken, deadlineMinutes, activeShield, shielded.pools, sentRaw])
   const suggestedProtocol = rankings.find((item) => item.available)?.protocol
   const selectedIsAvailable = rankings.some((item) => item.available && item.protocol === selectedProtocol)
   const activeProtocol = selectedIsAvailable ? selectedProtocol : suggestedProtocol
@@ -625,23 +725,40 @@ function PrivacyHome({ walletSession }) {
   // spends, and would replace the job whose Send now the user still needs. So the
   // same pool stays off limits until the delivery lands or is dismissed.
   const scheduledBlocks = Boolean(scheduled) && scheduled.status !== 'sent' && scheduled.protocol === recommended?.protocol && scheduled.asset === asset
-  const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : 'Send'
+  const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : payingShielded ? 'Send from shielded' : 'Send'
   const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : 'Sending...'
+  // A payment from the shielded balance has no deposit signature, only withdrawals.
+  const submitted = Boolean(receipt?.depositSignature || receipt?.withdrawals?.length)
+  // Paying from shielded funds starts with the signature that reads the balance.
+  const revealFirst = Boolean(wallet) && payingShielded && shieldedLocked && !shieldedReading
+  const shieldLabel = payingShielded ? 'Paying from shielded funds' : keeping ? (keepRaw ? `Keeping ${rawTokenText(keepRaw, asset)} ${asset} shielded` : 'Keeping part shielded') : 'Shielding'
+  const shieldOptions = [
+    ['off', 'Send everything', 'Deposit and send the full amount'],
+    ['keep', 'Keep part shielded', 'Send some, leave the rest in your private balance'],
+    ['use', 'Use shielded funds', !wallet ? 'Pay from your private balance'
+      : shieldedReading && payingShielded ? 'Reading your private balance…'
+        : shieldedLocked || !FROM_SHIELDED_IDS.some((id) => shielded.pools[id]) ? 'Pay from your private balance · sign to read it'
+          : `${rawTokenText(shieldedSpendable, asset)} ${asset} available`],
+  ]
 
   return <div className="homePage">
     <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : 'Send privately'}</h1></header>
     <section className="sendCard panel">
-      <div className="amountRow">
+      <div className={`amountRow${payingShielded ? ' fromShielded' : ''}`}>
         <span className="amountUsd">{usdText(amount, prices[asset])}</span>
-        <input aria-label="Amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} onChange={(event) => { const nextAmount = sanitizeAmount(event.target.value); setAmount(nextAmount); if (receiverCount === 1) setReceiverAmounts([nextAmount]); setDirty(true); setReceipt(null) }} />
-        {wallet && <button type="button" className="walletMax" onClick={useMaximumBalance} disabled={balanceLoading || !walletBalance?.spendableRaw} title={asset === 'SOL' ? 'Network fee reserve already deducted' : 'Use wallet balance'}>MAX {balanceLoading ? '…' : walletBalance ? rawTokenText(walletBalance.spendableRaw, asset) : '—'}</button>}
+        <input aria-label="Amount" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={amount} onChange={(event) => { const nextAmount = sanitizeAmount(event.target.value); setAmount(nextAmount); if (receiverCount === 1) setReceiverAmounts([keeping ? minus(nextAmount, keepAmount) : nextAmount]); setDirty(true); setReceipt(null) }} />
+        {wallet && (payingShielded
+          ? <button type="button" className="walletMax shieldedMax" onClick={() => shieldedLocked ? shielded.reveal() : useMaximum(shieldedSpendable)} disabled={shieldedReading || (!shieldedLocked && !shieldedSpendable)}
+            title={shieldedLocked ? 'Sign a message to read your shielded balance' : 'The most one private withdrawal can send'}>
+            <ShieldCheck />{shieldedReading ? 'Shielded …' : shieldedLocked ? 'Reveal shielded' : `Shielded ${rawTokenText(shieldedSpendable, asset)}`}</button>
+          : <button type="button" className="walletMax" onClick={() => useMaximum(walletBalance?.spendableRaw)} disabled={balanceLoading || !walletBalance?.spendableRaw} title={asset === 'SOL' ? 'Network fee reserve already deducted' : 'Use wallet balance'}>MAX {balanceLoading ? '…' : walletBalance ? rawTokenText(walletBalance.spendableRaw, asset) : '—'}</button>)}
         <div className="assetPicker">
           <button type="button" aria-haspopup="listbox" aria-expanded={assetMenuOpen} onClick={() => setAssetMenuOpen(!assetMenuOpen)}><AssetLogo asset={asset} /><b>{asset}</b><ChevronDown /></button>
           {assetMenuOpen && <div className="assetMenu" role="listbox">{ASSETS.map((item) => <button type="button" role="option" aria-selected={asset === item} onClick={() => { setAsset(item); setAssetMenuOpen(false); if (item !== destinationAsset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } setDirty(true); setReceipt(null) }} key={item}><AssetLogo asset={item} />{item}</button>)}</div>}
         </div>
       </div>
       <div className="swapDestination">
-        <span>{isBridge ? 'BRIDGE TO' : isSwap ? 'SWAP TO' : 'RECEIVE'}</span><ArrowRight />
+        <span>{isBridge ? 'Bridge to' : isSwap ? 'Swap to' : 'Receive'}</span><ArrowRight />
         <div className="assetPicker">
           <button type="button" aria-label="Destination asset" aria-haspopup="listbox" aria-expanded={destinationMenuOpen} onClick={() => setDestinationMenuOpen(!destinationMenuOpen)}>
             <AssetLogo asset={isBridge ? bridgeToken : destinationAsset} /><b>{isBridge ? bridgeToken : destinationAsset}</b>
@@ -662,23 +779,46 @@ function PrivacyHome({ walletSession }) {
         </div>
       </div>}
       <div className="recipientRows">
-        {receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name?.toUpperCase()}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>OUTPUT</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
-        {!isSwap && !isBridge && <>
-          <button type="button" className={`delayControl ${deadlineMinutes ? 'on' : ''}`} aria-haspopup="menu" aria-expanded={delayMenuOpen && receiverCount === 1} aria-disabled={receiverCount > 1} aria-label={delayLabel} data-tooltip={delayLabel} onClick={() => receiverCount === 1 && setDelayMenuOpen(!delayMenuOpen)}>{deadlineMinutes ? `${deadlineMinutes}m` : <Clock3 />}</button>
-          {delayMenuOpen && receiverCount === 1 && <div className="delayMenu" role="menu">{[0, ...DELAY_MINUTES].map((minutes) => <button type="button" role="menuitemradio" aria-checked={delay === minutes} key={minutes} onClick={() => { setDelay(minutes); setDelayMenuOpen(false); setReceipt(null) }}>{minutes ? `Within ${minutes} min` : 'Now'}</button>)}</div>}
-          <button type="button" className="addReceiver" aria-label="Add receiver" onClick={addReceiver}><Plus /></button>
-        </>}
+        {/* The header carries the recipient-level actions, so each row stays one line. */}
+        <div className="recipientHead">
+          <span>{receiverCount > 1 ? 'Recipients' : 'Recipient'}</span>
+          {!isSwap && !isBridge && <>
+            <button type="button" className={`shieldControl${activeShield !== 'off' ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={shieldMenuOpen} aria-label={shieldLabel} data-tooltip={shieldLabel}
+              onClick={() => { setShieldMenuOpen(!shieldMenuOpen); setDelayMenuOpen(false) }}><Shield /></button>
+            {shieldMenuOpen && <div className="shieldMenu" role="menu" aria-label="Shielding">{shieldOptions.map(([mode, label, detail]) =>
+              <button type="button" role="menuitemradio" aria-checked={shieldMode === mode} key={mode} onClick={() => chooseShield(mode)}>
+                <span><b>{label}</b><small>{detail}</small></span>{shieldMode === mode && <Check className="shieldOptionCheck" aria-hidden="true" />}
+              </button>)}</div>}
+            <button type="button" className={`delayControl ${deadlineMinutes ? 'on' : ''}`} aria-haspopup="menu" aria-expanded={delayMenuOpen && receiverCount === 1 && !payingShielded} aria-disabled={receiverCount > 1 || payingShielded} aria-label={delayLabel} data-tooltip={delayLabel}
+              onClick={() => { if (receiverCount === 1 && !payingShielded) { setDelayMenuOpen(!delayMenuOpen); setShieldMenuOpen(false) } }}>{deadlineMinutes ? `${deadlineMinutes}m` : <Clock3 />}</button>
+            {delayMenuOpen && receiverCount === 1 && !payingShielded && <div className="delayMenu" role="menu">{[0, ...DELAY_MINUTES].map((minutes) => <button type="button" role="menuitemradio" aria-checked={delay === minutes} key={minutes} onClick={() => { setDelay(minutes); setDelayMenuOpen(false); setReceipt(null) }}>{minutes ? `Within ${minutes} min` : 'Now'}</button>)}</div>}
+            <button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button>
+          </>}
+        </div>
+        {receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
+        {keeping && <div className="recipientRow keepRow">
+          <span aria-hidden="true"><ShieldCheck /></span>
+          <div className="recipientFields">
+            <div className="keepLabel"><b>Keep shielded</b><small>Stays in your private balance</small></div>
+            <div><input className="recipientAmount" aria-label="Amount to keep shielded" type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={keepAmount} autoFocus
+              onChange={(event) => { const next = sanitizeAmount(event.target.value); setKeepAmount(next); if (receiverCount === 1) setReceiverAmounts([minus(amount, next)]); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>
+          </div>
+          <button type="button" aria-label="Stop keeping part shielded" onClick={() => chooseShield('off')}><X /></button>
+        </div>}
       </div>
-      {(sendAttempted || amount) && !activeValidation.valid && <div className="splitStatus">{!isBridge && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error}</div>}
+      {(sendAttempted || amount) && (keepError || !activeValidation.valid) && <div className="splitStatus">{keepError || (!isBridge && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}</div>}
+      {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>Send <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
+      <div className="sendAction">
+        <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
+        <div className="actionArea">{revealFirst
+          ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
+          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : payingShielded && shieldedReading ? 'Reading shielded balance…' : loading ? 'Finding route...' : submitted ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
+      </div>
     </section>
-    {error && <section className="notice error"><ShieldX /><span>{error}</span></section>}
-    <section className="sendAction panel">
-      <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
-      <div className="actionArea"><button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (receipt?.depositSignature || scheduledBlocks || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : loading ? 'Finding route...' : receipt?.depositSignature ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !receipt?.depositSignature && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>{wallet && <div className="walletSession"><small>{short(wallet.address)}</small><button type="button" aria-label="Disconnect wallet" title="Disconnect wallet" onClick={disconnectWallet} disabled={sending}><LogOut /></button></div>}</div>
-    </section>
+    {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
     {recommended && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
-    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <ShieldX /> : <CheckCircle2 />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
-    {scheduled && <section className="transferResult delivery">{scheduled.status === 'sent' ? <CheckCircle2 /> : <Clock3 />}<span>{scheduled.status === 'pending' ? `Deposit confirmed · arrives by ${new Date(scheduled.sendBy).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} · you can close this page` : DELIVERY_TEXT[scheduled.status]}</span>
+    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded` : 'Transfer complete')}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
+    {scheduled && <section className="transferResult delivery">{scheduled.status === 'sent' ? <Check /> : <Clock3 />}<span>{scheduled.status === 'pending' ? `Deposit confirmed · arrives by ${new Date(scheduled.sendBy).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} · you can close this page` : DELIVERY_TEXT[scheduled.status]}</span>
       <a href={`https://solscan.io/tx/${scheduled.signature || scheduled.depositSignature}`} target="_blank" rel="noreferrer">{scheduled.signature ? 'View transfer' : 'View deposit'} <ExternalLink /></a>
       {scheduled.status === 'pending' ? <button type="button" onClick={cancelDelivery}>Cancel</button> : scheduled.status !== 'sent' && <button type="button" onClick={deliverNow} disabled={sending}>Send now</button>}
       {scheduled.status !== 'pending' && <button type="button" aria-label="Dismiss" onClick={() => setScheduled(null)} disabled={sending}><X /></button>}</section>}
@@ -698,14 +838,14 @@ function EstimateAnalytics({ estimate }) {
   ].filter(([, value]) => value !== null)
   const plan = estimate._plan || {}
   return <section className="estimateAnalytics">
-    <div className="sectionTitle"><div><p className="eyebrow">PLANNING ESTIMATE</p><h2>Why this transfer received its score</h2></div><span>{plan.amount !== null && plan.amount !== undefined ? `${compact(plan.amount, 6)} ${plan.asset}` : ''}</span></div>
-    <div className="estimateOverview panel"><div className={`estimateScore ${bandClass(estimate.band)}`}><span>ESTIMATED PRIVACY</span><strong>{displayBand(estimate.band)}</strong><b>{scoreText(estimate.score)}</b></div><div className="estimateFacts"><div><span>POOL SHARE</span><b>{formatPercent(estimate.poolShare)}</b></div><div><span>SIMILAR-SIZE FLOWS</span><b>{finite(estimate.similarFlowCount) === null ? 'Unavailable' : compact(estimate.similarFlowCount, 0)}</b></div><div><span>{plan.targetLabel || 'TARGET'} WAIT</span><b>{formatDuration(estimate.recommendedWait ?? estimate.estimatedTimeToTarget)}</b></div></div></div>
+    <div className="sectionTitle"><h2>Why this transfer received its score</h2><span>{plan.amount !== null && plan.amount !== undefined ? `${compact(plan.amount, 6)} ${plan.asset}` : ''}</span></div>
+    <div className="estimateOverview panel"><div className={`estimateScore ${bandClass(estimate.band)}`}><span>Estimated privacy</span><strong>{bandLabel(estimate.band)}</strong><b>{scoreText(estimate.score)}</b></div><div className="estimateFacts"><div><span>Pool share</span><b>{formatPercent(estimate.poolShare)}</b></div><div><span>Similar-size flows</span><b>{finite(estimate.similarFlowCount) === null ? 'Unavailable' : compact(estimate.similarFlowCount, 0)}</b></div><div><span>{plan.targetLabel || 'Target'} wait</span><b>{formatDuration(estimate.recommendedWait ?? estimate.estimatedTimeToTarget)}</b></div></div></div>
     <div className="explainGrid">
-      <section className="panel subScores"><div className="panelHead"><div><p>SCORE COMPONENTS</p><h2>Independent signals</h2></div></div>{scoreEntries.length ? <div className="scoreBars">{scoreEntries.map(([key, value]) => <div key={key}><span>{SUB_SCORE_LABELS[key] || key}</span><i><b style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></i><strong>{Math.round(value)}</strong></div>)}</div> : <div className="empty smallEmpty">Sub-scores unavailable</div>}</section>
-      <section className="panel explanationPanel"><div className="panelHead"><div><p>EXPLANATION</p><h2>Evidence behind the estimate</h2></div></div>{estimate.explanations?.length ? <ul>{estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = explanationTone(entry, text); return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}</ul> : <div className="empty smallEmpty">No explanation was returned for this estimate.</div>}</section>
+      <section className="panel subScores"><div className="panelHead"><div><h2>Score components</h2><p>Independent signals</p></div></div>{scoreEntries.length ? <div className="scoreBars">{scoreEntries.map(([key, value]) => <div key={key}><span>{SUB_SCORE_LABELS[key] || key}</span><i><b style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></i><strong>{Math.round(value)}</strong></div>)}</div> : <div className="empty smallEmpty">Sub-scores unavailable</div>}</section>
+      <section className="panel explanationPanel"><div className="panelHead"><div><h2>Explanation</h2><p>Evidence behind the estimate</p></div></div>{estimate.explanations?.length ? <ul>{estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = explanationTone(entry, text); return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}</ul> : <div className="empty smallEmpty">No explanation was returned for this estimate.</div>}</section>
     </div>
-    {plan.strategy === 'multiple' && <section className="panel selectedReceivers"><ReceiverBreakdown receivers={estimate.receiverEstimates} asset={plan.asset} targetLabel={plan.targetLabel || 'Target'} /><div className="coordination"><span>PLAN COORDINATION RISK</span><b className={bandClass(estimate.coordinationRisk)}>{displayBand(estimate.coordinationRisk || 'Unavailable')}</b><small>{finite(estimate.coordinationPenalty) === null ? 'Penalty unavailable' : `−${compact(estimate.coordinationPenalty, 1)} score points`}</small></div></section>}
-    <section className="panel selectedTimeline"><div><p className="eyebrow">ESTIMATED PRIVACY WAIT</p><h2>Expected score based on recent activity</h2></div><EstimateTimeline timeline={estimate.timeline} targetScore={plan.targetScore || 75} /></section>
+    {plan.strategy === 'multiple' && <section className="panel selectedReceivers"><ReceiverBreakdown receivers={estimate.receiverEstimates} asset={plan.asset} targetLabel={plan.targetLabel || 'Target'} /><div className="coordination"><span>Plan coordination risk</span><b className={bandClass(estimate.coordinationRisk)}>{bandLabel(estimate.coordinationRisk || 'Unavailable')}</b><small>{finite(estimate.coordinationPenalty) === null ? 'Penalty unavailable' : `−${compact(estimate.coordinationPenalty, 1)} score points`}</small></div></section>}
+    <section className="panel selectedTimeline"><div><h2>Estimated privacy wait</h2><p>Expected score based on recent activity</p></div><EstimateTimeline timeline={estimate.timeline} targetScore={plan.targetScore || 75} /></section>
     <p className="estimateDisclaimer detailDisclaimer">This is an estimate, not a guarantee of anonymity. Historical activity does not guarantee future anonymity or unlinkability.</p>
   </section>
 }
@@ -715,253 +855,149 @@ function FlowTooltip({ active, payload, label, token }) {
   return <div className="tip"><small>{label} UTC</small>{payload.map((entry) => <b key={entry.dataKey} style={{ color: entry.color }}>{entry.name}: {compact(entry.value)} {token}</b>)}</div>
 }
 
-function ObsidianLiquidity({ selectedTvl, totalTvl, inflowEvents, outflowEvents }) {
-  const mountRef = useRef(null)
-  // The scene is expensive to build - a WebGL context, a PMREM environment
-  // map, and a shader compile - and the figures it visualises refresh every 30
-  // seconds. Passing them through a ref rather than the effect's dependencies
-  // means a refresh retargets the running animation instead of tearing the
-  // whole renderer down and starting again.
+// Deposits reach the pool along a few distinct paths, the pool mixes them, and
+// withdrawals leave along unrelated paths that fade before they end: the
+// diagram is the privacy claim itself. The pool's area follows the selected
+// share of all-protocol TVL, and dots travel at the selected pools' inflow and
+// outflow event rates, so an idle pool is visibly still.
+function LiquidityFlow({ selectedTvl, totalTvl, inflowEvents, outflowEvents }) {
+  const canvasRef = useRef(null)
+  // The figures refresh every 30 seconds. Reading them through a ref retargets
+  // the running drawing instead of tearing it down and starting again.
   const figures = useRef({ selectedTvl, totalTvl, inflowEvents, outflowEvents })
   figures.current = { selectedTvl, totalTvl, inflowEvents, outflowEvents }
 
   useEffect(() => {
-    const mount = mountRef.current
+    const canvas = canvasRef.current
+    const context = canvas.getContext('2d')
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(31, 1, .1, 100)
-    camera.position.set(0, 0, 4.25)
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 1.14
-    mount.appendChild(renderer.domElement)
-
-    const pmrem = new THREE.PMREMGenerator(renderer)
-    const roomEnvironment = new RoomEnvironment()
-    const environment = pmrem.fromScene(roomEnvironment, .035).texture
-    roomEnvironment.dispose()
-    scene.environment = environment
-
-    const geometry = mergeVertices(new THREE.IcosahedronGeometry(1, 5))
-    const positions = geometry.attributes.position
-    const noise = new ImprovedNoise()
-    const direction = new THREE.Vector3()
-    const surfaceFields = new Float32Array(positions.count * 5)
-    for (let index = 0; index < positions.count; index += 1) {
-      direction.fromBufferAttribute(positions, index).normalize()
-      const { x, y, z } = direction
-      const broad = noise.noise(x * 2.05 + 4.1, y * 2.05 - 2.7, z * 2.05 + .8)
-      const middle = noise.noise(x * 4.65 - 7.4, y * 4.65 + 1.9, z * 4.65 - 3.2)
-      const fine = noise.noise(x * 9.2 + 2.3, y * 9.2 - 5.6, z * 9.2 + 6.1)
-      const foldNoise = noise.noise(x * 5.7 - 1.4, y * 5.7 + 8.2, z * 5.7 - 4.7)
-      const secondFoldNoise = noise.noise(x * 3.8 + 7.3, y * 3.8 - 2.1, z * 3.8 + 1.6)
-      const fold = Math.pow(Math.max(0, 1 - Math.abs(foldNoise) * 2.55), 4)
-      const secondFold = Math.pow(Math.max(0, 1 - Math.abs(secondFoldNoise) * 2.8), 5)
-      const radius = 1 + broad * .058 + middle * .082 + fine * .033 - fold * .07 - secondFold * .045
-      positions.setXYZ(index, x * radius, y * radius, z * radius)
-      const fieldOffset = index * 5
-      surfaceFields[fieldOffset] = broad
-      surfaceFields[fieldOffset + 1] = middle
-      surfaceFields[fieldOffset + 2] = fine
-      surfaceFields[fieldOffset + 3] = fold
-      surfaceFields[fieldOffset + 4] = secondFold
-    }
-    positions.needsUpdate = true
-    positions.setUsage(THREE.DynamicDrawUsage)
-    geometry.computeVertexNormals()
-    const morphDirections = new Float32Array(positions.count * 3)
-    for (let index = 0; index < positions.count; index += 1) {
-      direction.fromBufferAttribute(positions, index).normalize()
-      morphDirections[index * 3] = direction.x
-      morphDirections[index * 3 + 1] = direction.y
-      morphDirections[index * 3 + 2] = direction.z
-    }
-
-    const material = new THREE.MeshPhysicalMaterial({
-      color: 0x010202,
-      metalness: .82,
-      roughness: .19,
-      clearcoat: 1,
-      clearcoatRoughness: .075,
-      envMapIntensity: 2.05,
+    const accent = getComputedStyle(canvas).getPropertyValue('--accent').trim() || '#FFC53D'
+    // Seeded, so the paths are identical on every visit.
+    let seed = 20260925
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+    const inflows = Array.from({ length: 9 }, (_, index) => ({ y: (index + .5) / 9 + (random() - .5) * .05, bend: .4 + random() * .2 }))
+    const outflows = Array.from({ length: 24 }, (_, index) => {
+      const position = (index + .5) / 24 + (random() - .5) * .03
+      return { angle: (position - .5) * 1.95, y: position, bend: .25 + random() * .4 }
     })
-    const shaderState = { value: null }
-    material.onBeforeCompile = (shader) => {
-      shader.uniforms.liquidTime = { value: 0 }
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float liquidTime;')
-        .replace('#include <begin_vertex>', `#include <begin_vertex>
-          float liquidWave = sin(position.y * 8.0 + liquidTime * 0.72) * cos(position.x * 6.0 - liquidTime * 0.48);
-          transformed += normal * liquidWave * 0.006;`)
-      shaderState.value = shader
-    }
-    material.customProgramCacheKey = () => 'obsidian-liquid-v2'
-
-    const blob = new THREE.Mesh(geometry, material)
-    blob.rotation.set(-.16, -.38, .08)
-    scene.add(blob)
-
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x030504, 1.4))
-    const key = new THREE.DirectionalLight(0xffffff, 3.6)
-    key.position.set(-4.5, 5.5, 5)
-    scene.add(key)
-    const rim = new THREE.PointLight(0xb9d0c9, 24, 9, 1.7)
-    rim.position.set(3.7, -.7, 3.2)
-    scene.add(rim)
-    const lower = new THREE.PointLight(0x65736f, 10, 7, 2)
-    lower.position.set(-2.4, -3.2, 2)
-    scene.add(lower)
-
-    const particleGeometry = new THREE.SphereGeometry(1, 14, 10)
-    const inflowMaterial = new THREE.MeshPhysicalMaterial({ color: 0xeaf0ed, metalness: .7, roughness: .08, clearcoat: 1, envMapIntensity: 2 })
-    const outflowMaterial = new THREE.MeshPhysicalMaterial({ color: 0x020303, metalness: .92, roughness: .12, clearcoat: 1, envMapIntensity: 2.2 })
+    const pointAlpha = Array.from({ length: 340 }, () => .1 + random() * .24)
     const particles = []
-    let nextIn = performance.now() + 450
-    let nextOut = performance.now() + 1050
-    const spawnParticle = (type, now) => {
-      const angle = Math.random() * Math.PI * 2
-      const mesh = new THREE.Mesh(particleGeometry, type === 'in' ? inflowMaterial : outflowMaterial)
-      const radial = type === 'in' ? 2.25 + Math.random() * .45 : 1.02
-      mesh.position.set(Math.cos(angle) * radial, Math.sin(angle) * radial * .75, (Math.random() - .5) * .45)
-      const size = .018 + Math.random() * .025
-      mesh.scale.setScalar(size)
-      scene.add(mesh)
-      particles.push({ mesh, type, born: now, angle, life: type === 'in' ? 3000 : 4300, size })
+    let width = 1; let height = 1; let radius = null; let visible = true; let frame = 0; let timer = 0
+    let last = performance.now(); let nextIn = last + 500; let nextOut = last + 1300
+
+    const bezier = (c, t) => {
+      const u = 1 - t
+      return [u * u * u * c[0] + 3 * u * u * t * c[2] + 3 * u * t * t * c[4] + t * t * t * c[6],
+        u * u * u * c[1] + 3 * u * u * t * c[3] + 3 * u * t * t * c[5] + t * t * t * c[7]]
+    }
+    // Inflows start past the left edge and arrive at the pool radially.
+    const inflowPath = ({ y, bend }, cx, cy, r) => {
+      const angle = Math.PI + (.5 - y) * 1.7
+      const dx = Math.cos(angle); const dy = Math.sin(angle)
+      const endX = cx + dx * r; const endY = cy + dy * r
+      const startX = -16; const startY = height * (.06 + y * .88)
+      return [startX, startY, startX + (endX - startX) * bend, startY, endX + dx * r * .9, endY + dy * r * .9, endX, endY]
+    }
+    // Withdrawals leave the right side radially and fan out past the right edge.
+    const outflowPath = ({ angle, y, bend }, cx, cy, r) => {
+      const dx = Math.cos(angle); const dy = Math.sin(angle)
+      const startX = cx + dx * r; const startY = cy + dy * r
+      const endX = width + 16; const endY = height * (-.12 + y * 1.24)
+      return [startX, startY, startX + dx * r * .8, startY + dy * r * .8, endX - (endX - startX) * bend, endY, endX, endY]
+    }
+    const line = (c, rgb, stops) => {
+      const gradient = context.createLinearGradient(c[0], c[1], c[6], c[7])
+      for (const [offset, alpha] of stops) gradient.addColorStop(offset, `rgba(${rgb},${alpha})`)
+      context.strokeStyle = gradient
+      context.beginPath(); context.moveTo(c[0], c[1]); context.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]); context.stroke()
+    }
+    const maxRadius = () => Math.min(height * .34, width * .2)
+    const targetRadius = () => {
+      const { selectedTvl: selected, totalTvl: total } = figures.current
+      const share = total > 0 ? Math.min(1, Math.max(0, selected / total)) : 0
+      // Area encodes TVL, so the radius follows the square root of the share.
+      return maxRadius() * (selected > 0 ? .16 + .84 * Math.sqrt(share) : .16)
     }
 
-    let pointerX = 0; let pointerY = 0
-    const onPointerMove = (event) => {
-      const bounds = mount.getBoundingClientRect()
-      pointerX = ((event.clientX - bounds.left) / bounds.width - .5) * .34
-      pointerY = ((event.clientY - bounds.top) / bounds.height - .5) * .22
-    }
-    const onPointerLeave = () => { pointerX = 0; pointerY = 0 }
-    mount.addEventListener('pointermove', onPointerMove)
-    mount.addEventListener('pointerleave', onPointerLeave)
-
-    const resize = () => {
-      const bounds = mount.getBoundingClientRect()
-      const width = Math.max(1, bounds.width); const height = Math.max(1, bounds.height)
-      renderer.setSize(width, height, false)
-      camera.aspect = width / height
-      camera.updateProjectionMatrix()
-    }
-    const observer = new ResizeObserver(resize)
-    observer.observe(mount); resize()
-
-    // Radius follows the cube root of TVL because the blob represents volume.
-    // Keep only a tiny visual floor so pools around $500 remain dramatically
-    // smaller than million-dollar pools while still being discoverable.
-    const scaleFor = ({ selectedTvl: selected, totalTvl: total }) => {
-      const ratio = total > 0 ? Math.max(0, Math.min(1, selected / total)) : 0
-      return selected > 0 ? .07 + Math.cbrt(ratio) * .95 : 0
-    }
-    // Starts at the figures the first frame knows about, then eases toward
-    // whatever the 30-second refresh reports, so selecting a pool or a change
-    // in TVL reads as the blob growing rather than as a reload.
-    let currentScale = scaleFor(figures.current)
-    blob.scale.setScalar(currentScale)
-    const clock = new THREE.Clock()
-    const motionSpeed = 10
-    let frame
-    const animate = (now) => {
-      const delta = Math.min(.05, clock.getDelta())
-      const { inflowEvents: inflowRate, outflowEvents: outflowRate } = figures.current
-      const targetScale = scaleFor(figures.current)
-      if (currentScale !== targetScale) {
-        // Time-based easing so the approach looks the same regardless of frame
-        // rate, and snap once the remaining difference stops being visible.
-        // Anyone who asked for reduced motion gets the new size outright.
-        if (reducedMotion) currentScale = targetScale
-        else {
-          currentScale += (targetScale - currentScale) * Math.min(1, delta * 2.4)
-          if (Math.abs(targetScale - currentScale) < .0005) currentScale = targetScale
-        }
-        blob.scale.setScalar(currentScale)
+    const draw = (now) => {
+      const delta = Math.min(.05, (now - last) / 1000)
+      last = now
+      const target = targetRadius()
+      radius = radius === null || reducedMotion ? target : radius + (target - radius) * Math.min(1, delta * 3)
+      if (Math.abs(target - radius) < .05) radius = target
+      const cx = width / 2; const cy = height / 2; const r = radius
+      const inPaths = inflows.map((flow) => inflowPath(flow, cx, cy, r))
+      const outPaths = outflows.map((flow) => outflowPath(flow, cx, cy, r))
+      context.clearRect(0, 0, width, height)
+      context.lineWidth = 1
+      inPaths.forEach((c) => line(c, '237,237,237', [[0, 0], [.55, .1], [1, .22]]))
+      context.lineWidth = .8
+      outPaths.forEach((c) => line(c, '150,150,150', [[0, .17], [.5, .055], [1, 0]]))
+      // The pool keeps a constant point density, so a smaller pool holds fewer points.
+      const count = Math.max(48, Math.round(pointAlpha.length * Math.min(1, (r / maxRadius()) ** 2)))
+      for (let index = 0; index < count; index += 1) {
+        const distance = r * (.62 + .35 * Math.sqrt((index + .5) / count))
+        const angle = index * 2.39996
+        context.fillStyle = `rgba(237,237,237,${pointAlpha[index]})`
+        context.fillRect(cx + Math.cos(angle) * distance - .6, cy + Math.sin(angle) * distance - .6, 1.2, 1.2)
       }
-      if (shaderState.value) shaderState.value.uniforms.liquidTime.value = now / 1000 * motionSpeed
-      if (!reducedMotion) {
-        // Rebuild the radius field continuously. Multiple travelling waves
-        // interfere with roaming bulges and dents to create obvious surface
-        // flow instead of merely rotating a fixed object;
-        // recalculating normals makes those perturbations move in the light.
-        const time = now * .001 * motionSpeed
-        let bulgeX = Math.cos(time * .53) + pointerX; let bulgeY = Math.sin(time * .41) * .72 - pointerY; let bulgeZ = Math.sin(time * .53)
-        let dentX = Math.cos(time * -.37 + 2.1); let dentY = Math.sin(time * .61 + .8) * .78; let dentZ = Math.sin(time * -.37 + 2.1)
-        const bulgeLength = Math.hypot(bulgeX, bulgeY, bulgeZ) || 1
-        const dentLength = Math.hypot(dentX, dentY, dentZ) || 1
-        bulgeX /= bulgeLength; bulgeY /= bulgeLength; bulgeZ /= bulgeLength
-        dentX /= dentLength; dentY /= dentLength; dentZ /= dentLength
-        for (let index = 0; index < positions.count; index += 1) {
-          const offset = index * 3
-          const fieldOffset = index * 5
-          const x = morphDirections[offset]; const y = morphDirections[offset + 1]; const z = morphDirections[offset + 2]
-          const broad = surfaceFields[fieldOffset]; const middle = surfaceFields[fieldOffset + 1]; const fine = surfaceFields[fieldOffset + 2]
-          const fold = surfaceFields[fieldOffset + 3]; const secondFold = surfaceFields[fieldOffset + 4]
-          // Each noise band breathes with a different phase. Peaks therefore
-          // emerge from the base sphere, crest, and melt away instead of
-          // remaining as permanent mountains.
-          const broadGrowth = .18 + .82 * (.5 + .5 * Math.sin(time * .14 + broad * 3.4))
-          const middleGrowth = .12 + .88 * (.5 + .5 * Math.sin(time * .22 + middle * 4.8 + 1.7))
-          const fineGrowth = .2 + .8 * (.5 + .5 * Math.sin(time * .31 + fine * 5.6 + 3.1))
-          const foldGrowth = .1 + .9 * (.5 + .5 * Math.sin(time * .18 + broad * 2.1 - middle * 2.7))
-          const surfaceRadius = 1 + broad * .064 * broadGrowth + middle * .09 * middleGrowth + fine * .04 * fineGrowth - fold * .075 * foldGrowth - secondFold * .05 * (1 - middleGrowth)
-          const waveA = Math.sin(x * 7.2 + y * 2.8 + time * 1.18) * Math.cos(z * 5.4 - time * .86)
-          const waveB = Math.sin(y * 9.1 - z * 3.7 - time * .94) * Math.cos(x * 4.3 + time * .71)
-          const travellingFold = Math.pow(Math.max(0, Math.sin(x * 5.6 - y * 4.1 + z * 3.2 + time * 1.05)), 7)
-          const bulge = Math.pow(Math.max(0, x * bulgeX + y * bulgeY + z * bulgeZ), 11) * .105
-          const dent = Math.pow(Math.max(0, x * dentX + y * dentY + z * dentZ), 13) * .09
-          const displacement = waveA * .042 + waveB * .028 - travellingFold * .058 + bulge - dent
-          const lateralFlow = (waveB - waveA) * .014
-          positions.setXYZ(
-            index,
-            x * (surfaceRadius + displacement) - y * lateralFlow,
-            y * (surfaceRadius + displacement) + x * lateralFlow,
-            z * (surfaceRadius + displacement) + (x - y) * lateralFlow * .45,
-          )
-        }
-        positions.needsUpdate = true
-        geometry.computeVertexNormals()
-      }
-      if (now >= nextIn && inflowRate > 0) {
-        spawnParticle('in', now)
-        nextIn = now + Math.max(2100, 7200 / (1 + inflowRate * .06)) + Math.random() * 1400
-      }
-      if (now >= nextOut && outflowRate > 0) {
-        spawnParticle('out', now)
-        nextOut = now + Math.max(2700, 9000 / (1 + outflowRate * .06)) + Math.random() * 1700
-      }
+      context.globalAlpha = .5
+      context.strokeStyle = accent
+      context.lineWidth = 1
+      context.beginPath(); context.arc(cx, cy, r, 0, Math.PI * 2); context.stroke()
+      context.globalAlpha = 1
       for (let index = particles.length - 1; index >= 0; index -= 1) {
         const particle = particles[index]
-        const progress = Math.min(1, (now - particle.born) / particle.life)
-        const eased = progress * progress * (3 - 2 * progress)
-        const radial = particle.type === 'in' ? THREE.MathUtils.lerp(2.4, .82, eased) : THREE.MathUtils.lerp(1.02, 2.65, eased)
-        particle.mesh.position.x = Math.cos(particle.angle) * radial
-        particle.mesh.position.y = Math.sin(particle.angle) * radial * .75 - (particle.type === 'out' ? progress * progress * .14 : 0)
-        particle.mesh.position.z = Math.sin(progress * Math.PI) * .34
-        particle.mesh.scale.setScalar(particle.size * (particle.type === 'in' ? 1 - eased * .45 : 1 - eased * .7))
-        if (progress >= 1) { scene.remove(particle.mesh); particles.splice(index, 1) }
+        const progress = (now - particle.born) / particle.life
+        if (progress >= 1) { particles.splice(index, 1); continue }
+        const inbound = particle.kind === 'in'
+        const eased = inbound ? progress * progress * (3 - 2 * progress) : 1 - (1 - progress) ** 2
+        const [x, y] = bezier(inbound ? inPaths[particle.path] : outPaths[particle.path], eased)
+        const alpha = inbound ? Math.min(1, progress * 6, (1 - progress) * 8) : (1 - progress) ** 1.4
+        context.fillStyle = inbound ? `rgba(237,237,237,${alpha * .95})` : `rgba(165,165,165,${alpha * .9})`
+        context.beginPath(); context.arc(x, y, inbound ? 1.6 : 1.4, 0, Math.PI * 2); context.fill()
       }
-      renderer.render(scene, camera)
-      frame = requestAnimationFrame(animate)
     }
-    frame = requestAnimationFrame(animate)
 
-    return () => {
-      cancelAnimationFrame(frame); observer.disconnect()
-      mount.removeEventListener('pointermove', onPointerMove); mount.removeEventListener('pointerleave', onPointerLeave)
-      particles.forEach(({ mesh }) => scene.remove(mesh))
-      geometry.dispose(); particleGeometry.dispose(); material.dispose(); inflowMaterial.dispose(); outflowMaterial.dispose()
-      environment.dispose(); pmrem.dispose(); renderer.dispose(); renderer.domElement.remove()
+    const spawn = (now) => {
+      const { inflowEvents: inbound, outflowEvents: outbound } = figures.current
+      // More events, shorter gaps: a busy pool streams, an idle one stays still.
+      const gap = (events) => Math.min(5200, Math.max(420, 5200 / Math.sqrt(1 + events))) * (.65 + Math.random() * .7)
+      if (inbound > 0 && now >= nextIn) {
+        particles.push({ kind: 'in', path: Math.floor(Math.random() * inflows.length), born: now, life: 2600 + Math.random() * 1000 })
+        nextIn = now + gap(inbound)
+      }
+      if (outbound > 0 && now >= nextOut) {
+        particles.push({ kind: 'out', path: Math.floor(Math.random() * outflows.length), born: now, life: 3600 + Math.random() * 1400 })
+        nextOut = now + gap(outbound)
+      }
     }
-    // Built once. Every figure the scene reads comes from `figures`, so a data
-    // refresh must not re-run this.
+    const loop = (now) => {
+      if (visible && !document.hidden) { spawn(now); draw(now) } else last = now
+      frame = requestAnimationFrame(loop)
+    }
+    const resize = () => {
+      const bounds = canvas.getBoundingClientRect()
+      const ratio = Math.min(window.devicePixelRatio || 1, 2)
+      width = Math.max(1, bounds.width); height = Math.max(1, bounds.height)
+      canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio)
+      context.setTransform(ratio, 0, 0, ratio, 0, 0)
+      draw(performance.now())
+    }
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(canvas)
+    // Nothing is drawn while the hero is scrolled out of view.
+    const intersection = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting })
+    intersection.observe(canvas)
+    // Reduced motion keeps the diagram and drops the moving dots; a slow redraw
+    // still picks up each data refresh.
+    if (reducedMotion) timer = setInterval(() => draw(performance.now()), 1000)
+    else frame = requestAnimationFrame(loop)
+    return () => { cancelAnimationFrame(frame); clearInterval(timer); resizeObserver.disconnect(); intersection.disconnect() }
+    // Built once. Every figure the drawing reads comes from `figures`.
   }, [])
 
-  return <div ref={mountRef} className="obsidianCanvas" role="img" aria-label={`${money(selectedTvl)} selected TVL, normalized against ${money(totalTvl)} across all protocols`} />
+  return <canvas ref={canvasRef} className="flowCanvas" role="img" aria-label={`${money(selectedTvl)} selected TVL, normalized against ${money(totalTvl)} across all protocols`} />
 }
 
 // Module scope, not component state. App swaps whole trees when the route
@@ -1032,12 +1068,12 @@ function LiquidityUniverse() {
   const togglePool = (id) => setSelectedPools((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
   const poolButton = (id) => { const pool = summary.pools.find((item) => item.protocol === id); const active = selectedPools.includes(id); return <button type="button" className={active ? 'selected' : ''} aria-pressed={active} onClick={() => togglePool(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}<small>{summary.loading ? 'Loading…' : money(pool?.tvl || 0)}</small></span><i /></button> }
   return <section className="liquidityUniverse" aria-label="Privacy pool liquidity and capital flow">
-    <div className="universeCopy"><p className="eyebrow">LIVE PRIVATE LIQUIDITY</p><h2>Funds enter publicly, and leave without a trace</h2><p>A deposit into a privacy pool is visible on-chain. What leaves it later is not linkable back to it.</p><div className="universeLegend"><span className="in"><i /> Inflow {money(inflow)}</span><span className="out"><i /> Withdrawals {money(outflow)}</span></div><div className="normalization">MAX SIZE · ALL PROTOCOLS <b>{money(totalTvl)}</b></div></div>
+    <div className="universeCopy"><p className="eyebrow">Live private liquidity</p><h2>Funds enter publicly, and leave without a trace</h2><p>A deposit into a privacy pool is visible on-chain. What leaves it later is not linkable back to it.</p><div className="universeLegend"><span className="in"><i /> Inflow {money(inflow)}</span><span className="out"><i /> Withdrawals {money(outflow)}</span></div><div className="normalization">Pool area is scaled against all protocols <b>{money(totalTvl)}</b></div></div>
     <div className="liquidityVisual">
-      <ObsidianLiquidity selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
+      <LiquidityFlow selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
       <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
     </div>
-    <div className="poolSelector"><div className="poolGroup"><small>SOLANA NATIVE</small><div>{sortByTvl(SOLANA_POOL_IDS, summary.pools).map(poolButton)}</div></div><div className="poolGroup others"><small>OTHERS</small><div>{sortByTvl(OTHER_POOL_IDS, summary.pools).map(poolButton)}</div></div></div>
+    <div className="poolSelector"><div className="poolGroup"><small>Solana native</small><div>{sortByTvl(SOLANA_POOL_IDS, summary.pools).map(poolButton)}</div></div><div className="poolGroup others"><small>Other chains</small><div>{sortByTvl(OTHER_POOL_IDS, summary.pools).map(poolButton)}</div></div></div>
   </section>
 }
 
@@ -1070,32 +1106,39 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const activity = analytics.activity || EMPTY.activity
   const meta = PROTOCOLS[protocol]
   const isBackfilling = analytics.coverage && !analytics.coverage.complete
+  const indexState = loading ? 'Loading' : error ? 'Error' : isBackfilling ? 'Partial' : 'Ready'
+  // Muted amber marks one bar per histogram: the most common flow size, and the
+  // hour it is now, so the current point in the daily cycle is readable.
+  const amountBuckets = activity.amountDistribution || []
+  const hourBuckets = activity.timeDistribution || []
+  const peakCount = Math.max(0, ...amountBuckets.map((bucket) => bucket.count))
+  const utcHour = new Date().getUTCHours()
 
   return <div className="protocolPage">
-    <header className="analyticsHeader"><div><p className="eyebrow">PROJECT STATS</p><h1>Analytics database</h1></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Launch APP <ArrowUpRight /></a><a className="ghost" href={analytics.docs || meta.docs} target="_blank" rel="noreferrer">Protocol docs <ExternalLink /></a></div></header>
+    <header className="analyticsHeader"><h1>Analytics database</h1><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Launch app <ArrowUpRight /></a><a className="ghost" href={analytics.docs || meta.docs} target="_blank" rel="noreferrer">Protocol docs <ExternalLink /></a></div></header>
     <LiquidityUniverse />
     <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}</span></button>)}</div>
-    <section className={`notice ${error ? 'error' : ''}`}>{error ? <ShieldX /> : <ShieldCheck />}<span>{error || `Reading ${meta.name} data from the analytics database`}</span><b>{loading ? 'Loading' : error ? 'Error' : isBackfilling ? 'Partial' : 'Ready'}</b><em>{analytics.indexedAt ? `Indexed ${new Date(analytics.indexedAt * 1000).toLocaleString()}` : 'Run the backend indexer to update'}</em></section>
+    <section className={`notice ${error ? 'error' : ''}`}>{error && <CircleAlert />}<b className={`indexState ${indexState.toLowerCase()}`}>{indexState}</b><span>{error || `Reading ${meta.name} data from the analytics database`}</span><em>{analytics.indexedAt ? `Indexed ${new Date(analytics.indexedAt * 1000).toLocaleString()}` : 'Run the backend indexer to update'}</em></section>
     {meta.swap.routeBanner && <section className="route panel"><span>{meta.swap.routeBanner.from}</span><ArrowRight /><b>{meta.swap.routeBanner.via}</b><ArrowRight /><span>{meta.swap.routeBanner.to}</span><small>{meta.swap.routeBanner.note}</small></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
-    <div className="sectionTitle"><div><p className="eyebrow">POOL STATE</p><h2>Current balances</h2></div><strong>{money(state.totalUsd)} TVL</strong></div>
-    <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} BALANCE`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
+    <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
+    <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} balance`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
 
     <section className="panel chartPanel">
-      <div className="panelHead"><div><p>EXTERNAL FLOW</p><h2>{token} pool movements</h2></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div><div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div></div>
+      <div className="panelHead"><div><h2>External flow</h2><p>{token} pool movements</p></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div><div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div></div>
       <div className="flowSummary">{FLOW_TYPES.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[range]}</small></div>
-      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#666666', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 2.4 : 1.8} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2.75} dot={false} /></AreaChart></ResponsiveContainer></div>
+      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent-muted)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 1.75 : 1.4} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
 
-    <div className="sectionTitle activityTitle"><div><p className="eyebrow">ACTIVITY</p><h2>Behavior inside this window</h2></div><span>{analytics.flowMethod}</span></div>
-    <section className="activityMetrics"><Metric label="TX COUNT" value={compact(activity.txCount, 0)} /><Metric label="UNIQUE AMOUNTS" value={compact(activity.uniqueAmounts, 0)} /><Metric label="1H RECENT VOLUME" value={formatMetricMoney(activity.recentVolume?.oneHourUsd)} /><Metric label="24H RECENT VOLUME" value={formatMetricMoney(activity.recentVolume?.twentyFourHoursUsd)} /></section>
+    <div className="sectionTitle activityTitle"><h2>Behavior inside this window</h2><span>{analytics.flowMethod}</span></div>
+    <section className="activityMetrics"><Metric label="Transactions" value={compact(activity.txCount, 0)} /><Metric label="Unique amounts" value={compact(activity.uniqueAmounts, 0)} /><Metric label="1h recent volume" value={formatMetricMoney(activity.recentVolume?.oneHourUsd)} /><Metric label="24h recent volume" value={formatMetricMoney(activity.recentVolume?.twentyFourHoursUsd)} /></section>
     <div className="analyticsRow">
-      <section className="panel distribution"><div className="panelHead"><div><p>AMOUNT DISTRIBUTION</p><h2>External flows by USD size</h2></div></div>{activity.usdValuationComplete === false ? <div className="empty smallEmpty">Stored USD prices are unavailable for part of this window.</div> : <div className="smallChart"><ResponsiveContainer><BarChart data={activity.amountDistribution}><CartesianGrid vertical={false} stroke="#1E1E1E" /><XAxis dataKey="label" tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} /><Bar dataKey="count" fill="var(--accent)" radius={[1,1,0,0]} /></BarChart></ResponsiveContainer></div>}</section>
-      <section className="panel distribution"><div className="panelHead"><div><p>TIME DISTRIBUTION</p><h2>Transactions by UTC hour</h2></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={activity.timeDistribution}><XAxis dataKey="hour" tick={{ fill:'#666666', fontSize:9 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" fill="#8A8A8A" /></BarChart></ResponsiveContainer></div></section>
+      <section className="panel distribution"><div className="panelHead"><div><h2>Amount distribution</h2><p>External flows by USD size</p></div></div>{activity.usdValuationComplete === false ? <div className="empty smallEmpty">Stored USD prices are unavailable for part of this window.</div> : <div className="smallChart"><ResponsiveContainer><BarChart data={amountBuckets}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="label" tick={{ fill:'#6E6E6E', fontSize:10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill:'#6E6E6E', fontSize:10 }} axisLine={false} tickLine={false} /><Bar dataKey="count" radius={[2,2,0,0]}>{amountBuckets.map((bucket) => <Cell key={bucket.label} fill={bucket.count === peakCount ? 'var(--accent-muted)' : '#4A4A4A'} />)}</Bar></BarChart></ResponsiveContainer></div>}</section>
+      <section className="panel distribution"><div className="panelHead"><div><h2>Time distribution</h2><p>Transactions by UTC hour, current hour marked</p></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={hourBuckets}><XAxis dataKey="hour" tick={{ fill:'#6E6E6E', fontSize:10 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" radius={[2,2,0,0]}>{hourBuckets.map((bucket) => <Cell key={bucket.hour} fill={bucket.hour === utcHour ? 'var(--accent-muted)' : '#4A4A4A'} />)}</Bar></BarChart></ResponsiveContainer></div></section>
     </div>
 
-    <section className="panel recent"><div className="panelHead"><div><p>RECENT ACTIVITY</p><h2>Latest external flows</h2></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>TIME</span><span>PARTICIPANT</span><span>TYPE</span><span>AMOUNT</span><span>TRANSACTION</span></div>{!analytics.recent.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{analytics.recent.slice(0, 7).map((flow) => <div className="tr" key={flow.id}><span><Clock3 />{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{compact(flow.amount, flow.asset === 'SOL' ? 4 : 2)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div></section>
+    <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!analytics.recent.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{analytics.recent.slice(0, 7).map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{compact(flow.amount, flow.asset === 'SOL' ? 4 : 2)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div></section>
     <footer>SQLite analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
   </div>
 }
@@ -1118,6 +1161,143 @@ function WalletPicker({ picker }) {
       <div className="paymentDialogActions"><button className="ghost" type="button" onClick={() => dialog.current.close()}>Cancel</button></div>
     </>}
   </dialog>
+}
+
+// Mounted only while the drawer is open, so balances and prices load on demand.
+function WalletPanel({ wallet, onClose, onDisconnect, onPaymentLinks }) {
+  const prices = useUsdPrices(ASSETS)
+  // A missing asset is still loading; null means its balance could not be read.
+  const [balances, setBalances] = useState({})
+  const [copied, setCopied] = useState(false)
+  const { pools, status: scanStatus, reveal } = useShieldedPools(wallet)
+  // Paid payment links not collected yet; locked without a saved merchant credential.
+  const [links, setLinks] = useState({ state: 'loading' })
+
+  useEffect(() => {
+    let live = true
+    import('./wallet-balance.js').then(({ getWalletAssetBalance }) => ASSETS.forEach((asset) => getWalletAssetBalance(wallet.address, asset)
+      .then((balance) => Number(rawTokenText(balance.raw, asset)), () => null)
+      .then((value) => { if (live) setBalances((current) => ({ ...current, [asset]: value })) })))
+    return () => { live = false }
+  }, [wallet.address])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setLinks({ state: 'loading' })
+    uncollectedTotals(wallet.address, controller.signal).then(
+      (totals) => { if (!controller.signal.aborted) setLinks(totals ? { state: 'ready', balances: totals } : { state: 'locked' }) },
+      () => { if (!controller.signal.aborted) setLinks({ state: 'error' }) })
+    return () => controller.abort()
+  }, [wallet.address])
+
+  const shielded = { ...pools, links }
+  const locked = SHIELDED_POOL_IDS.filter((id) => pools[id]?.state === 'locked')
+  const failed = SHIELDED_POOL_IDS.filter((id) => pools[id]?.state === 'error')
+  const retryable = [...locked, ...failed]
+  const scanning = Object.values(shielded).some((entry) => entry.state === 'loading')
+  const shieldedRows = ASSETS.map((asset) => {
+    const sources = Object.entries(shielded).filter(([, entry]) => entry.balances?.[asset] > 0n)
+    const raw = sources.reduce((sum, [, entry]) => sum + BigInt(entry.balances[asset]), 0n)
+    return { asset, amount: Number(rawTokenText(raw, asset)), sources: sources.map(([source]) => source) }
+  }).filter((row) => row.amount > 0)
+  const uncollected = ASSETS.filter((asset) => shielded.links?.balances?.[asset] > 0n)
+    .map((asset) => `${compact(Number(rawTokenText(BigInt(shielded.links.balances[asset]), asset)), 6)} ${asset}`)
+
+  const usdOf = (asset, amount) => amount === 0 ? 0 : amount != null && prices[asset] ? amount * prices[asset] : null
+  const loaded = ASSETS.every((asset) => balances[asset] !== undefined)
+  const publicRows = ASSETS.filter((asset) => balances[asset] !== 0 && balances[asset] !== undefined)
+  const publicValues = ASSETS.map((asset) => usdOf(asset, balances[asset]))
+  const publicTotal = loaded && !publicValues.includes(null) ? publicValues.reduce((sum, value) => sum + value, 0) : null
+  const shieldedValues = shieldedRows.map((row) => usdOf(row.asset, row.amount))
+  const shieldedTotal = shieldedValues.includes(null) ? null : shieldedValues.reduce((sum, value) => sum + value, 0)
+
+  async function copy() {
+    try { await navigator.clipboard.writeText(wallet.address); setCopied(true); setTimeout(() => setCopied(false), 1500) }
+    catch { /* The full address is in the title and on Solscan. */ }
+  }
+
+  return <div className="walletPanel">
+    <div className="walletPanelHead">
+      {wallet.icon ? <img src={wallet.icon} alt="" /> : <span className="walletIcon"><Wallet /></span>}
+      <div><strong>{wallet.name || 'Wallet'}</strong>
+        <span className="walletAddress"><code title={wallet.address}>{short(wallet.address)}</code>
+          <button type="button" title="Copy address" aria-label={copied ? 'Address copied' : 'Copy address'} onClick={copy}>{copied ? <Check /> : <Copy />}</button>
+          <a href={`https://solscan.io/account/${wallet.address}`} target="_blank" rel="noreferrer" title="View on Solscan" aria-label="View on Solscan"><ExternalLink /></a></span></div>
+      <button type="button" className="walletPanelClose" aria-label="Close wallet" onClick={onClose}><X /></button>
+    </div>
+
+    <div className="walletTotal">
+      <p className="eyebrow">Total balance</p>
+      <strong>{publicTotal !== null ? money(publicTotal + (shieldedTotal ?? 0)) : loaded ? '—' : <span className="shimmerText">$0.00</span>}</strong>
+      <div className="walletSplit">
+        <span><i className="public" />Public {publicTotal !== null ? money(publicTotal) : loaded ? '—' : '…'}</span>
+        <span><i className="shielded" />Shielded {scanning && !shieldedRows.length ? '…' : shieldedTotal === null ? '—' : money(shieldedTotal)}</span>
+      </div>
+    </div>
+
+    <section className="walletSection">
+      <h4>Wallet</h4>
+      {!loaded && !publicRows.length ? <div className="walletSkeleton"><i /><i /></div>
+        : publicRows.length ? <ul className="walletTokens">{publicRows.map((asset) => <li key={asset}><AssetLogo asset={asset} />
+          <span>{asset}<small>{balances[asset] === null ? 'Unavailable' : compact(balances[asset], 6)}</small></span>
+          <b>{usdOf(asset, balances[asset]) === null ? '—' : money(usdOf(asset, balances[asset]))}</b></li>)}</ul>
+          : <p className="walletEmpty">No SOL, USDC or USDT in this wallet.</p>}
+    </section>
+
+    <section className="walletSection">
+      <h4>Shielded{scanning && <span className="walletScanning" aria-label="Reading shielded balances" />}
+        {retryable.length > 0 && !scanning && <button type="button" className="walletReveal" onClick={reveal}>
+          {locked.length ? 'Reveal' : 'Retry'}</button>}</h4>
+      {shieldedRows.length > 0 && <ul className="walletTokens">{shieldedRows.map((row) => <li key={row.asset}><AssetLogo asset={row.asset} />
+        <span>{row.asset}<small>{compact(row.amount, 6)} · {row.sources.map(sourceName).join(', ')}</small></span>
+        <b>{usdOf(row.asset, row.amount) === null ? '—' : money(usdOf(row.asset, row.amount))}</b></li>)}</ul>}
+      {scanStatus && <p className="walletStatus">{scanStatus}</p>}
+      {!scanning && locked.length > 0 && <p className="walletEmpty">Reveal signs a message to read your {locked.map(sourceName).join(' and ')} balance. Nothing is sent on-chain.</p>}
+      {!scanning && failed.length > 0 && <p className="walletEmpty">Could not read your {failed.map(sourceName).join(' and ')} balance.</p>}
+      {!scanning && !shieldedRows.length && !retryable.length && <p className="walletEmpty">No shielded funds.</p>}
+      {uncollected.length > 0 && <a className="walletCollect" href="/payment-links" onClick={onPaymentLinks}>
+        <span><b>{uncollected.join(' + ')}</b> from payment links is ready to collect</span><ArrowRight /></a>}
+    </section>
+
+    <button type="button" className="walletDisconnect" onClick={onDisconnect}><LogOut />Disconnect</button>
+  </div>
+}
+
+// The wallet's one control on every page but analytics: connect, see balances, disconnect.
+function WalletMenu({ walletSession, onPaymentLinks }) {
+  const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
+  const drawer = useRef(null)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { open && wallet ? drawer.current?.showModal() : drawer.current?.close() }, [open, wallet])
+  useEffect(() => {
+    if (!error) return undefined
+    const timer = setTimeout(() => setError(''), 6000)
+    return () => clearTimeout(timer)
+  }, [error])
+  async function press() {
+    setError('')
+    if (wallet) return setOpen(true)
+    try { await connectWallet() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+  function disconnect() {
+    // The merchant credential is kept in this browser until Disconnect.
+    forgetAccess(wallet.address)
+    setOpen(false)
+    disconnectWallet()
+  }
+  return <div className="walletMenu">
+    <button type="button" className={`walletButton${wallet ? ' connected' : ''}`} aria-haspopup={wallet ? 'dialog' : undefined} disabled={connecting} onClick={press}>
+      {wallet ? <>{wallet.icon ? <img src={wallet.icon} alt="" /> : <Wallet />}<span>{short(wallet.address)}</span><ChevronDown /></>
+        : <><Wallet /><span>{connecting ? 'Connecting…' : 'Connect wallet'}</span></>}
+    </button>
+    {error && <p className="walletMenuError" role="alert">{error}</p>}
+    <dialog className="walletDrawer" ref={drawer} aria-label="Wallet" onClose={() => setOpen(false)}
+      onClick={(event) => { if (event.target === event.currentTarget) drawer.current.close() }}>
+      {open && wallet && <WalletPanel wallet={wallet} onClose={() => drawer.current.close()} onDisconnect={disconnect}
+        onPaymentLinks={(event) => { drawer.current.close(); onPaymentLinks(event) }} />}
+    </dialog>
+  </div>
 }
 
 function App() {
@@ -1164,14 +1344,15 @@ function App() {
   function openHome(event) { event.preventDefault(); closeDrawer(); navigate('/') }
   function openPaymentLinks(event) { event.preventDefault(); closeDrawer(); navigate('/payment-links') }
   function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
+  const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks} />
   const mobileNav = <>
     <MobileBar onOpen={() => setDrawerOpen(true)} />
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
-  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletPicker}</div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletPicker}</div>
+  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}</div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

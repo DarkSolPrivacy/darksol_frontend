@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, ExternalLink, Link2, LogOut, RefreshCw, Search, Settings, Trash2, Upload, Wallet, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpDown, Check, ChevronDown, Copy, Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
-import { parseAmount, sanitizeAmount } from './transfer-validation.js'
+import { parseAmount, sanitizeAmount, sanitizeSolanaAddress, validateSolanaAddress } from './transfer-validation.js'
 import { Connection } from '@solana/web3.js'
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts, removePaymentDraft } from './payment-notes.js'
 import { createPaymentLink, deletePaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
 import { paymentRpcUrl } from './payment-deposit.js'
-import { SCAN_GAP, scanPrivacyCashNotes, withdrawPaymentNote } from './payment-withdraw.js'
+import { pairNotes, withdrawPaymentNotes } from './payment-withdraw.js'
 import { usdText, useUsdPrices } from './token-price.js'
 import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
@@ -14,7 +14,15 @@ const PRICED = Object.keys(PAYMENT_ASSETS)
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
 const short = (value) => `${value.slice(0, 6)}…${value.slice(-6)}`
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
-const invoiceAmount = ({ amount, asset }) => `${format(assetAmount(amount, asset), 9)} ${asset}`
+const tokenAmount = (raw, asset) => format(assetAmount(raw, asset), 9)
+const approx = (value) => Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 }).format(value)
+const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`
+const assetLogo = (asset) => `/logos/${asset.toLowerCase()}.svg`
+const poolName = (protocol) => POOLS.find((item) => item.id === protocol)?.name ?? protocol
+const dateText = (value) => new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+const solscan = (signature) => `https://solscan.io/tx/${encodeURIComponent(signature)}`
+
 // The merchant credential lists and deletes links; it cannot spend, so this browser
 // keeps it until Disconnect. Payment note keys can spend and are never stored.
 const accessKey = (address) => `darksol:merchant-access:v1:${address}`
@@ -25,23 +33,97 @@ function savedAccess(address) {
       ? { merchant_id: saved.merchant_id, credential: saved.credential, address } : null
   } catch { return null }
 }
-const forgetAccess = (address) => { try { localStorage.removeItem(accessKey(address)) } catch { /* Nothing was saved. */ } }
+export const forgetAccess = (address) => { try { localStorage.removeItem(accessKey(address)) } catch { /* Nothing was saved. */ } }
+// A collection is recorded in this browser only: telling the server would link it to the deposit.
+const withdrawnKey = (address, id) => `darksol:withdrawn:${address}:${id}`
+
+// Cloak's token pools take their fixed fee in the token; every other exit pays it in SOL.
+function poolFees(protocol, asset) {
+  const fees = PROTOCOLS[protocol].fees
+  return asset !== 'SOL' && protocol === 'cloakc' ? { ...fees, fixedAmount: 0.45, fixedToken: asset } : { ...fees, fixedToken: 'SOL' }
+}
+
+// One withdrawal's estimated fee in the asset withdrawn; NaN while a needed price is unknown.
+function withdrawalFee(protocol, asset, amount, prices) {
+  const fees = poolFees(protocol, asset)
+  const fixed = fees.fixedToken === asset ? fees.fixedAmount : prices.SOL && prices[asset] ? fees.fixedAmount * prices.SOL / prices[asset] : NaN
+  return fixed + amount * fees.variableRate
+}
+
+// Raw totals per asset, in first-seen order.
+function assetTotals(records) {
+  const totals = new Map()
+  for (const { invoice } of records) totals.set(invoice.asset, (totals.get(invoice.asset) ?? 0n) + BigInt(invoice.amount))
+  return [...totals]
+}
+
+// What a collection moves and costs per asset. pairNotes decides the transactions.
+function collectPlan(records, prices) {
+  const rows = new Map()
+  const groups = pairNotes(records)
+  for (const group of groups) {
+    const { asset, protocol } = group[0].invoice
+    const raw = group.reduce((sum, record) => sum + BigInt(record.invoice.amount), 0n)
+    const row = rows.get(asset) ?? { asset, raw: 0n, count: 0, fee: 0 }
+    row.raw += raw
+    row.count += group.length
+    row.fee += withdrawalFee(protocol, asset, assetAmount(raw, asset), prices)
+    rows.set(asset, row)
+  }
+  // A payment withdrawn alone leaves for the exact amount its customer paid; a pair leaves as one sum.
+  return { rows: [...rows.values()], transactions: groups.length, alone: groups.filter((group) => group.length === 1).length }
+}
+
+// Every page of the merchant's links, for the actions that must see all of them.
+async function allPaymentLinks(access, signal) {
+  const payments = []
+  for (let offset = 0; offset !== null;) {
+    const page = await listPaymentLinks({ access, offset, signal })
+    payments.push(...page.payments)
+    offset = page.next_offset > offset ? page.next_offset : null
+  }
+  return payments
+}
+
+// Paid links this browser has not collected, as raw totals per asset, for the
+// wallet panel. Null without a saved merchant credential: listing needs one.
+export async function uncollectedTotals(address, signal) {
+  const access = savedAccess(address)
+  if (!access) return null
+  const collected = (id) => { try { return localStorage.getItem(withdrawnKey(address, id)) !== null } catch { return false } }
+  const ready = (await allPaymentLinks(access, signal)).filter((payment) => payment.status === 'paid' && !collected(payment.record.invoice.id))
+  return Object.fromEntries(assetTotals(ready.map((payment) => payment.record)))
+}
+
+const STATE_LABELS = { pending: 'Awaiting payment', paid: 'Ready to collect', collected: 'Collected', draft: 'Not published' }
+
+function StatusPill({ state }) {
+  return <span className={`linkStatus ${state}`}>{state === 'collected' ? <Check aria-hidden="true" /> : <i aria-hidden="true" />}{STATE_LABELS[state]}</span>
+}
+
+function TokenMark({ asset, protocol }) {
+  return <span className="tokenMark" aria-hidden="true"><img src={assetLogo(asset)} alt="" /><img className="tokenPool" src={LOGOS[protocol].src} alt="" /></span>
+}
 
 export default function PaymentLinks({ summary, walletSession }) {
   const [amount, setAmount] = useState('')
-  const [asset, setAsset] = useState('SOL')
+  const [asset, setAsset] = useState('USDC')
+  const [assetMenuOpen, setAssetMenuOpen] = useState(false)
   const prices = useUsdPrices(PRICED)
   const [reference, setReference] = useState('')
   const [pool, setPool] = useState('cloakc')
   const [sort, setSort] = useState('fees')
   const settings = useRef(null)
 
-  const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
+  const { wallet, connecting, connectWallet } = walletSession
   const [draftState, setDraftState] = useState({ address: null, records: [] })
   const drafts = wallet && draftState.address === wallet.address ? draftState.records : []
   const [busy, setBusy] = useState(false)
+  // Which part of the page the running operation belongs to, so only it shows progress.
+  const [task, setTask] = useState(null)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [listError, setListError] = useState('')
   const [notice, setNotice] = useState('')
   const [access, setAccess] = useState(null)
   const [historyState, setHistory] = useState({ payments: [], next_offset: null })
@@ -53,29 +135,30 @@ export default function PaymentLinks({ summary, walletSession }) {
   const [published, setPublished] = useState(new Set())
   const [depositFor, setDepositFor] = useState(null)
   const [transactionId, setTransactionId] = useState('')
-  const [picking, setPicking] = useState(null)
-  const [selected, setSelected] = useState(new Set())
   const [noteKeys, setNoteKeys] = useState(null)
-  const [withdrawFor, setWithdrawFor] = useState(null)
+  const [filter, setFilter] = useState('all')
+  const [copied, setCopied] = useState(null)
+  // null, or the collect dialog's { phase: loading | review | working | done, records, ... }.
+  const [collect, setCollect] = useState(null)
   const [recipient, setRecipient] = useState('')
-  const [recovered, setRecovered] = useState(null)
-  // Kept in this browser only: telling the server would link the withdrawal to the deposit.
   const [withdrawn, setWithdrawn] = useState(new Map())
   const [pendingDelete, setPendingDelete] = useState(null)
   const dialog = useRef(null)
+  const collectDialog = useRef(null)
   const operation = useRef(null)
 
   useEffect(() => {
-    setBusy(false); setStatus(''); setError(''); setNotice(''); setAccess(wallet ? savedAccess(wallet.address) : null)
-    setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null)
+    setBusy(false); setStatus(''); setError(''); setListError(''); setNotice(''); setAccess(wallet ? savedAccess(wallet.address) : null)
+    setHistory({ payments: [], next_offset: null }); setHistoryError(''); setOffset(0); setDepositFor(null); setFilter('all')
     setPublished(new Set()); setDraftState({ address: wallet?.address ?? null, records: [] })
-    setPicking(null); setSelected(new Set()); setNoteKeys(null); setWithdrawFor(null); setRecovered(null); setWithdrawn(new Map())
+    setNoteKeys(null); setWithdrawn(new Map())
+    dialog.current?.close(); collectDialog.current?.close()
     if (wallet) {
       try {
         const records = readPaymentDrafts(localStorage, wallet.address)
         setDraftState({ address: wallet.address, records })
         setPublished(new Set(records.filter((record) => localStorage.getItem(`darksol:published:${wallet.address}:${record.invoice.id}`)).map((record) => record.invoice.id)))
-        const prefix = `darksol:withdrawn:${wallet.address}:`
+        const prefix = withdrawnKey(wallet.address, '')
         setWithdrawn(new Map(Object.keys(localStorage).filter((key) => key.startsWith(prefix)).map((key) => [key.slice(prefix.length), localStorage.getItem(key)])))
       }
       catch { setError('Could not read saved payment notes. Check that browser storage is available.') }
@@ -110,6 +193,12 @@ export default function PaymentLinks({ summary, walletSession }) {
     return () => { controller.abort(); clearTimeout(timer) }
   }, [access, wallet, offset, refresh])
 
+  useEffect(() => {
+    if (!notice) return undefined
+    const timer = setTimeout(() => setNotice(''), 4000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
   async function merchantAccess(signal) {
     if (access?.address === wallet.address) return access
     setStatus('Approve merchant access...')
@@ -134,25 +223,27 @@ export default function PaymentLinks({ summary, walletSession }) {
   const usedIndexes = (serverNext) => Math.max(serverNext ?? 0,
     ...draftState.records.filter((record) => record.version === 2).map((record) => record.index + 1))
 
-  async function run(action) {
+  // `fail` receives the message of an error the action throws; `kind` says which
+  // part of the page shows the operation's progress.
+  async function run(action, fail = setError, kind = 'list') {
     if (operation.current || connecting) return
-    setError(''); setNotice('')
+    setError(''); setListError('')
     if (!wallet) {
       try { await connectWallet() }
-      catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not connect wallet') }
+      catch (cause) { fail(cause instanceof Error ? cause.message : 'Could not connect wallet') }
       return
     }
     const controller = new AbortController()
     operation.current = controller
-    setBusy(true)
+    setBusy(true); setTask(kind)
     try {
       await action(controller.signal)
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not complete payment request')
+      if (!controller.signal.aborted) fail(cause instanceof Error ? cause.message : 'Could not complete payment request')
     } finally {
       if (operation.current === controller) {
         operation.current = null
-        setBusy(false); setStatus('')
+        setBusy(false); setTask(null); setStatus('')
       }
     }
   }
@@ -163,7 +254,7 @@ export default function PaymentLinks({ summary, walletSession }) {
     signal.throwIfAborted()
     setPublished((previous) => new Set([...previous, record.invoice.id]))
     try { localStorage.setItem(`darksol:published:${wallet.address}:${record.invoice.id}`, result.payment_id) } catch { /* The encrypted draft and server record remain intact. */ }
-    setOffset(0); setRefresh((value) => value + 1)
+    setOffset(0); setFilter('all'); setRefresh((value) => value + 1)
     setNotice('Payment link created')
   }
 
@@ -181,12 +272,15 @@ export default function PaymentLinks({ summary, walletSession }) {
       signal.throwIfAborted()
       setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
       await publish(record, signal, identity)
-    })
+    }, setError, 'create')
   }
 
-  async function copyLink(url) {
-    try { await navigator.clipboard.writeText(paymentLinkUrl(url)); setNotice('Payment link copied') }
-    catch { setError('Could not copy the link. Open it to copy from the address bar.') }
+  async function copyLink(payment) {
+    try {
+      await navigator.clipboard.writeText(paymentLinkUrl(payment.payment_url))
+      setCopied(payment.payment_id); setNotice('Payment link copied')
+      setTimeout(() => setCopied((current) => current === payment.payment_id ? null : current), 1600)
+    } catch { setListError('Could not copy the link. Open it to copy from the address bar.') }
   }
 
   function saveFile(contents, name) {
@@ -198,133 +292,145 @@ export default function PaymentLinks({ summary, walletSession }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  const downloadRecovery = (draft) => saveFile(draft, `darksol-payment-${draft.invoice.id}.json`)
-
-  // One file for a batch: a version 1 record is the only way to reach its note,
+  // One file for everything: a version 1 record is the only way to reach its note,
   // and a Cloak note is found from its record, so keep backups easy to keep.
-  function downloadSelected(records) {
+  function backup(records) {
     saveFile(records, `darksol-payments-${new Date().toISOString().slice(0, 10)}.json`)
-    setNotice(`Saved ${records.length} recovery record${records.length === 1 ? '' : 's'}`)
+    setNotice(`Saved ${plural(records.length, 'recovery record')}`)
   }
 
-  function startPicking(mode) {
-    setPicking(mode); setSelected(new Set()); setError(''); setNotice('')
+  // The loaded page is enough when it is the only one.
+  const everyPayment = (identity, signal) => offset === 0 && history.next_offset === null ? history.payments : allPaymentLinks(identity, signal)
+
+  function downloadAll() {
+    run(async (signal) => {
+      const payments = access ? await everyPayment(access, signal) : []
+      backup([...payments.map((payment) => payment.record), ...unpublished])
+    }, setListError)
   }
 
-  function toggle(paymentId) {
-    setSelected((previous) => {
-      const next = new Set(previous)
-      next.has(paymentId) ? next.delete(paymentId) : next.add(paymentId)
-      return next
-    })
-  }
-
-  // Pressing the active Download or Delete button again acts on the selection;
-  // with nothing selected it leaves the mode.
-  function confirmPicked() {
-    const payments = history.payments.filter((payment) => selected.has(payment.payment_id) && selectable(payment))
-    const local = unpublished.filter((draft) => selected.has(draft.invoice.id))
-    if (!payments.length && !local.length) { setPicking(null); return }
-    if (picking === 'download') {
-      downloadSelected([...payments.map((payment) => payment.record), ...local])
-      setPicking(null); setSelected(new Set())
-      return
-    }
-    setPendingDelete({ payments, local })
+  function askDelete(entry) {
+    setPendingDelete(entry)
     dialog.current.showModal()
   }
 
-  function removePicked(backup) {
-    const { payments, local } = pendingDelete
+  function removePending(withBackup) {
+    const { payment, draft } = pendingDelete
     dialog.current.close()
-    if (backup) downloadSelected([...payments.map((payment) => payment.record), ...local])
+    if (withBackup) backup([payment ? payment.record : draft])
     run(async (signal) => {
-      if (payments.length) {
+      if (payment) {
         const identity = await merchantAccess(signal)
-        for (const payment of payments) {
-          await deletePaymentLink(payment.payment_id, identity, signal)
-          signal.throwIfAborted()
-          try { localStorage.removeItem(`darksol:published:${wallet.address}:${payment.record.invoice.id}`) } catch { /* The draft stays listed as unpublished. */ }
-        }
+        await deletePaymentLink(payment.payment_id, identity, signal)
+        signal.throwIfAborted()
+        try { localStorage.removeItem(`darksol:published:${wallet.address}:${payment.record.invoice.id}`) } catch { /* The draft stays listed as unpublished. */ }
+        setHistory((previous) => ({ ...previous, payments: previous.payments.filter((item) => item.payment_id !== payment.payment_id) }))
+        setRefresh((value) => value + 1)
+      } else {
+        // Never published, so nobody holds a link to pay it.
+        removePaymentDraft(localStorage, wallet.address, draft.invoice.id)
+        setDraftState((current) => ({ ...current, records: current.records.filter((record) => record.invoice.id !== draft.invoice.id) }))
       }
-      // Never published, so nobody holds a link to pay them.
-      for (const draft of local) removePaymentDraft(localStorage, wallet.address, draft.invoice.id)
-      const gone = new Set(local.map((draft) => draft.invoice.id))
-      setDraftState((current) => ({ ...current, records: current.records.filter((record) => !gone.has(record.invoice.id)) }))
-      setPicking(null); setSelected(new Set()); setRefresh((value) => value + 1)
-      const count = payments.length + local.length
-      setNotice(`Removed ${count} payment link${count === 1 ? '' : 's'}`)
-    })
-  }
-
-  function openWithdraw(id) {
-    setWithdrawFor(id); setRecipient(''); setError(''); setNotice('')
+      setNotice('Payment link deleted')
+    }, setListError)
   }
 
   function markWithdrawn(id, signature = '') {
     setWithdrawn((previous) => new Map(previous).set(id, signature))
-    try { localStorage.setItem(`darksol:withdrawn:${wallet.address}:${id}`, signature) } catch { /* Shown until reload. */ }
+    try { localStorage.setItem(withdrawnKey(wallet.address, id), signature) } catch { /* Shown until reload. */ }
   }
 
-  function withdrawRecord(record, paid) {
+  function openCollect() {
+    if (operation.current) return
+    setRecipient(''); setCollect({ phase: 'loading' })
+    collectDialog.current.showModal()
     run(async (signal) => {
-      const keys = record.version === 2 ? await paymentKeys(signal) : undefined
-      let signature
+      const payments = await everyPayment(await merchantAccess(signal), signal)
+      setCollect({ phase: 'review', records: payments.filter((payment) => payment.status === 'paid' && !isWithdrawn(payment.record)).map((payment) => payment.record) })
+    }, (message) => setCollect({ phase: 'review', records: ready, error: message }))
+  }
+
+  // Spends every paid note in as few transactions as pairNotes allows. Each one is
+  // marked collected as it lands, so a retry picks up only what is left.
+  function startCollect(event) {
+    event.preventDefault()
+    const records = collectRecords
+    const target = recipientCheck.sanitized
+    run(async (signal) => {
+      let done = 0
+      const signatures = []
+      const progress = (message) => { if (!signal.aborted) setCollect((current) => ({ ...current, done, signatures: [...signatures], status: message })) }
+      setCollect((current) => ({ ...current, phase: 'working', total: records.length, done, signatures, status: '', error: '' }))
+      const keys = records.some((record) => record.version === 2) ? await paymentKeys(signal) : undefined
+      const connection = new Connection(paymentRpcUrl(), 'confirmed')
+      async function spend(group) {
+        signal.throwIfAborted()
+        try {
+          const signature = await withdrawPaymentNotes({ ...wallet, records: group, keys, recipient: target, signal, connection, onStatus: progress })
+          for (const record of group) markWithdrawn(record.invoice.id, signature)
+          signatures.push(signature)
+        } catch (cause) {
+          // A verified deposit with nothing unspent was collected already, likely from another device.
+          if (group.length > 1 || !/No unspent funds/.test(cause.message)) throw cause
+          markWithdrawn(group[0].invoice.id)
+        }
+        done += group.length
+        progress('')
+      }
       try {
-        signature = await withdrawPaymentNote({ ...wallet, record, keys, recipient, signal,
-          connection: new Connection(paymentRpcUrl(), 'confirmed'),
-          onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+        for (const group of pairNotes(records)) {
+          try { await spend(group) } catch (cause) {
+            // Retry a failed pair note by note, so one bad note does not hold back its partner.
+            if (group.length === 1 || signal.aborted) throw cause
+            for (const record of group) await spend([record])
+          }
+        }
       } catch (cause) {
-        // A verified deposit with nothing unspent was withdrawn, likely from another device.
-        if (paid && /No unspent funds/.test(cause.message)) { markWithdrawn(record.invoice.id); setWithdrawFor(null) }
+        if (done && !signal.aborted) throw new Error(`Collected ${done} of ${records.length}, then: ${cause.message}`)
         throw cause
       }
-      setWithdrawFor(null)
-      markWithdrawn(record.invoice.id, signature)
-      setNotice(<>Withdrawal submitted · <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(signature)}`} target="_blank" rel="noreferrer">{short(signature)} <ExternalLink /></a></>)
-    })
+      signal.throwIfAborted()
+      setCollect((current) => ({ ...current, phase: 'done', done, signatures }))
+      setRefresh((value) => value + 1)
+    }, (message) => setCollect((current) => ({ ...current, phase: 'review', error: message })))
   }
 
-  function recoverFromChain() {
-    run(async (signal) => {
-      const keys = await paymentKeys(signal)
-      const found = await scanPrivacyCashNotes({ keys, signal, toIndex: usedIndexes(history.next_index) + SCAN_GAP,
-        connection: new Connection(paymentRpcUrl(), 'confirmed'),
-        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
-      setRecovered(found)
-      setNotice(found.length ? `Found ${found.length} Privacy Cash payment${found.length === 1 ? '' : 's'} on-chain` : 'No Privacy Cash payments found on-chain')
-    })
+  // An open wallet prompt outlives the abort, so the page is freed now rather than
+  // when that prompt settles. A withdrawal already relayed still lands and is
+  // marked; the loop starts no further one.
+  function stopCollect() {
+    operation.current?.abort()
+    operation.current = null
+    setBusy(false); setTask(null); setStatus('')
+    setCollect((current) => ({ ...current, phase: 'review', error: 'Stopped. Payments collected so far are marked; the rest stay shielded.' }))
   }
 
   const isWithdrawn = (record) => withdrawn.has(record.invoice.id)
-  const withdrawalReceipt = (record) => withdrawn.get(record.invoice.id) && <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(withdrawn.get(record.invoice.id))}`} target="_blank" rel="noreferrer">Withdrawal receipt <ExternalLink /></a>
-  const withdrawForm = (record, paid) => withdrawFor === record.invoice.id && <form className="paymentReport" onSubmit={(event) => { event.preventDefault(); withdrawRecord(record, paid) }}>
-    <label htmlFor="paymentRecipient">Withdraw to address</label>
-    <input id="paymentRecipient" value={recipient} onChange={(event) => setRecipient(event.target.value)} disabled={busy} maxLength={44} autoComplete="off" required
-      placeholder="A fresh address keeps this payment unlinked" />
-    <button className="ghost" disabled={busy || !recipient.trim()} type="submit">{busy ? status || 'Withdrawing...' : 'Withdraw'}</button>
-    <button className="ghost paymentIcon" type="button" title="Cancel" aria-label="Cancel withdrawal" disabled={busy} onClick={() => setWithdrawFor(null)}><X /></button>
-  </form>
-
-  const selectable = (payment) => picking === 'download' || payment.status !== 'paid'
+  const rowState = (payment) => isWithdrawn(payment.record) ? 'collected' : payment.status === 'paid' ? 'paid' : 'pending'
+  const ready = history.payments.filter((payment) => rowState(payment) === 'paid').map((payment) => payment.record)
+  const readyTotals = assetTotals(ready)
+  const readyUsd = readyTotals.every(([symbol]) => prices[symbol]) ? readyTotals.reduce((sum, [symbol, raw]) => sum + assetAmount(raw, symbol) * prices[symbol], 0) : null
+  const counts = { all: history.payments.length, pending: 0, paid: 0, collected: 0 }
+  for (const payment of history.payments) counts[rowState(payment)]++
+  const visible = history.payments.filter((payment) => filter === 'all' || rowState(payment) === filter)
   const unpublished = drafts.filter((draft) => !published.has(draft.invoice.id))
-  const pickBox = (id, label, enabled = true) => picking && <input type="checkbox" className="paymentPick" aria-label={`Select ${label || 'payment request'}`}
-    checked={selected.has(id)} disabled={busy || !enabled} onChange={() => toggle(id)} />
+  const collectRecords = collect?.records?.filter((record) => !isWithdrawn(record)) ?? []
+  const plan = collectPlan(collectRecords, prices)
+  const recipientCheck = validateSolanaAddress(recipient)
+
   const amountResult = parseAmount(amount, asset)
   const amountError = amount && !amountResult.valid ? amountResult.error
     : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < PAYMENT_ASSETS[asset].cloakMin ? `Cloak requires at least ${cloakMinimum(asset)}.` : ''
   const pools = POOLS.map((item) => {
-    const fees = asset !== 'SOL' && item.id === 'cloakc' ? { ...PROTOCOLS[item.id].fees, fixedAmount: 0.45 } : PROTOCOLS[item.id].fees
-    const fixedToken = asset !== 'SOL' && item.id === 'cloakc' ? asset : 'SOL'
+    const fees = poolFees(item.id, asset)
     const activity = summary.pools.find((entry) => entry.protocol === item.id)
     const hasVolume = !summary.loading && !summary.error && activity
       && Number.isFinite(activity.inflow) && activity.inflow >= 0
       && Number.isFinite(activity.outflow) && activity.outflow >= 0
     return {
-      ...item, fees, fixedToken,
+      ...item, fees,
       // A fee in the requested asset: the SOL-denominated fixed part is converted at the current price.
-      fee: (fixedToken === asset ? fees.fixedAmount : prices.SOL && prices[asset] ? fees.fixedAmount * prices.SOL / prices[asset] : NaN)
-        + (amountResult.valid ? Number(amountResult.normalized) * fees.variableRate : 0),
+      fee: withdrawalFee(item.id, asset, amountResult.valid ? Number(amountResult.normalized) : 0, prices),
       volume: hasVolume ? activity.inflow + activity.outflow : null,
     }
   })
@@ -332,25 +438,72 @@ export default function PaymentLinks({ summary, walletSession }) {
   // Keep the known order when activity is unavailable; missing data is not zero volume.
   pools.sort((a, b) => sort === 'fees' ? a.fee - b.fee || 0 : volumeAvailable ? b.volume - a.volume : 0)
 
+  const verifyForm = (payment) => <form className="linkVerify" onSubmit={(event) => {
+    event.preventDefault()
+    run(async (signal) => {
+      setStatus('Verifying deposit...')
+      await reportPaymentDeposit(payment.payment_id, transactionId.trim(), signal)
+      signal.throwIfAborted()
+      setHistory((previous) => ({ ...previous, payments: previous.payments.map((item) => item.payment_id === payment.payment_id ? { ...item, status: 'paid' } : item) }))
+      setDepositFor(null); setRefresh((value) => value + 1); setNotice('Deposit verified')
+    }, setListError, 'verify')
+  }}>
+    <label htmlFor="merchantDeposit">Paste the customer's deposit transaction ID</label>
+    <div>
+      <input id="merchantDeposit" value={transactionId} onChange={(event) => setTransactionId(event.target.value)} disabled={busy} maxLength={88} autoComplete="off" spellCheck="false" placeholder="Transaction ID" required autoFocus />
+      <button className="linkText strong" disabled={busy || !transactionId.trim()} type="submit">{busy && task === 'verify' ? 'Verifying…' : 'Verify'}</button>
+      <button className="linkIcon" type="button" aria-label="Cancel deposit verification" disabled={busy} onClick={() => setDepositFor(null)}><X /></button>
+    </div>
+  </form>
+
+  const linkRow = (payment) => {
+    const { record } = payment
+    const state = rowState(payment)
+    const collection = withdrawn.get(record.invoice.id)
+    return <React.Fragment key={payment.payment_id}>
+      <article className={`linkRow ${state}${depositFor === payment.payment_id ? ' expanded' : ''}`}>
+        <TokenMark asset={record.invoice.asset} protocol={record.invoice.protocol} />
+        <div className="linkMain">
+          <strong>{record.reference || 'Payment request'}</strong>
+          <span>{poolName(record.invoice.protocol)}<i aria-hidden="true">·</i>{dateText(payment.created_at)}</span>
+        </div>
+        <div className="linkAmount"><b>{tokenAmount(record.invoice.amount, record.invoice.asset)}<small>{record.invoice.asset}</small></b></div>
+        <StatusPill state={state} />
+        <div className="linkActions">
+          {payment.deposit_transaction && <a className="linkText" href={solscan(payment.deposit_transaction)} target="_blank" rel="noreferrer">Deposit<ExternalLink /></a>}
+          {collection && <a className="linkText" href={solscan(collection)} target="_blank" rel="noreferrer">Collection<ExternalLink /></a>}
+          {state === 'pending' && <button type="button" className="linkText" disabled={busy} aria-expanded={depositFor === payment.payment_id}
+            onClick={() => { setDepositFor(depositFor === payment.payment_id ? null : payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
+          <button type="button" className={`linkIcon${copied === payment.payment_id ? ' done' : ''}`} data-tooltip={copied === payment.payment_id ? 'Copied' : 'Copy link'} aria-label="Copy payment link" onClick={() => copyLink(payment)}>
+            {copied === payment.payment_id ? <Check /> : <Copy />}</button>
+          <a className="linkIcon" data-tooltip="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
+          {payment.status !== 'paid' && <button type="button" className="linkIcon linkDelete" data-tooltip="Delete link" aria-label={`Delete ${record.reference || 'payment request'}`} disabled={busy} onClick={() => askDelete({ payment })}><Trash2 /></button>}
+        </div>
+      </article>
+      {depositFor === payment.payment_id && state === 'pending' && verifyForm(payment)}
+    </React.Fragment>
+  }
+
   return <div className="homePage paymentLinksPage">
-    <header><div><p className="eyebrow">PAYMENT LINKS</p><h1>Receive privately</h1></div></header>
+    <header><h1>Receive privately</h1></header>
     <p className="paymentIntro">Get paid without sharing your wallet address with your customer.</p>
 
     <form className="sendCard panel paymentCreate" onSubmit={createPayment}>
-      <div className="paymentSectionTitle"><Link2 aria-hidden="true" /><h2>Create a payment link</h2><span>Solana</span></div>
-      <label className="paymentFieldLabel" htmlFor="paymentAmount">REQUEST AMOUNT</label>
+      <label className="paymentFieldLabel" htmlFor="paymentAmount">Request amount</label>
       <div className="amountRow paymentAmountRow">
         <span className="amountUsd">{usdText(amount, prices[asset])}</span>
         <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
-        <label className="paymentAsset"><img src={`/logos/${asset.toLowerCase()}.svg`} alt="" />
-          <select aria-label="Request asset" disabled={busy} value={asset} onChange={(event) => setAsset(event.target.value)}>
-            {PRICED.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
-          </select></label>
+        <div className="assetPicker">
+          <button type="button" aria-label="Request asset" aria-haspopup="listbox" aria-expanded={assetMenuOpen} disabled={busy} onClick={() => setAssetMenuOpen(!assetMenuOpen)}>
+            <img className="assetLogo" src={assetLogo(asset)} alt="" /><b>{asset}</b><ChevronDown /></button>
+          {assetMenuOpen && <div className="assetMenu" role="listbox">{PRICED.map((symbol) => <button type="button" role="option" aria-selected={asset === symbol} key={symbol}
+            onClick={() => { setAsset(symbol); setAssetMenuOpen(false) }}><img className="assetLogo" src={assetLogo(symbol)} alt="" />{symbol}</button>)}</div>}
+        </div>
       </div>
       {amountError && <p className="paymentAmountError" id="paymentAmountError" role="status">{amountError}</p>}
-      <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">REFERENCE <span>Optional</span></label><input id="paymentReference" disabled={busy} placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
+      <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">Reference <span>Optional</span></label><input id="paymentReference" disabled={busy} placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
       <div className="paymentPoolHeading">
-        <span className="paymentFieldLabel" id="paymentPoolLabel">RECEIVE THROUGH</span>
+        <span className="paymentFieldLabel" id="paymentPoolLabel">Receive through</span>
         {/* Closing on blur hides the radio during label activation and can crash Chrome. */}
         <details className="paymentSort" ref={settings} onKeyDown={(event) => {
           if (event.key === 'Escape') {
@@ -359,18 +512,18 @@ export default function PaymentLinks({ summary, walletSession }) {
             settings.current.querySelector('summary').focus()
           }
         }}>
-          <summary aria-label="Pool sorting preferences" title="Pool sorting preferences"><Settings aria-hidden="true" /></summary>
+          {/* The current order is the control itself, so it reads as metadata until pressed. */}
+          <summary aria-label="Pool sorting preferences" title="Pool sorting preferences"><ArrowUpDown aria-hidden="true" /><span className="paymentSortLabel">{sort === 'fees' ? 'Lowest fees first' : 'Most active first'}</span></summary>
           <fieldset className="paymentSortOptions"><legend>Sort pools by</legend>
             <label><input type="radio" name="paymentSort" value="fees" checked={sort === 'fees'} onChange={() => setSort('fees')} /><span><strong>Lowest fees</strong><small>Lower estimated withdrawal costs first.</small></span></label>
             <label><input type="radio" name="paymentSort" value="volume" checked={sort === 'volume'} onChange={() => setSort('volume')} /><span><strong>Most active pools</strong><small>Higher 24-hour volume first. More activity can offer better privacy cover.</small></span></label>
           </fieldset>
         </details>
-        <span className="paymentSortLabel">{sort === 'fees' ? 'Lowest fees first' : 'Most active first'}</span>
       </div>
       <fieldset className="paymentPoolPicker" aria-labelledby="paymentPoolLabel"><div>{pools.map((item) => <label className={pool === item.id ? 'selected' : ''} key={item.id}>
         <input type="radio" name="paymentPool" disabled={busy} value={item.id} checked={pool === item.id} onChange={() => setPool(item.id)} />
         <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{sort === 'fees'
-          ? amountResult.valid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fixedToken}`
+          ? amountResult.valid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fees.fixedToken}`
           : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`}</small></span>
       </label>)}</div></fieldset>
       <p className="paymentPoolHint" role="status">{sort === 'fees'
@@ -379,96 +532,134 @@ export default function PaymentLinks({ summary, walletSession }) {
           : 'Based on total pool volume over 24 hours. Activity alone does not guarantee privacy.'}</p>
       {error && <p className="paymentError" role="alert">{error}</p>}
       <div className="paymentActions">
-        <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && (!amountResult.valid || amountError))} aria-describedby="paymentAvailability">
-          {connecting ? 'Connecting…' : busy ? status || 'Preparing note…' : !wallet ? <><Wallet aria-hidden="true" />Connect wallet</> : <>Create payment link <ArrowRight aria-hidden="true" /></>}
+        <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && (!amountResult.valid || amountError))} aria-describedby={wallet ? 'paymentAvailability' : undefined}>
+          {connecting ? 'Connecting…' : busy && task === 'create' ? <><LoaderCircle className="spin" aria-hidden="true" />{status || 'Preparing note…'}</>
+            : !wallet ? <><Wallet aria-hidden="true" />Connect wallet</> : <>Create payment link <ArrowRight aria-hidden="true" /></>}
         </button>
-        {wallet && <button className="paymentDisconnect" type="button" aria-label="Disconnect wallet" title="Disconnect wallet" disabled={busy} onClick={() => { forgetAccess(wallet.address); disconnectWallet() }}><LogOut /></button>}
       </div>
-      <p className="paymentFormHint" id="paymentAvailability">{wallet ? `Connected: ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)} · Sign a message to prepare your payment note.` : 'Connect your Solana wallet to prepare a payment link.'}</p>
-      {notice && <div className="paymentPrepared" role="status"><CheckCircle2 aria-hidden="true" /><strong>{notice}</strong></div>}
+      {wallet && <p className="paymentFormHint" id="paymentAvailability">Sign a message to prepare your payment note.</p>}
     </form>
 
-    <section className="paymentHistory" aria-labelledby="paymentHistoryTitle">
-      <div className="paymentHistoryHeading"><h2 id="paymentHistoryTitle">Your payment links</h2>
-        {wallet && <div className="paymentRowActions">
-          <button className="ghost" type="button" disabled={busy || loading} onClick={() => run(async (signal) => { await merchantAccess(signal); setRefresh((value) => value + 1) })}>
-            <RefreshCw aria-hidden="true" />{access ? 'Refresh' : 'Load payment links'}
-          </button>
-          <button className="ghost" type="button" disabled={busy} title="Find Privacy Cash payments from your wallet signature alone" onClick={recoverFromChain}><Search aria-hidden="true" />Find on-chain</button>
-          {(history.payments.length > 0 || unpublished.length > 0) && <>
-            <button className={`ghost${picking === 'download' ? ' paymentActive' : ''}`} type="button" aria-pressed={picking === 'download'} disabled={busy}
-              onClick={() => picking === 'download' ? confirmPicked() : startPicking('download')}><Download aria-hidden="true" />Download{picking === 'download' && selected.size ? ` ${selected.size}` : ''}</button>
-            <button className={`ghost paymentDelete${picking === 'delete' ? ' paymentDanger' : ''}`} type="button" aria-pressed={picking === 'delete'} disabled={busy}
-              onClick={() => picking === 'delete' ? confirmPicked() : startPicking('delete')}><Trash2 aria-hidden="true" />Delete{picking === 'delete' && selected.size ? ` ${selected.size}` : ''}</button>
-          </>}
+    <section className="linksSection" aria-labelledby="paymentHistoryTitle">
+      <div className="linksHeader">
+        <h2 id="paymentHistoryTitle">Your payment links</h2>
+        {wallet && access && <div className="linksTools">
+          <button type="button" className="toolButton" data-tooltip="Refresh" aria-label="Refresh payment links" disabled={busy || loading} onClick={() => setRefresh((value) => value + 1)}>
+            <RefreshCw className={loading ? 'spin' : ''} /></button>
+          {(history.payments.length > 0 || unpublished.length > 0) && <button type="button" className="toolButton" data-tooltip="Download backup" aria-label="Download a backup of every payment link" disabled={busy} onClick={downloadAll}><Download /></button>}
         </div>}
       </div>
-      {picking && <p className="paymentFormHint" role="status">{picking === 'download'
-        ? 'Select links to back up, then press Download again.'
-        : 'Select links to remove, then press Delete again. Paid links cannot be deleted.'}</p>}
-      {historyError && <p className="paymentError" role="alert">{historyError}</p>}
-      {/* Only the first load shows this; the 15s refresh updates rows in place. */}
-      {loading && !history.payments.length && <p className="paymentLoading" role="status">Loading payment links...</p>}
-      {history.payments.length > 0 && <div className="paymentDrafts">{history.payments.map((payment) => <React.Fragment key={payment.payment_id}>
-        <article className={`paymentDraft${picking && selected.has(payment.payment_id) ? ' paymentPicked' : ''}${isWithdrawn(payment.record) ? ' paymentDone' : ''}`}>
-          {pickBox(payment.payment_id, payment.record.reference, selectable(payment))}
-          <div><strong>{payment.record.reference || 'Payment request'}</strong><span>{invoiceAmount(payment.record.invoice)} · {POOLS.find((item) => item.id === payment.record.invoice.protocol)?.name}</span>
-            <small>{new Date(payment.created_at).toLocaleDateString()}</small>
-            <span className={`paymentStatus ${payment.status}`}><span aria-hidden="true">{payment.status === 'paid' ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{isWithdrawn(payment.record) ? 'Withdrawn' : payment.status === 'paid' ? 'Paid' : 'Awaiting payment'}</span>
-            {payment.deposit_transaction && <a className="paymentReceipt" href={`https://solscan.io/tx/${encodeURIComponent(payment.deposit_transaction)}`} target="_blank" rel="noreferrer">Deposit receipt <ExternalLink /></a>}
-            {withdrawalReceipt(payment.record)}
-          </div>
-          <div className="paymentRowActions">
-            <button type="button" className="ghost paymentIcon" title="Copy payment link" aria-label="Copy payment link" onClick={() => copyLink(payment.payment_url)}><Copy /></button>
-            <a className="ghost paymentIcon" title="Open checkout" aria-label="Open checkout" href={paymentLinkUrl(payment.payment_url)} target="_blank" rel="noreferrer"><ExternalLink /></a>
-            {payment.status !== 'paid' && <button type="button" className="ghost" disabled={busy} onClick={() => { setDepositFor(payment.payment_id); setTransactionId('') }}>Verify deposit</button>}
-            {payment.status === 'paid' && !isWithdrawn(payment.record) && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(payment.record.invoice.id)}>Withdraw</button>}
-          </div>
-        </article>
-        {withdrawForm(payment.record, payment.status === 'paid')}
-        {depositFor === payment.payment_id && payment.status !== 'paid' && <form className="paymentReport" onSubmit={(event) => {
-          event.preventDefault()
-          run(async (signal) => {
-            setStatus('Verifying deposit...')
-            await reportPaymentDeposit(payment.payment_id, transactionId.trim(), signal)
-            signal.throwIfAborted()
-            setHistory((previous) => ({ ...previous, payments: previous.payments.map((item) => item.payment_id === payment.payment_id ? { ...item, status: 'paid' } : item) }))
-            setDepositFor(null); setRefresh((value) => value + 1); setNotice('Deposit verified')
-          })
-        }}><label htmlFor="merchantDeposit">Deposit transaction ID</label><input id="merchantDeposit" value={transactionId} onChange={(event) => setTransactionId(event.target.value)} disabled={busy} maxLength={88} autoComplete="off" required />
-          <button className="ghost" disabled={busy || !transactionId.trim()} type="submit">{busy ? 'Verifying...' : 'Verify deposit'}</button>
-          <button className="ghost paymentIcon" type="button" title="Cancel" aria-label="Cancel deposit verification" disabled={busy} onClick={() => setDepositFor(null)}><X /></button>
-        </form>}
-      </React.Fragment>)}</div>}
-      {recovered?.length > 0 && <div className="paymentDrafts">{recovered.map(({ record, spent: onChain }) => { const spent = onChain || isWithdrawn(record); return <React.Fragment key={record.invoice.id}>
-        <article className={`paymentDraft paymentLocal${spent ? ' paymentDone' : ''}`}>
-          <div><strong>Found on-chain</strong><span>{invoiceAmount(record.invoice)} · Privacy Cash</span><small>Payment note {record.index + 1}</small>
-            <span className={`paymentStatus ${spent ? 'paid' : 'pending'}`}><span aria-hidden="true">{spent ? <CheckCircle2 /> : <span className="paymentStatusDot" />}</span>{spent ? 'Withdrawn' : 'Ready to withdraw'}</span>{withdrawalReceipt(record)}</div>
-          <div className="paymentRowActions">{!spent && <button type="button" className="ghost" disabled={busy} onClick={() => openWithdraw(record.invoice.id)}>Withdraw</button>}</div>
-        </article>
-        {withdrawForm(record, true)}
-      </React.Fragment> })}</div>}
+
+      {ready.length > 0 && <div className="collectCard">
+        <div className="collectSummary">
+          <p>Ready to collect</p>
+          <strong>{readyTotals.map(([symbol, raw]) => `${tokenAmount(raw, symbol)} ${symbol}`).join(' + ')}</strong>
+          <span>{plural(ready.length, 'payment')}{readyUsd ? ` · ≈ ${usd(readyUsd)}` : ''}</span>
+        </div>
+        <button type="button" className="collectButton" disabled={busy} onClick={openCollect}><ArrowDownToLine aria-hidden="true" />Collect</button>
+      </div>}
+
+      {history.payments.length > 0 && <div className="linkTabs" role="group" aria-label="Filter payment links">
+        {[['all', 'All'], ['pending', 'Awaiting'], ['paid', 'Ready'], ['collected', 'Collected']].map(([key, label]) =>
+          <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}<span>{counts[key]}</span></button>)}
+      </div>}
+
+      {(listError || historyError) && <p className="paymentError" role="alert">{listError || historyError}</p>}
+      {/* Only the first load shows placeholders; the 15s refresh updates rows in place. */}
+      {loading && !history.payments.length && <div className="linkList" aria-busy="true" aria-label="Loading payment links">
+        {[0, 1, 2].map((index) => <div className="linkRow skeleton" key={index}><span /><div><i /><i /></div><b /></div>)}
+      </div>}
+      {visible.length > 0 && <div className="linkList" key={filter}>{visible.map(linkRow)}</div>}
+      {history.payments.length > 0 && !visible.length && <p className="linksNone">No {filter === 'pending' ? 'links awaiting payment' : filter === 'paid' ? 'payments waiting to be collected' : 'collected payments'} on this page.</p>}
       {(offset > 0 || history.next_offset !== null) && <div className="paymentPagination">
         <button className="ghost" type="button" disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}><ArrowLeft />Previous</button>
         <button className="ghost" type="button" disabled={loading || history.next_offset === null} onClick={() => setOffset(history.next_offset)}>Next<ArrowRight /></button>
       </div>}
-      {unpublished.map((draft) => <article className={`paymentDraft paymentLocal${picking && selected.has(draft.invoice.id) ? ' paymentPicked' : ''}`} key={draft.invoice.id}>
-        {pickBox(draft.invoice.id, draft.reference)}
-        <div><strong>{draft.reference || 'Payment request'}</strong><span>{invoiceAmount(draft.invoice)}</span><small>Not published</small></div>
-        <div className="paymentRowActions"><button type="button" className="ghost paymentIcon" title="Download recovery backup" aria-label="Download recovery backup" onClick={() => downloadRecovery(draft)}><Download /></button>
-          <button type="button" className="ghost" disabled={busy} onClick={() => run(async (signal) => publish(draft, signal, await merchantAccess(signal)))}><Upload />Publish link</button></div>
-      </article>)}
-      {!history.payments.length && !drafts.length && !loading && <div className="paymentEmpty"><Link2 aria-hidden="true" /><h3>{access ? 'No payment links yet' : 'Your payments, in one place'}</h3><p>{wallet ? 'Your payment requests will appear here.' : 'Connect your wallet to view your payment links.'}</p></div>}
+
+      {unpublished.length > 0 && filter === 'all' && <div className="linkList drafts">
+        <p className="linkListLabel">Saved in this browser</p>
+        {unpublished.map((draft) => <article className="linkRow draft" key={draft.invoice.id}>
+          <TokenMark asset={draft.invoice.asset} protocol={draft.invoice.protocol} />
+          <div className="linkMain"><strong>{draft.reference || 'Payment request'}</strong><span>{poolName(draft.invoice.protocol)}<i aria-hidden="true">·</i>{dateText(draft.createdAt)}</span></div>
+          <div className="linkAmount"><b>{tokenAmount(draft.invoice.amount, draft.invoice.asset)}<small>{draft.invoice.asset}</small></b></div>
+          <StatusPill state="draft" />
+          <div className="linkActions"><button type="button" className="linkText strong" disabled={busy} onClick={() => run(async (signal) => publish(draft, signal, await merchantAccess(signal)), setListError)}><Upload />Publish</button>
+            <button type="button" className="linkIcon linkDelete" data-tooltip="Delete request" aria-label={`Delete ${draft.reference || 'payment request'}`} disabled={busy} onClick={() => askDelete({ draft })}><Trash2 /></button></div>
+        </article>)}
+      </div>}
+
+      {!loading && !history.payments.length && !unpublished.length && <div className="linksEmpty">
+        <h3>{!wallet ? 'Your payments, in one place' : !access ? 'Load your payment links' : 'No payment links yet'}</h3>
+        <p>{!wallet ? 'Connect your wallet to view your payment links.' : !access ? 'Sign a message to see the links you created, on any device.' : 'Create your first link above and share it with a customer.'}</p>
+        {wallet && !access && <button type="button" className="ghost" disabled={busy} onClick={() => run(async (signal) => { await merchantAccess(signal); setRefresh((value) => value + 1) }, setListError)}>
+          {busy ? <LoaderCircle className="spin" /> : <RefreshCw />}Load payment links</button>}
+      </div>}
     </section>
+
+    {notice && <div className="toast" role="status" key={notice}><Check aria-hidden="true" />{notice}</div>}
+
     <dialog className="paymentDialog" ref={dialog} aria-labelledby="paymentDialogTitle" onClose={() => setPendingDelete(null)}>
       {pendingDelete && <>
-        <h3 id="paymentDialogTitle">Remove {pendingDelete.payments.length + pendingDelete.local.length} payment link{pendingDelete.payments.length + pendingDelete.local.length === 1 ? '' : 's'}?</h3>
-        <p>Removed links stop working for anyone who has them. A downloaded copy keeps each note's recovery record.</p>
+        <h3 id="paymentDialogTitle">{pendingDelete.payment ? 'Delete this payment link?' : 'Delete this saved request?'}</h3>
+        <p>{pendingDelete.payment ? 'The link stops working for anyone who has it. A downloaded copy keeps its note’s recovery record.'
+          : 'It was never published, so nobody can pay it. A downloaded copy keeps its recovery record.'}</p>
         <div className="paymentDialogActions">
           <button className="ghost" type="button" autoFocus onClick={() => dialog.current.close()}>Cancel</button>
-          <button className="ghost" type="button" onClick={() => removePicked(true)}><Download aria-hidden="true" />Download copy and remove</button>
-          <button className="ghost paymentDanger" type="button" onClick={() => removePicked(false)}><Trash2 aria-hidden="true" />Remove</button>
+          <button className="ghost" type="button" onClick={() => removePending(true)}><Download aria-hidden="true" />Download and delete</button>
+          <button className="ghost paymentDanger" type="button" onClick={() => removePending(false)}><Trash2 aria-hidden="true" />Delete</button>
         </div>
+      </>}
+    </dialog>
+
+    <dialog className="paymentDialog collectDialog" ref={collectDialog} aria-labelledby="collectTitle"
+      onCancel={(event) => { if (collect?.phase === 'working') event.preventDefault() }} onClose={() => setCollect(null)}>
+      {collect && <>
+        <div className="dialogHead">
+          <h3 id="collectTitle">{collect.phase === 'working' ? 'Collecting payments' : collect.phase === 'done' ? 'Payments collected' : 'Collect payments'}</h3>
+          {collect.phase !== 'working' && <button type="button" className="linkIcon" aria-label="Close" onClick={() => collectDialog.current.close()}><X /></button>}
+        </div>
+
+        {collect.phase === 'loading' && <div className="collectLoading" role="status"><LoaderCircle className="spin" aria-hidden="true" />{status || 'Finding paid payments…'}</div>}
+
+        {collect.phase === 'review' && (collectRecords.length ? <form className="collectForm" onSubmit={startCollect}>
+          <ul className="collectAssets">{plan.rows.map((row) => <li key={row.asset}>
+            <img src={assetLogo(row.asset)} alt="" />
+            <div><b>{tokenAmount(row.raw, row.asset)} {row.asset}</b><small>{plural(row.count, 'payment')}</small></div>
+            {Number.isFinite(row.fee) && <span>≈ {approx(row.fee)} {row.asset}<small>pool fees</small></span>}
+          </li>)}</ul>
+          <label className="paymentFieldLabel" htmlFor="collectRecipient">Send to</label>
+          <div className="collectRecipient">
+            <input id="collectRecipient" value={recipient} onChange={(event) => setRecipient(sanitizeSolanaAddress(event.target.value))} disabled={busy} maxLength={44}
+              autoComplete="off" spellCheck="false" placeholder="Solana address" aria-invalid={Boolean(recipient && !recipientCheck.valid)} autoFocus />
+            {wallet && <button type="button" className="linkText" disabled={busy} onClick={() => setRecipient(wallet.address)}>My wallet</button>}
+          </div>
+          {recipient && !recipientCheck.valid && <p className="paymentAmountError">{recipientCheck.error}</p>}
+          <p className={`collectHint${plan.alone ? ' tip' : ''}`}>{!plan.alone
+            ? 'The pool breaks the link to your customers, and each withdrawal combines two payments, so no amount matches what a single customer paid.'
+            : `The pool breaks the link to your customers, but ${collectRecords.length === 1 ? 'this payment leaves' : plan.alone === 1 ? '1 payment leaves' : `${plan.alone} payments leave`} on ${plan.alone === 1 ? 'its' : 'their'} own, for the exact amount paid. Wait for another payment in the same pool and token so Collect can combine them; the activity in between also hides the timing. A new address adds more distance.`}</p>
+          {collect.error && <p className="paymentError" role="alert">{collect.error}</p>}
+          <button className="paymentPrimary" type="submit" disabled={busy || !recipientCheck.valid}><ArrowDownToLine aria-hidden="true" />Collect {plural(collectRecords.length, 'payment')}</button>
+          <p className="collectFoot">{plural(plan.transactions, 'private withdrawal')} · the pool&apos;s relayer pays the network fee</p>
+        </form> : <div className="collectDone">
+          <span className="doneMark"><Check /></span>
+          <p>{collect.error || 'Everything is collected.'}</p>
+          <button className="ghost" type="button" onClick={() => collectDialog.current.close()}>Close</button>
+        </div>)}
+
+        {collect.phase === 'working' && <div className="collectProgress" role="status">
+          <div className="progressTrack"><i style={{ width: `${Math.max(6, (collect.done / collect.total) * 100)}%` }} /></div>
+          <p><b>{collect.done} of {collect.total}</b> collected</p>
+          <p className="collectStatus"><LoaderCircle className="spin" aria-hidden="true" />{collect.status || status || 'Preparing…'}</p>
+          {collect.signatures.length > 0 && <ul className="collectReceipts">{collect.signatures.map((signature) => <li key={signature}><Check /><a href={solscan(signature)} target="_blank" rel="noreferrer">{short(signature)}<ExternalLink /></a></li>)}</ul>}
+          <button className="ghost" type="button" onClick={stopCollect}>Stop</button>
+        </div>}
+
+        {collect.phase === 'done' && <div className="collectDone">
+          <span className="doneMark"><Check /></span>
+          <p>{collect.signatures.length ? `${plural(collect.done, 'payment')} sent to ${short(recipientCheck.sanitized || recipient)}.` : 'These payments were already collected.'}</p>
+          {collect.signatures.length > 0 && <ul className="collectReceipts">{collect.signatures.map((signature) => <li key={signature}><Check /><a href={solscan(signature)} target="_blank" rel="noreferrer">{short(signature)}<ExternalLink /></a></li>)}</ul>}
+          <button className="paymentPrimary" type="button" onClick={() => collectDialog.current.close()}>Done</button>
+        </div>}
       </>}
     </dialog>
   </div>

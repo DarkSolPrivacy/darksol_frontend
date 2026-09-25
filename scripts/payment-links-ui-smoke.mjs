@@ -66,6 +66,8 @@ try {
   assert.equal(await evaluate('document.querySelector("h1")?.textContent'), 'Receive privately')
   for (const width of [880, 390, 320]) {
     await call('Emulation.setDeviceMetricsOverride', { width, height: 714, deviceScaleFactor: 1, mobile: width < 760 })
+    // Media queries re-apply on the next frame; a click before that lands on the old layout.
+    await call('Runtime.evaluate', { expression: 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))', awaitPromise: true })
     for (let attempt = 0; attempt < 3; attempt++) {
       await click('.paymentSort summary')
       await click('.paymentSortOptions label:nth-of-type(2)')
