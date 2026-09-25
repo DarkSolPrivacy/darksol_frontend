@@ -58,5 +58,6 @@ export default Object.freeze({
   }),
 
   signerKind: 'injected',
-  modules: Object.freeze({ cli: true, browser: true, indexer: true, quote: true, bridge: false }),
+  // shieldedBalance: browser.js exports shieldedBalances for the wallet panel.
+  modules: Object.freeze({ cli: true, browser: true, indexer: true, quote: true, bridge: false, shieldedBalance: true }),
 })

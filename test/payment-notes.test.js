@@ -3,7 +3,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { PublicKey } from '@solana/web3.js'
 import { preparePaymentKeys, preparePaymentNote, recoverPaymentNote, readPaymentDrafts, PAYMENT_KEYS_MESSAGE } from '../src/payment-notes.js'
-import { scanPrivacyCashNotes, withdrawPaymentNote, PRIVACYCASH_FIRST_OUTPUT } from '../src/payment-withdraw.js'
+import { pairNotes, scanPrivacyCashNotes, withdrawPaymentNotes, PRIVACYCASH_FIRST_OUTPUT } from '../src/payment-withdraw.js'
 
 function storage() {
   const entries = new Map()
@@ -202,9 +202,39 @@ test('PrivacyCash withdraw spends the known note through the SDK without scannin
     [/merkle\/proofv2/, () => { throw new Error('stop before proving') }],
   ])
   const connection = { getMultipleAccountsInfo: async (accounts) => accounts.map(() => null) }
-  await assert.rejects(withdrawPaymentNote({ ...owner, record, keys, recipient: owner.address, connection }), /stop before proving/)
+  await assert.rejects(withdrawPaymentNotes({ ...owner, records: [record], keys, recipient: owner.address, connection }), /stop before proving/)
   const proof = new URL(calls.find((call) => call.url.includes('proofv2')).url)
   assert.equal(proof.searchParams.get('commitments').split(',')[0], record.invoice.outputs[0].commitment)
   assert.equal(new URL(calls.find((call) => call.url.includes('range')).url).searchParams.get('start'), '814000')
-  await assert.rejects(withdrawPaymentNote({ ...owner, record, keys, recipient: 'notAnAddress', connection }), /Invalid Solana address/)
+  await assert.rejects(withdrawPaymentNotes({ ...owner, records: [record], keys, recipient: 'notAnAddress', connection }), /Invalid Solana address/)
+})
+
+test('PrivacyCash withdraw spends two notes with different keys in one proof', async (t) => {
+  const owner = await wallet()
+  const keys = await preparePaymentKeys(owner)
+  const records = [
+    await preparePaymentNote({ ...owner, keys, index: 2, protocol: 'privacycash', amount: '0.02', storage: storage() }),
+    await preparePaymentNote({ ...owner, keys, index: 3, protocol: 'privacycash', amount: '0.03', storage: storage() }),
+  ]
+  const calls = stubFetch(t, [
+    [/merkle\/root/, () => ({ root: '1', nextIndex: 814000 })],
+    [/\/config/, () => ({ withdraw_fee_rate: 0.0035, withdraw_rent_fee: 0.006 })],
+    [/utxos\/range/, () => ({ encrypted_outputs: [], hasMore: false, total: 814000 })],
+    [/utxos\/indices/, (_url, init) => ({ indices: JSON.parse(init.body).encrypted_outputs.map((_, position) => 813950 + position) })],
+    [/merkle\/proofv2/, () => { throw new Error('stop before proving') }],
+  ])
+  const connection = { getMultipleAccountsInfo: async (accounts) => accounts.map(() => null) }
+  await assert.rejects(withdrawPaymentNotes({ ...owner, records, keys, recipient: owner.address, connection }), /stop before proving/)
+  const proof = new URL(calls.find((call) => call.url.includes('proofv2')).url)
+  assert.deepEqual(proof.searchParams.get('commitments').split(',').sort(), records.map((record) => record.invoice.outputs[0].commitment).sort())
+  const usdc = await preparePaymentNote({ ...owner, keys, index: 4, protocol: 'privacycash', asset: 'USDC', amount: '5', storage: storage() })
+  await assert.rejects(withdrawPaymentNotes({ ...owner, records: [records[0], usdc], keys, recipient: owner.address, connection }), /one pool and asset/)
+})
+
+test('notes pair up by pool and asset, two per withdrawal', () => {
+  const note = (id, protocol, asset) => ({ invoice: { id, protocol, asset } })
+  const ids = (groups) => groups.map((group) => group.map((record) => record.invoice.id))
+  assert.deepEqual(ids(pairNotes([note('a', 'privacycash', 'SOL'), note('b', 'cloakc', 'SOL'), note('c', 'privacycash', 'SOL'),
+    note('d', 'privacycash', 'USDC'), note('e', 'privacycash', 'SOL'), note('f', 'cloakc', 'SOL')])), [['a', 'c'], ['e'], ['b', 'f'], ['d']])
+  assert.deepEqual(pairNotes([]), [])
 })

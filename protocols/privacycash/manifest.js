@@ -35,7 +35,11 @@ export default Object.freeze({
   // deadline: the browser proves the withdrawal and the backend relays it later.
   // One recipient only: each later withdrawal spends the change note the
   // previous one creates when it lands, so it cannot be proved ahead.
-  send: Object.freeze({ execution: 'sdk', deadline: true }),
+  // keepShielded: a withdrawal returns its change to the wallet's own shielded
+  // balance, so a send can deposit more than it pays out. fromShielded: a send
+  // can pay from that balance with no deposit. Both notes are found again from
+  // the wallet signature on any device.
+  send: Object.freeze({ execution: 'sdk', deadline: true, keepShielded: true, fromShielded: true }),
   swap: Object.freeze({
     execution: 'documented-only',
     aggregator: 'Jupiter',
@@ -58,5 +62,6 @@ export default Object.freeze({
   }),
 
   signerKind: 'injected',
-  modules: Object.freeze({ cli: true, browser: true, indexer: true, quote: false, bridge: true }),
+  // shieldedBalance: browser.js exports shieldedBalances for the wallet panel.
+  modules: Object.freeze({ cli: true, browser: true, indexer: true, quote: false, bridge: true, shieldedBalance: true }),
 })

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { listProtocols } from '../protocols/registry.js'
 import { loadCli, loadCommands, loadIndexer } from '../protocols/load.js'
 
@@ -34,6 +35,14 @@ for (const manifest of listProtocols()) {
       if (manifest.swap.execution === 'sdk') {
         assert.equal(typeof module.swap, 'function', `${id} declares swap: sdk but ships no swap()`)
       }
+    })
+  }
+
+  if (modules.shieldedBalance) {
+    test(`${id} ships the shielded balance reader it declares`, async () => {
+      // browser.js needs Vite and the privacy SDKs, so check its source for the export.
+      const source = await readFile(new URL(`../protocols/${id}/browser.js`, import.meta.url), 'utf8')
+      assert.match(source, /export async function shieldedBalances\(/)
     })
   }
 

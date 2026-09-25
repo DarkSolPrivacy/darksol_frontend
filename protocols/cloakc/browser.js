@@ -156,6 +156,32 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
   }
 }
 
+const base64ToBytes = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
+
+// Unspent notes this browser saved from a Cloak send or swap that did not finish,
+// per asset, in base units. Cloak has no scan by wallet, so a note saved in
+// another browser is not counted. A note the SDK cannot check (no leaf index
+// yet) is counted: saveUtxos drops every note it saw spent. The app does not
+// spend these (the manifest has no fromShielded), so nothing is spendable.
+export async function shieldedBalances({ provider }) {
+  const wallet = String(provider.publicKey)
+  let saved = []
+  try { saved = JSON.parse(localStorage.getItem(`cloak-utxos-${wallet}`) || '[]') } catch { saved = [] }
+  const balances = { SOL: 0n, USDC: 0n, USDT: 0n }
+  const result = { balances, spendable: { SOL: 0n, USDC: 0n, USDT: 0n } }
+  if (!saved.length) return result
+  const sdk = await import('@cloak.dev/sdk')
+  const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
+  const utxos = await Promise.all(saved.map((entry) => sdk.deserializeUtxo(base64ToBytes(entry))))
+  const { unspent, skipped } = await sdk.verifyUtxos(utxos, connection, sdk.CLOAK_PROGRAM_ID)
+  const assets = { [sdk.NATIVE_SOL_MINT.toBase58()]: 'SOL', [MINTS.USDC]: 'USDC', [MINTS.USDT]: 'USDT' }
+  for (const utxo of [...unspent, ...skipped]) {
+    const asset = assets[utxo.mintAddress.toBase58()]
+    if (asset) balances[asset] += utxo.amount
+  }
+  return result
+}
+
 // The one entry point the UI calls, so it branches on neither protocol nor
 // capability. Anything the manifest does not run is refused here rather than
 // silently doing the wrong thing.

@@ -86,7 +86,7 @@ export function useWalletSession() {
       try {
         // `silent` is the standard flag; an injected wallet takes `onlyIfTrusted`.
         if (!choice.provider.isConnected) await choice.provider.connect({ silent: true, onlyIfTrusted: true })
-        if (current === generation.current && choice.provider.publicKey) setWallet({ provider: choice.provider, address: String(choice.provider.publicKey) })
+        if (current === generation.current && choice.provider.publicKey) setWallet({ provider: choice.provider, address: String(choice.provider.publicKey), name: choice.name, icon: choice.icon })
       } catch { /* Not authorized any more: Connect asks again. */ }
     }
     restore()
@@ -98,7 +98,7 @@ export function useWalletSession() {
     if (!provider?.on) return
     const accountChanged = (publicKey) => {
       generation.current++
-      setWallet(publicKey ? { provider, address: String(publicKey) } : null)
+      setWallet((current) => publicKey ? { ...current, provider, address: String(publicKey) } : null)
     }
     const disconnected = () => { generation.current++; setWallet(null) }
     provider.on('accountChanged', accountChanged)
@@ -127,7 +127,7 @@ export function useWalletSession() {
         throw new Error('Wallet account changed while connecting. Please try again.')
       }
       remember(choice.name)
-      const session = { provider, address }
+      const session = { provider, address, name: choice.name, icon: choice.icon }
       setWallet(session)
       return session
     })().finally(() => { pending.current = null; setConnecting(false); setPicker(null) })

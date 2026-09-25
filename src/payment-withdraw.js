@@ -16,8 +16,9 @@ const memoryStorage = (entries) => ({
   removeItem: (key) => entries.delete(key),
 })
 
-async function withdrawPrivacyCash({ record, encryption, address, recipient, connection, onStatus }) {
-  const { asset, amount, outputs } = record.invoice
+async function withdrawPrivacyCash({ records, encryptions, address, recipient, connection, onStatus }) {
+  const { asset } = records[0].invoice
+  const amount = records.reduce((sum, record) => sum + BigInt(record.invoice.amount), 0n)
   const { token, pcMint } = PAYMENT_ASSETS[asset]
   const [{ WasmFactory }, { withdraw }, { withdrawSPL }, { localstorageKey }, { queryRemoteTreeState }, { LSK_ENCRYPTED_OUTPUTS, LSK_FETCH_OFFSET }, { setLogger }, { getAssociatedTokenAddressSync }] = await Promise.all([
     import('@lightprotocol/hasher.rs'),
@@ -33,13 +34,23 @@ async function withdrawPrivacyCash({ record, encryption, address, recipient, con
   const { nextIndex } = await queryRemoteTreeState(token ?? undefined)
   // The SPL cache is keyed by the owner's token account, the SOL cache by the owner.
   const owner = token ? getAssociatedTokenAddressSync(new PublicKey(pcMint), publicKey) : publicKey
-  // The SDK's own UTXO cache, seeded with this invoice's note and a fetch offset
-  // at the tip: withdraw() then spends the known note instead of trial-decrypting
-  // every output in the pool.
+  // The SDK's own UTXO cache, seeded with these invoices' notes and a fetch offset
+  // at the tip: withdraw() then spends the known notes instead of trial-decrypting
+  // every output in the pool. It spends its two largest notes, so two fit one proof.
   const storage = memoryStorage(new Map([
     [LSK_FETCH_OFFSET + localstorageKey(owner), nextIndex],
-    [LSK_ENCRYPTED_OUTPUTS + localstorageKey(owner), JSON.stringify([outputs[0].encryptedNote])],
+    [LSK_ENCRYPTED_OUTPUTS + localstorageKey(owner), JSON.stringify(records.map((record) => record.invoice.outputs[0].encryptedNote))],
   ]))
+  // Each note has its own key, so decryption tries each; the SDK's zero change
+  // note is sealed under the first.
+  const encryption = Object.assign(Object.create(encryptions[0]), {
+    async decryptUtxo(sealed, wasm) {
+      for (const service of encryptions) {
+        try { return await service.decryptUtxo(sealed, wasm) } catch { /* Another note's key. */ }
+      }
+      throw new Error('Failed to decrypt data. Invalid encryption key or corrupted data.')
+    },
+  })
   setLogger((level, message) => { if (level === 'info') onStatus(message) })
   try {
     const common = { recipient, publicKey, connection, storage, encryptionService: encryption,
@@ -56,13 +67,17 @@ async function withdrawPrivacyCash({ record, encryption, address, recipient, con
   }
 }
 
-async function withdrawCloak({ note, provider, address, recipient, connection, onStatus }) {
+async function withdrawCloak({ notes, provider, address, recipient, connection, onStatus }) {
   const sdk = await import('@cloak.dev/sdk')
   onStatus('Locating your note in the Cloak pool...')
-  const commitment = BigInt(note.commitment)
-  const leaf = (await sdk.fetchCommitments(sdk.CLOAK_PRODUCTION_RELAY_URL)).find((entry) => BigInt('0x' + entry.commitment) === commitment)
-  if (!leaf) throw new Error('This payment has not reached the Cloak pool yet')
-  const result = await sdk.fullWithdraw([{ ...note, commitment, index: leaf.index }], recipient, {
+  const leaves = await sdk.fetchCommitments(sdk.CLOAK_PRODUCTION_RELAY_URL)
+  const inputs = notes.map((note) => {
+    const commitment = BigInt(note.commitment)
+    const leaf = leaves.find((entry) => BigInt('0x' + entry.commitment) === commitment)
+    if (!leaf) throw new Error('This payment has not reached the Cloak pool yet')
+    return { ...note, commitment, index: leaf.index }
+  })
+  const result = await sdk.fullWithdraw(inputs, recipient, {
     connection, programId: sdk.CLOAK_PROGRAM_ID, relayUrl: sdk.CLOAK_PRODUCTION_RELAY_URL,
     // Cloak's relay authenticates the requesting wallet; the recipient can differ.
     walletPublicKey: new PublicKey(address),
@@ -72,22 +87,39 @@ async function withdrawCloak({ note, provider, address, recipient, connection, o
   return result.signature
 }
 
-// Spends the invoice's funded note to `recipient`. The pool's relayer pays the
-// network fee, so the merchant wallet signs nothing on-chain.
-export async function withdrawPaymentNote({ record, provider, address, keys, recipient, connection, signal, onStatus = () => {} }) {
+// Groups records into withdrawals: both pools prove two input notes at once, so
+// two notes of the same pool and asset share one transaction and one fixed fee.
+export function pairNotes(records) {
+  const groups = new Map()
+  for (const record of records) {
+    const key = `${record.invoice.protocol}:${record.invoice.asset}`
+    groups.set(key, [...groups.get(key) ?? [], record])
+  }
+  return [...groups.values()].flatMap((group) => group.flatMap((record, index) => index % 2 ? [] : [group.slice(index, index + 2)]))
+}
+
+// Spends one or two funded notes of the same pool and asset (see pairNotes) to
+// `recipient`. The pool's relayer pays the network fee, so the merchant wallet
+// signs nothing on-chain.
+export async function withdrawPaymentNotes({ records, provider, address, keys, recipient, connection, signal, onStatus = () => {} }) {
   const target = validateSolanaAddress(recipient)
   if (!target.valid) throw new Error(target.error)
-  onStatus('Recovering your private note...')
-  const { notes, encryption } = await recoverPaymentNote({ provider, address, record, keys, signal })
-  signal?.throwIfAborted()
-  return record.invoice.protocol === 'privacycash'
-    ? withdrawPrivacyCash({ record, encryption, address, recipient: target.publicKey, connection, onStatus })
-    : withdrawCloak({ note: notes[0], provider, address, recipient: target.publicKey, connection, onStatus })
+  const [{ protocol, asset }] = records.map((record) => record.invoice)
+  if (records.length > 2 || records.some((record) => record.invoice.protocol !== protocol || record.invoice.asset !== asset)) throw new Error('A withdrawal spends at most two notes of one pool and asset')
+  onStatus(`Recovering your private note${records.length === 1 ? '' : 's'}...`)
+  const recovered = []
+  for (const record of records) {
+    recovered.push(await recoverPaymentNote({ provider, address, record, keys, signal }))
+    signal?.throwIfAborted()
+  }
+  return protocol === 'privacycash'
+    ? withdrawPrivacyCash({ records, encryptions: recovered.map((item) => item.encryption), address, recipient: target.publicKey, connection, onStatus })
+    : withdrawCloak({ notes: recovered.map((item) => item.notes[0]), provider, address, recipient: target.publicKey, connection, onStatus })
 }
 
 // Rebuilds version 2 PrivacyCash records from the chain alone: each note's IV is
 // derived from its index, so the scan matches outputs without decrypting them.
-// Returns records ready for withdrawPaymentNote, with `spent` from the nullifiers.
+// Returns records ready for withdrawPaymentNotes, with `spent` from the nullifiers.
 // ponytail: Cloak has no on-chain note to find without its amount; a Cloak scan
 // needs an index of deposit amounts and commitments. Its notes are derivable, so
 // the server record or a backup is enough to withdraw them.
