@@ -4,6 +4,8 @@ DarkSol finds the best privacy pool for a transfer. It indexes the pools it trac
 
 Live-test findings, routes, fee measurements and integration caveats live in [`docs/PROJECT_MEMORY.md`](docs/PROJECT_MEMORY.md).
 
+Private traction metrics live at `/admin-stats`, served and authenticated by the VPS backend. It reports verified payment-link funding without browser tracking. Deploy the backend and configure its generated admin credential before using the frontend route; see [admin setup](../darksol-backend/docs/ADMIN_STATS.md) and [metric definitions](docs/TRACTION_ANALYTICS.md).
+
 ## Repository map
 
 | Path | Role |

@@ -8,6 +8,7 @@ export default defineConfig({
   plugins: [react(), nodePolyfills({ include: ['buffer', 'crypto', 'events', 'process', 'stream', 'util'] })],
   server: {
     proxy: {
+      '/admin-stats': { target: api || 'https://api.darksol.app', changeOrigin: true },
       // Caddy answers 403 on /api/solana-rpc without the key only Vercel's
       // rewrite appends, so against the VPS that one route goes through Vercel.
       // Listed first: the first matching prefix wins.
