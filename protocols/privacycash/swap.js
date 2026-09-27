@@ -1,57 +1,63 @@
-import { getAssociatedTokenAddressSync } from '@solana/spl-token'
-import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js'
+import {
+  createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction,
+  createTransferCheckedInstruction, getAssociatedTokenAddressSync,
+} from '@solana/spl-token'
+import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
 import { ENDPOINTS, MINTS } from '../addresses.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 import { swapEligibility } from '../../src/swap-routes.js'
+import manifest from './manifest.js'
 import {
   awaitCapacity, base64ToBytes, bytesToBase64, depositTo, openPrivacyCashSession,
   unitsText, withdrawTo, withdrawalFee, withdrawalTerms,
 } from './browser.js'
 
-// A private swap the way privacycash.org runs one, since the SDK has none:
-// 1. withdraw the input privately to a swap wallet derived from the sign-in
-//    signature, 2. swap it there through Jupiter via the relayer's /swap,
-// 3. deposit the output back into the wallet's shielded balance, signed and paid
-//    by the swap wallet. The shielded output then pays the recipient.
-// The swap wallet and its SOL reserves are the site's own, so these swaps look
-// like every other PrivacyCash swap on chain.
+// A private swap, since the SDK has none: 1. withdraw the input privately to a
+// one-time swap wallet derived from the sign-in signature, 2. swap it there
+// through Jupiter via the PrivacyCash relayer's /swap, 3. pay the recipient
+// straight from that wallet and leave it empty. The pool withdrawal is what
+// hides the payer; re-shielding the output and withdrawing again (what
+// privacycash.org does) cost a second pool fee and hid nothing, since the two
+// legs matched to the lamport seconds apart.
 
-// SOL the swap wallet keeps: for a SOL deposit's fees, and, out of a SOL input,
-// for the swap and the token deposit after it. Above SOL_PRESENT its SOL is a
-// swap in flight, below it only that reserve.
-const SOL_DEPOSIT_RESERVE = 4_300_000n
-const SOL_SWAP_RESERVE = 10_000_000n
-const SOL_PRESENT = 30_000_000n
-// privacycash.org refuses a swap whose output is worth under 0.05 SOL.
+// SOL held back from a SOL input for the swap's own fees and the recipient's
+// token account; whatever is left reaches the recipient as SOL for fees.
+const INPUT_RESERVE = BigInt(Math.round(manifest.swap.swapWallet.inputReserveSol * 1e9))
+// A SOL input above the reserve by this much is still waiting to be swapped.
+const SWAP_MINIMUM = 10_000_000n
+// privacycash.org refuses a swap whose output is worth under 0.05 SOL, and
+// Jupiter's gasless fills need a qualifying size too.
 const MINIMUM_OUTPUT_SOL = 0.05
 // Headroom under the relayer's prices for Jupiter's slippage and fees.
 const PRICE_MARGIN = 0.99
+// The payout pays its own fee: one signature plus this priority fee.
+const PAYOUT_UNITS = 80_000
+const PAYOUT_MICRO_LAMPORTS = 100_000
+const PAYOUT_FEE = 5_000n + BigInt(Math.ceil(PAYOUT_UNITS * PAYOUT_MICRO_LAMPORTS / 1e6))
 
-// HKDF-SHA256(signature, sha256('privacycash:v1:' + wallet), 'privacycash:solana:wallet:v1:0'):
-// the same swap wallet privacycash.org derives, so either app can find its funds.
-export async function swapWallet(signature, publicKey) {
+// HKDF-SHA256(signature, sha256('privacycash:v1:' + wallet), 'privacycash:solana:wallet:v1:' + index).
+// Index 0 is the one swap wallet privacycash.org uses; each swap here takes a
+// fresh random index, so no two swaps (or their recipients) share a wallet.
+export async function swapWallet(signature, publicKey, index = 0) {
   const text = (value) => new TextEncoder().encode(value)
   const salt = await crypto.subtle.digest('SHA-256', text(`privacycash:v1:${publicKey.toBase58()}`))
   const key = await crypto.subtle.importKey('raw', signature, 'HKDF', false, ['deriveBits'])
-  const seed = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: text('privacycash:solana:wallet:v1:0') }, key, 256)
+  const seed = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: text(`privacycash:solana:wallet:v1:${index}`) }, key, 256)
   return Keypair.fromSeed(new Uint8Array(seed))
 }
 
-// The output `units` of input should shield, from the relayer's prices and
-// `terms` per asset (withdrawalTerms): the withdrawal into the swap wallet, the
-// SOL it keeps, and the swap. Null when the swap is too small to run, or its
-// output could not be sent on in a withdrawal.
+// The output `units` of input should deliver, from the relayer's prices and its
+// `terms` for the input (withdrawalTerms): one withdrawal into the swap wallet
+// and, for a SOL input, the reserve. Null when the swap is too small to run.
 export function swapEstimate({ inputAsset, outputAsset, units, terms, prices }) {
   const price = (asset) => prices[asset.toLowerCase()]
   if (!(price(inputAsset) > 0 && price(outputAsset) > 0 && price('SOL') > 0)) throw new Error('PrivacyCash has no current price to size this swap')
-  if (units < terms[inputAsset].minimum) return null
-  const swapped = units - withdrawalFee(terms[inputAsset], units) - (inputAsset === 'SOL' ? SOL_SWAP_RESERVE : 0n)
+  if (units < terms.minimum) return null
+  const swapped = units - withdrawalFee(terms, units) - (inputAsset === 'SOL' ? INPUT_RESERVE : 0n)
   if (swapped <= 0n) return null
   const worth = Number(swapped) / 10 ** TOKEN_DECIMALS[inputAsset] * price(inputAsset) * PRICE_MARGIN
   if (worth < MINIMUM_OUTPUT_SOL * price('SOL')) return null
-  const output = BigInt(Math.floor(worth / price(outputAsset) * 10 ** TOKEN_DECIMALS[outputAsset]))
-  const shielded = output - (outputAsset === 'SOL' ? SOL_DEPOSIT_RESERVE : 0n)
-  return shielded >= terms[outputAsset].minimum ? shielded : null
+  return BigInt(Math.floor(worth / price(outputAsset) * 10 ** TOKEN_DECIMALS[outputAsset]))
 }
 
 // What the swap wallet holds of `asset`, in base units.
@@ -66,7 +72,7 @@ async function holdings(connection, owner, asset) {
   }
 }
 
-const present = (asset, units) => units > (asset === 'SOL' ? SOL_PRESENT : 0n)
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The holding once it rises above `before`, polled for up to two minutes.
 async function arrival(connection, owner, asset, before, onWait) {
@@ -74,7 +80,7 @@ async function arrival(connection, owner, asset, before, onWait) {
     const units = await holdings(connection, owner, asset)
     if (units > before) return units
     onWait()
-    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await sleep(3000)
   }
   throw new Error(`the ${asset} did not reach the swap wallet in time`)
 }
@@ -102,101 +108,139 @@ async function jupiterSwap(burner, inputAsset, outputAsset, units) {
   return result.signature
 }
 
+async function confirmed(connection, signature) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const { value: [status] } = await connection.getSignatureStatuses([signature])
+    if (status?.err) throw new Error(`the payout failed on chain: ${JSON.stringify(status.err)}`)
+    if (['confirmed', 'finalized'].includes(status?.confirmationStatus)) return
+    await sleep(1500)
+  }
+  throw new Error('the payout was not confirmed in time')
+}
+
+// Empties the swap wallet into the recipient in one transaction it signs and
+// pays for: the output token (opening the recipient's token account if it has
+// none), its own token accounts closed (a wrapped-SOL one a swap left open
+// included), and every lamport left, rent included.
+async function payout({ connection, burner, recipient, inputAsset, outputAsset }) {
+  const owner = burner.publicKey
+  const instructions = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: PAYOUT_UNITS }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PAYOUT_MICRO_LAMPORTS }),
+  ]
+  let lamports = BigInt(await connection.getBalance(owner, 'confirmed')) - PAYOUT_FEE
+  let tokens = 0n
+  for (const asset of new Set([inputAsset, outputAsset])) {
+    const mint = new PublicKey(MINTS[asset])
+    const account = getAssociatedTokenAddressSync(mint, owner)
+    const info = await connection.getAccountInfo(account, 'confirmed')
+    if (!info) continue
+    if (asset === outputAsset && asset !== 'SOL') {
+      tokens = await holdings(connection, owner, asset)
+      const target = getAssociatedTokenAddressSync(mint, recipient)
+      if (!await connection.getAccountInfo(target, 'confirmed')) lamports -= BigInt(await connection.getMinimumBalanceForRentExemption(165))
+      instructions.push(
+        createAssociatedTokenAccountIdempotentInstruction(owner, target, recipient, mint),
+        createTransferCheckedInstruction(account, mint, target, owner, tokens, TOKEN_DECIMALS[asset]),
+      )
+    }
+    instructions.push(createCloseAccountInstruction(account, owner, owner))
+    lamports += BigInt(info.lamports)
+  }
+  if (lamports < 0n) throw new Error('the swap wallet cannot cover the payout fee')
+  if (lamports > 0n) instructions.push(SystemProgram.transfer({ fromPubkey: owner, toPubkey: recipient, lamports }))
+  const { blockhash } = await connection.getLatestBlockhash('confirmed')
+  const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: owner, recentBlockhash: blockhash, instructions }).compileToV0Message())
+  transaction.sign([burner])
+  const signature = await connection.sendRawTransaction(transaction.serialize(), { maxRetries: 5 })
+  await confirmed(connection, signature)
+  return { signature, tokens, lamports }
+}
+
 const taskKey = (publicKey) => `privacycash-swap-${publicKey.toBase58()}`
 
-// Carries a swap back into the wallet's shielded balance from wherever it
-// stopped: swaps the input if the swap wallet still holds it, then shields the
-// output. `waitFor` is the input held before a withdrawal on its way in.
-// Returns what was shielded, or null when the swap wallet held none of it.
-export async function finishSwap({ session, burner, task: { inputAsset, outputAsset }, waitFor, onStatus }) {
-  const { privacyCash, common, connection } = session
-  const owner = burner.publicKey
-  const input = waitFor === undefined ? await holdings(connection, owner, inputAsset)
-    : await arrival(connection, owner, inputAsset, waitFor, () => onStatus(`Waiting for the ${inputAsset} to reach the swap wallet…`))
+// Carries a swap to the recipient from wherever it stopped, reading only what
+// the swap wallet holds: swaps the input still there, then pays out. `task.keep`
+// is the SOL of a SOL input not to swap. With `wait`, the input is still on its
+// way in. Returns the payout, or null when the wallet was already empty.
+export async function finishSwap({ connection, burner, owner, task, wait = false, onStatus }) {
+  const { inputAsset, outputAsset } = task
+  const wallet = burner.publicKey
+  const input = wait ? await arrival(connection, wallet, inputAsset, 0n, () => onStatus(`Waiting for the ${inputAsset} to reach the swap wallet…`))
+    : await holdings(connection, wallet, inputAsset)
+  const swappable = input - (inputAsset === 'SOL' ? BigInt(task.keep) : 0n)
   let swapSignature = null
-  if (present(inputAsset, input)) {
-    const before = await holdings(connection, owner, outputAsset)
+  if (swappable > (inputAsset === 'SOL' ? SWAP_MINIMUM : 0n)) {
+    const before = await holdings(connection, wallet, outputAsset)
     onStatus(`Swapping ${inputAsset} to ${outputAsset}…`)
-    swapSignature = await jupiterSwap(burner, inputAsset, outputAsset, input - (inputAsset === 'SOL' ? SOL_SWAP_RESERVE : 0n))
-    await arrival(connection, owner, outputAsset, before, () => onStatus('Waiting for the swap to settle…'))
+    swapSignature = await jupiterSwap(burner, inputAsset, outputAsset, swappable)
+    await arrival(connection, wallet, outputAsset, before, () => onStatus('Waiting for the swap to settle…'))
   }
-  const output = await holdings(connection, owner, outputAsset)
-  if (!present(outputAsset, output)) {
-    localStorage.removeItem(taskKey(common.publicKey))
+  if (!await holdings(connection, wallet, outputAsset) && !await holdings(connection, wallet, 'SOL')) {
+    localStorage.removeItem(taskKey(owner))
     return null
   }
-  const units = output - (outputAsset === 'SOL' ? SOL_DEPOSIT_RESERVE : 0n)
-  onStatus(`Shielding the ${outputAsset}…`)
-  const deposit = await depositTo(privacyCash, common, outputAsset, units, async (transaction) => { transaction.sign([burner]); return transaction }, owner)
-  localStorage.removeItem(taskKey(common.publicKey))
-  return { units, swapSignature, depositSignature: deposit.tx }
+  onStatus('Paying the recipient…')
+  const paid = await payout({ connection, burner, recipient: new PublicKey(task.recipient), inputAsset, outputAsset })
+  localStorage.removeItem(taskKey(owner))
+  return { swapSignature, ...paid }
 }
 
 // Deposits `totalBaseUnits` of the input, swaps it privately and pays the whole
-// output, less the pool's withdrawal fee, to the recipient. `gasBaseUnits` of a
-// SOL input ride the same deposit and stay shielded through the swap, then go to
-// the recipient as SOL for network fees in a withdrawal of their own.
-// ponytail: an interrupted swap is only finished when the next PrivacyCash swap
-// starts; add a resume action to the page if interrupted swaps turn up.
-export async function executePrivacyCashSwap({ provider, inputAsset, outputAsset, totalBaseUnits, gasBaseUnits = 0n, recipient, onStatus = () => {} }) {
+// output to the recipient. A SOL input also leaves the recipient the reserve's
+// remainder as SOL for network fees.
+// ponytail: the swap wallet's index lives only in this browser's task, so a swap
+// cut short can be finished only here, by the next PrivacyCash swap; carry the
+// index in an encrypted note if cross-device recovery turns out to matter.
+export async function executePrivacyCashSwap({ provider, inputAsset, outputAsset, totalBaseUnits, recipient, onStatus = () => {} }) {
   const route = swapEligibility('privacycash', inputAsset, outputAsset)
   if (!route.available || route.kind !== 'swap') throw new Error(route.reason || `PrivacyCash cannot swap ${inputAsset} to ${outputAsset}`)
   const units = BigInt(totalBaseUnits)
-  const gas = BigInt(gasBaseUnits)
-  if (gas && inputAsset !== 'SOL') throw new Error('SOL for fees can only ride a swap paid in SOL')
   const recipientKey = new PublicKey(String(recipient))
-  const session = await openPrivacyCashSession({ provider, asset: inputAsset, totalBaseUnits: units + gas, onStatus })
+  const session = await openPrivacyCashSession({ provider, asset: inputAsset, totalBaseUnits: units, onStatus })
   const { privacyCash, common, publicKey, connection, transactionSigner } = session
-  const burner = await swapWallet(session.signature, publicKey)
 
   // Finished alone, never followed by this new deposit: the user retrying a
   // swap that stopped means that swap, not a second one.
   let pending = null
   try { pending = JSON.parse(localStorage.getItem(taskKey(publicKey))) } catch {}
-  if (pending) {
+  if (pending?.index) {
     onStatus('Finishing your earlier swap…')
-    const shielded = await finishSwap({ session, burner, task: pending, onStatus })
-    if (shielded) throw new Error(`Finished your earlier interrupted swap: ${unitsText(shielded.units, pending.outputAsset)} is back in your shielded balance. Nothing new was deposited; send it with Use shielded funds, or swap again.`)
+    const burner = await swapWallet(session.signature, publicKey, pending.index)
+    const paid = await finishSwap({ connection, burner, owner: publicKey, task: pending, onStatus })
+    if (paid) throw new Error(`Finished your earlier interrupted swap: ${paid.tokens ? unitsText(paid.tokens, pending.outputAsset) : unitsText(paid.lamports, 'SOL')} went to ${pending.recipient}. Nothing new was deposited; swap again to start this one.`)
   }
 
   onStatus('Checking the swap size…')
-  const terms = { [inputAsset]: await withdrawalTerms(privacyCash, inputAsset), [outputAsset]: await withdrawalTerms(privacyCash, outputAsset) }
+  const terms = await withdrawalTerms(privacyCash, inputAsset)
   if (!swapEstimate({ inputAsset, outputAsset, units, terms, prices: await privacyCash.getConfig('prices') })) {
     throw new Error(`${unitsText(units, inputAsset)} is too small to swap privately: after PrivacyCash's withdrawal fee it must still be worth about ${MINIMUM_OUTPUT_SOL} SOL`)
   }
 
   onStatus('Approve deposit in your wallet…')
-  const deposit = await depositTo(privacyCash, common, inputAsset, units + gas, transactionSigner)
+  const deposit = await depositTo(privacyCash, common, inputAsset, units, transactionSigner)
   const receipt = { provider: 'privacycash', inputAsset, outputAsset, depositSignature: deposit.tx, withdrawals: [] }
   let stage = 'shielded'
   try {
     await awaitCapacity(privacyCash, common, inputAsset, units, onStatus)
-    const waitFor = await holdings(connection, burner.publicKey, inputAsset)
+    const task = {
+      index: 1 + crypto.getRandomValues(new Uint32Array(1))[0] % 2_000_000_000,
+      inputAsset, outputAsset, recipient: recipientKey.toBase58(), keep: String(inputAsset === 'SOL' ? INPUT_RESERVE : 0n),
+    }
+    const burner = await swapWallet(session.signature, publicKey, task.index)
     // Saved before the withdrawal, so a swap cut short anywhere after it is found again.
-    localStorage.setItem(taskKey(publicKey), JSON.stringify({ inputAsset, outputAsset }))
-    onStatus(`Moving the ${inputAsset} to the swap wallet…`)
+    localStorage.setItem(taskKey(publicKey), JSON.stringify(task))
+    onStatus(`Moving the ${inputAsset} to a one-time swap wallet…`)
     await withdrawTo(privacyCash, common, inputAsset, { publicKey: burner.publicKey, baseUnits: units })
     stage = 'swap'
-    const shielded = await finishSwap({ session, burner, task: { inputAsset, outputAsset }, waitFor, onStatus })
-    if (!shielded) throw new Error('the swap wallet received nothing to swap')
-    receipt.swapSignature = shielded.swapSignature
-    stage = 'send'
-    await awaitCapacity(privacyCash, common, outputAsset, shielded.units, onStatus)
-    onStatus('Sending to the recipient…')
-    receipt.withdrawals.push(await withdrawTo(privacyCash, common, outputAsset, { publicKey: recipientKey, baseUnits: shielded.units }))
+    const paid = await finishSwap({ connection, burner, owner: publicKey, task, wait: true, onStatus })
+    if (!paid) throw new Error('the swap wallet received nothing to swap')
+    receipt.swapSignature = paid.swapSignature
+    receipt.withdrawals.push({ tx: paid.signature })
   } catch (error) {
     const where = stage === 'shielded' ? `the ${inputAsset} is in your shielded balance`
-      : stage === 'swap' ? 'the funds wait in a swap wallet only your PrivacyCash signature controls, and your next PrivacyCash swap moves them back into your shielded balance'
-        : `the ${outputAsset} is in your shielded balance; send it with Use shielded funds`
+      : 'the funds wait in a one-time swap wallet only your PrivacyCash signature controls, and your next PrivacyCash swap in this browser pays them to the recipient'
     throw Object.assign(new Error(`Deposit succeeded, but the swap stopped: ${error instanceof Error ? error.message : String(error)}. Nothing is lost: ${where}.`), { receipt })
-  }
-  // After the payment, so this SOL failing never undoes it.
-  if (gas) {
-    try {
-      await awaitCapacity(privacyCash, common, 'SOL', gas, onStatus)
-      onStatus('Sending SOL for fees…')
-      receipt.gas = await withdrawTo(privacyCash, common, 'SOL', { publicKey: recipientKey, baseUnits: gas })
-    } catch (error) { receipt.gasError = `${error instanceof Error ? error.message : String(error)}. The SOL stays in your shielded balance` }
   }
   return receipt
 }

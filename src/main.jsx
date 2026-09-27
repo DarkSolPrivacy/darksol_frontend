@@ -255,8 +255,9 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, dela
     receiverEstimates: Array.isArray(item?.receiverEstimates) ? item.receiverEstimates : [],
     explanations: Array.isArray(item?.explanations) ? item.explanations : [],
     timeline: Array.isArray(item?.timeline) ? item.timeline : Array.isArray(item?.estimatedTimeToTarget?.timeline) ? item.estimatedTimeToTarget.timeline : [],
-    // What arrives and where each fee goes. Not for a bridge: its cross-chain fees are the relayer's to quote.
-    settlement: !bridge && item?.settlement?.available ? item.settlement : null,
+    // What a swap delivers and where each fee goes. Swaps only: a send's one pool
+    // fee is the estimated fee already, and a bridge's cross-chain fees are the relayer's to quote.
+    settlement: !bridge && inputAsset !== outputAsset && item?.settlement?.available ? item.settlement : null,
   }
 }
 
@@ -405,11 +406,12 @@ function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open
         <div><dt>{targetLabel} wait</dt><dd>{formatDuration(targetWait)}</dd></div>
         <div><dt>Estimated fee</dt><dd>{fee.primary}</dd></div>
       </dl>
-      {estimate.settlement && <div className="settlement">
-        <p>Where the fees go</p>
+      {estimate.settlement && <details className="settlement">
+        <summary>Where the fees go <ChevronDown /></summary>
         <div className="settlementOutput"><span>Recipient receives</span><b>≈ {tokenFigure(estimate.settlement.output.amount, estimate.settlement.output.asset)}{finite(estimate.settlement.output.usd) !== null && <small>{money(estimate.settlement.output.usd)}</small>}</b></div>
+        {estimate.settlement.extra && <div className="settlementOutput"><span>Plus SOL for fees</span><b>≈ {tokenFigure(estimate.settlement.extra.amount, 'SOL')}{finite(estimate.settlement.extra.usd) !== null && <small>{money(estimate.settlement.extra.usd)}</small>}</b></div>}
         {estimate.settlement.fees.map((item, index) => <div key={index}><span>{item.label}</span><em>{item.to}{item.fromWallet ? ' · from wallet SOL' : ''}</em><b>{tokenFigure(item.amount, item.asset)}{finite(item.usd) !== null && <small>{item.usd > 0 && item.usd < 0.005 ? '<$0.01' : money(item.usd)}</small>}</b></div>)}
-      </div>}
+      </details>}
       {alternatives.length > 0 && <div className="routeAlternatives"><p>Compared against</p>{alternatives.map((item) => <div key={item.protocol}><ProtocolLogo protocol={item.protocol} name={item.protocolName} /><span>{item.protocolName}</span>{item.available ? <b>{scoreText(item.score)} <small>{bandLabel(item.band)}</small></b> : <small className="routeUnavailable">{item.unavailableReason || 'Unavailable for this transfer'}</small>}</div>)}</div>}
       <p className="estimateDisclaimer">This is an estimate, not a guarantee of anonymity.</p>
     </div>}
@@ -652,6 +654,8 @@ function PrivacyHome({ walletSession }) {
   // null when the user backs out, {} for no SOL, else { indexes, units, net, source }.
   async function askForGas(kind) {
     if (deadlineMinutes || !(kind === 'send' ? asset !== 'SOL' : kind === 'swap' && asset === 'SOL')) return {}
+    // A PrivacyCash swap wallet already leaves the recipient the rest of its SOL reserve.
+    if (kind === 'swap' && PROTOCOLS[recommended?.protocol]?.swap?.swapWallet) return {}
     const rows = transferValidation.rows
     let indexes, walletLamports, withdrawal, reserve
     try {

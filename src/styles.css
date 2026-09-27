@@ -642,7 +642,12 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .routeFacts dt { color: var(--text-tertiary); font-size: 11px; }
 .routeFacts dd { margin: 5px 0 0; color: var(--text-primary); font: 500 13px var(--font-mono); }
 .settlement { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
-.settlement > p { margin: 0 0 4px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.settlement > summary { width: fit-content; display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 500; list-style: none; cursor: pointer; }
+.settlement > summary::-webkit-details-marker { display: none; }
+.settlement > summary:hover, .settlement[open] > summary { color: var(--text-primary); }
+.settlement > summary svg { width: 13px; height: 13px; transition: transform .18s var(--ease); }
+.settlement[open] > summary { margin-bottom: 4px; }
+.settlement[open] > summary svg { transform: rotate(180deg); }
 .settlement > div { min-height: 34px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; color: var(--text-secondary); font-size: 12px; }
 .settlement > div + div { border-top: 1px solid var(--border-subtle); }
 .settlement em { color: var(--text-tertiary); font-style: normal; text-align: right; }
