@@ -8,10 +8,12 @@ test('Cloak supports only SOL to stablecoin swaps', () => {
   assert.match(swapEligibility('cloakc', 'USDC', 'SOL').reason, /only from SOL/)
 })
 
-test('PrivacyCash documented swaps remain visible but unavailable without a public SDK method', () => {
-  const route = swapEligibility('privacycash', 'USDC', 'SOL')
-  assert.equal(route.available, false)
-  assert.equal(route.reason, 'SOON')
+// Its swap wallet pays the re-deposit's fee from SOL, so SOL is on one side.
+test('PrivacyCash swaps between SOL and a stablecoin in both directions', () => {
+  for (const [input, output] of [['USDC', 'SOL'], ['USDT', 'SOL'], ['SOL', 'USDC'], ['SOL', 'USDT']]) {
+    assert.equal(swapEligibility('privacycash', input, output).available, true, `${input} -> ${output}`)
+  }
+  assert.match(swapEligibility('privacycash', 'USDC', 'USDT').reason, /to or from SOL/)
 })
 
 test('Curvy supports both directions for configured vault assets', () => {

@@ -86,6 +86,7 @@ export const PROVIDER_CAPABILITIES = Object.freeze(Object.fromEntries(manifests.
       fixedToken: manifest.fees.fixedToken,
       fixedBasis: manifest.fees.fixedBasis,
       ...(manifest.fees.fixedAppliesToTokens ? { fixedAppliesToTokens: manifest.fees.fixedAppliesToTokens } : {}),
+      ...(manifest.fees.fixedByToken ? { fixedByToken: manifest.fees.fixedByToken } : {}),
       label: manifest.fees.label,
     }),
   }

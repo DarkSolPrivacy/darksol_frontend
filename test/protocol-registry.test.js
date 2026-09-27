@@ -60,9 +60,7 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
     privacycash: {
       id: 'privacycash', name: 'PrivacyCash', network: 'Solana',
       supportsMultiRecipient: true, maxRecipients: null, supportsDeadline: true,
-      supportsPrivateSwap: false, documentsPrivateSwap: true,
-      privateSwapIntegration: 'Unavailable in privacycash@1.2.2 public SDK',
-      swapAggregator: 'Jupiter',
+      supportsPrivateSwap: true, swapAggregator: 'Jupiter',
       protocolExecution: { label: 'historical p50 / p95 when available' },
       withdrawalFee: {
         variableRate: 0.0035, fixedAmount: 0.006, fixedToken: 'SOL', fixedBasis: 'recipient',
@@ -77,7 +75,7 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
       protocolExecution: { label: 'historical p50 / p95 when available' },
       withdrawalFee: {
         variableRate: 0.003, fixedAmount: 0.005, fixedToken: 'SOL', fixedBasis: 'transaction',
-        fixedAppliesToTokens: ['SOL'], label: '0.3%; SOL exits add 0.005 SOL',
+        fixedByToken: { SOL: 0.005, USDC: 0.45, USDT: 0.45 }, label: '0.3% + 0.005 SOL or 0.45 USDC/USDT per exit',
       },
     },
     curvy: {
@@ -103,8 +101,8 @@ test('SWAP_CAPABILITIES reproduces src/swap-routes.js', () => {
     },
     privacycash: {
       inputAssets: ['USDC', 'SOL', 'USDT'], outputAssets: ['USDC', 'SOL', 'USDT'],
-      execution: 'documented-only',
-      note: 'PrivacyCash documents private swaps, but its published SDK has no supported swap or recovery method.',
+      execution: 'sdk',
+      note: 'PrivacyCash swaps through Jupiter in a signature-derived swap wallet and re-shields the output before paying the recipient.',
     },
     curvy: {
       inputAssets: ['USDC', 'SOL', 'USDT'], outputAssets: ['USDC', 'SOL', 'USDT'],
@@ -138,7 +136,7 @@ test('PROTOCOLS carries every field server/app.js and server/index.js read', () 
   assert.deepEqual(fields(PROTOCOLS.cloakc), {
     id: 'cloakc', name: 'CLOAKC', programId: 'zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
     docs: 'https://docs.cloak.ag/sdk/introduction',
-    feePolicy: { label: '0.3% protocol fee', detail: 'SOL exits add 0.005 SOL' },
+    feePolicy: { label: '0.3% protocol fee', detail: 'Exits add 0.005 SOL or 0.45 USDC/USDT' },
     chain: 'solana', chainId: null,
     // app.js built this by concatenating solscan onto programId.
     explorerAccount: 'https://solscan.io/account/zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
@@ -214,7 +212,7 @@ test('listProtocols answers the questions that were hardcoded arrays', () => {
   assert.deepEqual(ids({ lane: 'solana' }), ['cloakc', 'privacycash', 'umbra'])
   // Only protocols whose capability actually executes. Umbra documents swaps
   // but ships no swap module, so it must not appear here.
-  assert.deepEqual(ids({ capability: 'swap' }), ['cloakc', 'curvy'])
+  assert.deepEqual(ids({ capability: 'swap' }), ['cloakc', 'privacycash', 'curvy'])
   assert.deepEqual(ids({ capability: 'bridge' }), ['privacycash'])
   assert.ok(ids({ capability: 'send' }).includes('umbra'))
 })

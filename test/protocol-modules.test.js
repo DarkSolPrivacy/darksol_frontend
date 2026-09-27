@@ -31,9 +31,12 @@ for (const manifest of listProtocols()) {
       for (const fn of ['snapshot', 'balance', 'deposit', 'send']) {
         assert.equal(typeof module[fn], 'function', `${id}/cli.ts is missing ${fn}()`)
       }
-      // Swap is only promised when the manifest says the swap executes.
-      if (manifest.swap.execution === 'sdk') {
-        assert.equal(typeof module.swap, 'function', `${id} declares swap: sdk but ships no swap()`)
+      // Swap is only promised when the manifest says the swap executes: by the
+      // CLI, or by the browser adapter for a browser-only swap (PrivacyCash's).
+      if (manifest.swap.execution === 'sdk' && typeof module.swap !== 'function') {
+        assert.ok(modules.browser, `${id} declares swap: sdk but ships no swap()`)
+        const source = await readFile(new URL(`../protocols/${id}/browser.js`, import.meta.url), 'utf8')
+        assert.match(source, /kind === 'swap'/, `${id} declares swap: sdk but neither its CLI nor its browser adapter swaps`)
       }
     })
   }

@@ -20,15 +20,20 @@ export default Object.freeze({
 
   assets: Object.freeze(['SOL', 'USDC', 'USDT']),
 
+  // Each pool's PoolConfig charges an exit (withdrawal or swap) 0.3% plus a fixed
+  // fee in its own token (docs.cloak.ag/guide/fees, confirmed on chain 2026-09-27:
+  // a 0.03 SOL swap paid 0.00509 SOL). Deposits are free; the wallet pays the
+  // network fee and rent for three accounts (depositCostSol, measured on a SOL deposit).
   fees: Object.freeze({
     variableRate: 0.003,
     fixedAmount: 0.005,
     fixedToken: 'SOL',
     fixedBasis: 'transaction',
-    fixedAppliesToTokens: Object.freeze(['SOL']),
-    label: '0.3%; SOL exits add 0.005 SOL',
+    fixedByToken: Object.freeze({ SOL: 0.005, USDC: 0.45, USDT: 0.45 }),
+    depositCostSol: 0.00197088,
+    label: '0.3% + 0.005 SOL or 0.45 USDC/USDT per exit',
     policyLabel: '0.3% protocol fee',
-    policyDetail: 'SOL exits add 0.005 SOL',
+    policyDetail: 'Exits add 0.005 SOL or 0.45 USDC/USDT',
   }),
   recipients: Object.freeze({ multi: false, max: 1 }),
   capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
@@ -39,11 +44,9 @@ export default Object.freeze({
     aggregator: 'Jupiter',
     inputAssets: Object.freeze(['SOL']),
     outputAssets: Object.freeze(['USDC', 'USDT']),
+    // Cloak's relay routes through Jupiter's swap API, which added no fee on chain.
+    routingFee: 0,
     note: 'Cloak swaps private SOL to a public SPL-token recipient through Jupiter.',
-    routeBanner: Object.freeze({
-      from: 'PRIVATE SOL', via: 'JUPITER', to: 'PUBLIC USDC / USDT RECIPIENT',
-      note: 'Two-stage Cloak TransactSwap flow',
-    }),
   }),
   bridge: Object.freeze({
     execution: 'unsupported',

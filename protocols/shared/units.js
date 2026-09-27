@@ -30,3 +30,12 @@ export function rawTokenText(raw, asset) {
   const fraction = String(raw % scale).padStart(decimals, '0').replace(/0+$/, '')
   return fraction ? `${whole}.${fraction}` : String(whole)
 }
+
+// The smallest withdrawal that still delivers `net` once `fee(units)` comes out
+// of it, and at least `minimum`. Each step stays at or under that answer, since
+// the fee only grows with the amount, so the loop ends on it.
+export function withdrawalFor(net, fee, minimum = 0n) {
+  let units = net
+  while (units - fee(units) < net) units = net + fee(units)
+  return units > minimum ? units : minimum
+}

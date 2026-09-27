@@ -42,7 +42,6 @@ export default Object.freeze({
     inputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
     outputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
     note: 'Curvy swaps supported private Vault currencies through a LiFi-backed intent.',
-    routeBanner: null,
   }),
   bridge: Object.freeze({
     execution: 'documented-only',

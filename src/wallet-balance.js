@@ -10,9 +10,19 @@ export function spendableSolBalance(rawBalance) {
   return raw > SOL_FEE_RESERVE ? raw - SOL_FEE_RESERVE : 0n
 }
 
+// A wallet below this cannot open a token account (0.00204 SOL of rent), which
+// a Jupiter swap and a send to a fresh wallet both need, so it is offered SOL.
+export const RECIPIENT_SOL_FLOOR = 3_000_000n
+
 function connection() {
   const url = import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString()
   return new Connection(url, 'confirmed')
+}
+
+// The lamports each address holds, in order, from one RPC call.
+export async function solBalances(addresses) {
+  const accounts = await connection().getMultipleAccountsInfo(addresses.map((address) => new PublicKey(address)), 'confirmed')
+  return accounts.map((account) => BigInt(account?.lamports ?? 0))
 }
 
 export async function getWalletAssetBalance(address, asset) {

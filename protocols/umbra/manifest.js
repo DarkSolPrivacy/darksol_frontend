@@ -49,7 +49,6 @@ export default Object.freeze({
     outputAssets: Object.freeze(['SOL', 'USDC', 'USDT']),
     note: 'Umbra documents encrypted swaps, but @umbra-privacy/sdk 5.0.0-rc.6 publishes no swap, quote or route module.',
     integrationNote: 'Absent from all 43 subpath exports of @umbra-privacy/sdk 5.0.0-rc.6',
-    routeBanner: null,
   }),
   bridge: Object.freeze({
     execution: 'unsupported',

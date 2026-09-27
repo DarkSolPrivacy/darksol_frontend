@@ -54,6 +54,7 @@ export const ENDPOINTS = Object.freeze({
   curvyApi: 'https://api.curvy.box',
   privacycashBridge: 'https://api3.privacycash.org/bridge',
   privacycashConfig: 'https://api3.privacycash.org/config',
+  privacycashSwap: 'https://api3.privacycash.org/swap',
 })
 
 export const EXPLORERS = Object.freeze({

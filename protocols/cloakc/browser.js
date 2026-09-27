@@ -113,13 +113,18 @@ export async function executeCloakSend({ provider, asset, totalBaseUnits, recipi
   }
 }
 
-export async function executeCloakSwap({ provider, inputAsset, outputAsset, totalBaseUnits, recipient, onStatus = () => {} }) {
+// `gasBaseUnits` ride the same deposit: the swap leaves them as its change note,
+// which then goes to the recipient as SOL for network fees.
+export async function executeCloakSwap({ provider, inputAsset, outputAsset, totalBaseUnits, gasBaseUnits = 0n, recipient, onStatus = () => {} }) {
   if (inputAsset !== 'SOL' || !OUTPUT_MINTS[outputAsset]) throw new Error('CLOAKC supports SOL to USDC or USDT swaps only')
   const recipientWallet = new PublicKey(String(recipient))
   const outputMint = new PublicKey(OUTPUT_MINTS[outputAsset])
   const recipientAta = getAssociatedTokenAddressSync(outputMint, recipientWallet)
-  const { sdk, options, deposit, wallet } = await depositNote({ provider, asset: 'SOL', totalBaseUnits, onStatus })
+  const gas = BigInt(gasBaseUnits)
+  const { sdk, options, deposit, wallet } = await depositNote({ provider, asset: 'SOL', totalBaseUnits: totalBaseUnits + gas, onStatus })
 
+  let swap
+  let receipt
   try {
     const fee = 5_000_000n + totalBaseUnits * 3n / 1000n
     const quotedInput = totalBaseUnits - fee
@@ -127,7 +132,7 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
     onStatus('Getting a fresh Jupiter quote...')
     const quote = await quoteSwap(quotedInput, outputAsset)
     onStatus('Approve the private swap...')
-    const swap = await sdk.swapWithChange(
+    swap = await sdk.swapWithChange(
       deposit.outputUtxos,
       totalBaseUnits,
       outputMint,
@@ -138,7 +143,7 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
     )
     saveRecovery(wallet, swap)
     saveUtxos(wallet, sdk, swap.outputUtxos, deposit.outputUtxos)
-    return {
+    receipt = {
       provider: 'cloakc', inputAsset, outputAsset,
       depositSignature: deposit.signature,
       swapSignature: swap.signature,
@@ -154,6 +159,26 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
     wrapped.receipt = { provider: 'cloakc', inputAsset, outputAsset, depositSignature: deposit.signature, withdrawals: [] }
     throw wrapped
   }
+  // After the swap, so this SOL failing never undoes it.
+  if (gas) {
+    const change = swap.outputUtxos.filter((utxo) => utxo.amount > 0n)
+    try {
+      onStatus('Sending SOL for fees...')
+      const withdrawal = await sdk.fullWithdraw(change, recipientWallet, { ...options, cachedMerkleTree: swap.merkleTree })
+      saveUtxos(wallet, sdk, withdrawal.outputUtxos, change)
+      receipt.gas = { tx: withdrawal.signature }
+    } catch (error) {
+      receipt.gasError = `${error instanceof Error ? error.message : String(error)}. The SOL stays in a private CLOAKC note saved in this browser`
+    }
+  }
+  return receipt
+}
+
+// A SOL withdrawal's fee and minimum, in lamports: what sending a recipient SOL
+// for network fees costs (see withdrawalFor in shared/units.js).
+export async function solWithdrawalFee() {
+  const { calculateFeeBigint } = await import('@cloak.dev/sdk')
+  return { fee: calculateFeeBigint, minimum: 0n }
 }
 
 const base64ToBytes = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))

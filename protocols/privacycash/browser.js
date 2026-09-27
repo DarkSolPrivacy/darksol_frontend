@@ -13,13 +13,13 @@ function signatureBytes(value) {
   return signature
 }
 
-function encodeSignature(bytes) {
+export function bytesToBase64(bytes) {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary)
 }
 
-function decodeSignature(value) {
+export function base64ToBytes(value) {
   const binary = atob(value)
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
@@ -37,22 +37,23 @@ export function exclusive(task) {
 const signatureKey = (publicKey) => `privacycash-signature-${publicKey.toBase58()}`
 const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
 
+// The sign-in signature is also returned: the swap wallet is derived from it.
 async function encryptionForWallet(provider, publicKey, EncryptionService) {
   if (typeof provider.signMessage !== 'function') throw new Error('This wallet does not support message signing')
   const cacheKey = signatureKey(publicKey)
   let signature
   const cached = localStorage.getItem(cacheKey)
   if (cached) {
-    try { signature = decodeSignature(cached) } catch { localStorage.removeItem(cacheKey) }
+    try { signature = base64ToBytes(cached) } catch { localStorage.removeItem(cacheKey) }
   }
   if (!signature) {
     signature = signatureBytes(await provider.signMessage(SIGN_IN_MESSAGE, 'utf8'))
     if (String(provider.publicKey) !== publicKey.toBase58()) throw new Error('Wallet account changed while signing')
-    localStorage.setItem(cacheKey, encodeSignature(signature))
+    localStorage.setItem(cacheKey, bytesToBase64(signature))
   }
   const encryptionService = new EncryptionService()
   encryptionService.deriveEncryptionKeyFromSignature(signature)
-  return encryptionService
+  return { encryptionService, signature }
 }
 
 async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits) {
@@ -103,21 +104,30 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
   ])
   reportProgress(privacyCash, onStatus)
   const lightWasm = await WasmFactory.getInstance()
-  const encryptionService = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
+  const { encryptionService, signature } = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
   return {
     privacyCash,
     common,
     publicKey,
     connection,
+    signature,
     transactionSigner: (transaction) => provider.signTransaction(transaction),
   }
 }
 
-function withdrawTo(privacyCash, common, asset, recipient) {
+export function withdrawTo(privacyCash, common, asset, recipient) {
   return asset === 'SOL'
     ? privacyCash.withdraw({ ...common, recipient: recipient.publicKey, amount_in_lamports: Number(recipient.baseUnits) })
     : privacyCash.withdrawSPL({ ...common, recipient: recipient.publicKey, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(recipient.baseUnits) })
+}
+
+// Shields `units` into the wallet's own balance. `signer` is who pays and signs
+// (the connected wallet unless given); the note always belongs to the wallet.
+export function depositTo(privacyCash, common, asset, units, transactionSigner, signer) {
+  return asset === 'SOL'
+    ? privacyCash.deposit({ ...common, amount_in_lamports: Number(units), transactionSigner, signer })
+    : privacyCash.depositSPL({ ...common, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(units), transactionSigner, signer })
 }
 
 // Runs the SDK's own withdraw up to its relayer POST and returns that body
@@ -149,27 +159,131 @@ async function noteAmounts(privacyCash, common, asset) {
 // SDK quietly pays out what they hold instead of failing, so this is the most
 // one withdrawal can send.
 export const withdrawalCapacity = (amounts) => (amounts[0] ?? 0n) + (amounts[1] ?? 0n)
-const unitsText = (units, asset) => `${Number(units) / 10 ** TOKEN_DECIMALS[asset]} ${asset}`
+export const unitsText = (units, asset) => `${Number(units) / 10 ** TOKEN_DECIMALS[asset]} ${asset}`
+const descending = (a, b) => (a < b ? 1 : a > b ? -1 : 0)
 
-// Pays each recipient from the wallet's shielded balance, with no deposit. The
-// relayer pays the network fee, so the wallet signs only its sign-in message.
+// How the SDK would pay `amounts` (base units, one per recipient, in order) from
+// `notes`: each withdrawal spends the two largest notes and returns its change
+// as a new note, so an amount above them goes out as several withdrawals.
+// Returns the withdrawal amounts per recipient, or null when the notes cannot
+// cover them with every withdrawal at least `minimum`. A withdrawal that would
+// leave less than `minimum` for the next one is shrunk to leave exactly that.
+export function planWithdrawals(notes, amounts, minimum) {
+  const floor = minimum > 0n ? minimum : 1n
+  const pool = [...notes].sort(descending)
+  const plan = []
+  for (const amount of amounts) {
+    const withdrawals = []
+    for (let left = amount; left > 0n;) {
+      if (!pool.length) return null
+      const capacity = pool.shift() + (pool.shift() ?? 0n)
+      let units = left < capacity ? left : capacity
+      if (left > units && left - units < floor) units = left - floor
+      if (units < floor) return null
+      withdrawals.push(units)
+      left -= units
+      if (capacity > units) {
+        const change = capacity - units
+        const at = pool.findIndex((note) => note < change)
+        pool.splice(at < 0 ? pool.length : at, 0, change)
+      }
+    }
+    plan.push(withdrawals)
+  }
+  return plan
+}
+
+// The most `notes` can pay one recipient: all of it, unless the smallest notes
+// cannot reach the minimum withdrawal, in which case they are left out.
+export function maxPayable(notes, minimum) {
+  const sorted = [...notes].sort(descending)
+  for (let count = sorted.length; count > 0; count--) {
+    const total = sorted.slice(0, count).reduce((sum, note) => sum + note, 0n)
+    if (planWithdrawals(sorted, [total], minimum)) return total
+  }
+  return 0n
+}
+
+// The relayer's current terms for one asset, in base units: a withdrawal pays
+// `rate` of its amount plus `fixed`, and must be at least `minimum`, which is
+// never below what that fee alone would take.
+export async function withdrawalTerms(privacyCash, asset) {
+  const scale = 10 ** TOKEN_DECIMALS[asset]
+  const name = asset.toLowerCase()
+  // Sequential: getConfig caches the relayer config after its first fetch.
+  const rate = await privacyCash.getConfig('withdraw_fee_rate')
+  const fixedTokens = asset === 'SOL' ? await privacyCash.getConfig('withdraw_rent_fee') : (await privacyCash.getConfig('rent_fees'))[name]
+  const configured = BigInt(Math.round(scale * ((await privacyCash.getConfig('minimum_withdrawal'))[name] ?? 0)))
+  const fixed = BigInt(Math.floor(scale * fixedTokens))
+  const floor = BigInt(Math.ceil(Number(fixed) / (1 - rate))) + 1n
+  return { rate, fixed, minimum: configured > floor ? configured : floor }
+}
+
+export const withdrawalFee = (terms, units) => BigInt(Math.floor(Number(units) * terms.rate)) + terms.fixed
+
+// A SOL withdrawal's fee and minimum, in lamports: what sending a recipient SOL
+// for network fees costs (see withdrawalFor in shared/units.js).
+export async function solWithdrawalFee() {
+  const terms = await withdrawalTerms(await import('privacycash/utils'), 'SOL')
+  return { fee: (units) => withdrawalFee(terms, units), minimum: terms.minimum }
+}
+
+// What paying `amounts` of `asset` (base units, one per recipient) from a
+// shieldedBalances reading would take: { withdrawals, fee, minimum }, or null
+// when the notes cannot cover it. Lets the UI say before sending that a payment
+// will split, and what the extra fixed fees cost.
+export function planShieldedSend(reading, asset, amounts) {
+  const terms = reading.terms?.[asset]
+  const plan = terms && planWithdrawals(reading.notes[asset] ?? [], amounts, terms.minimum)
+  if (!plan) return null
+  const withdrawals = plan.flat()
+  return { withdrawals: withdrawals.length, fee: withdrawals.reduce((sum, units) => sum + withdrawalFee(terms, units), 0n), minimum: terms.minimum }
+}
+
+// A change note can reach the relayer's index a few seconds after its withdrawal
+// confirms. Until it does, the SDK would see less and quietly send less, so wait.
+export async function awaitCapacity(privacyCash, common, asset, units, onStatus) {
+  for (let attempt = 0; ; attempt++) {
+    if (withdrawalCapacity(await noteAmounts(privacyCash, common, asset)) >= units) return
+    if (attempt === 10) throw new Error('Your shielded balance changed while sending')
+    onStatus('Waiting for the pool to index your change…')
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+  }
+}
+
+// Pays each recipient from the wallet's shielded balance, with no deposit. An
+// amount above the two largest notes goes out as consecutive withdrawals to the
+// same address (see planWithdrawals). The relayer submits each and pays its
+// network fee, so the wallet signs nothing beyond its sign-in message, but the
+// pool's fee applies to every withdrawal.
 async function sendFromShielded({ provider, asset, recipients, onStatus }) {
   const { privacyCash, common } = await openPrivacyCashSession({ provider, asset, totalBaseUnits: 0n, fund: false, onStatus })
+  onStatus('Reading your shielded balance…')
+  const notes = await noteAmounts(privacyCash, common, asset)
+  const terms = await withdrawalTerms(privacyCash, asset)
+  const plan = planWithdrawals(notes, recipients.map((recipient) => BigInt(recipient.baseUnits)), terms.minimum)
+  if (!plan) {
+    const most = maxPayable(notes, terms.minimum)
+    throw new Error(most ? `Your shielded ${asset} can pay at most ${unitsText(most, asset)}, in withdrawals of at least ${unitsText(terms.minimum, asset)}`
+      : `Not enough shielded ${asset} for a withdrawal of at least ${unitsText(terms.minimum, asset)}`)
+  }
+  const total = plan.flat().length
   const receipt = { provider: 'privacycash', asset, depositSignature: null, withdrawals: [] }
-  const fail = (message) => Object.assign(new Error(receipt.withdrawals.length ? `Sent ${receipt.withdrawals.length} of ${recipients.length}, then: ${message}` : message),
-    receipt.withdrawals.length ? { receipt } : {})
+  let sent = 0n
+  const fail = (message) => Object.assign(new Error(receipt.withdrawals.length
+    ? `Sent ${receipt.withdrawals.length} of ${total} withdrawals (${unitsText(sent, asset)}), then: ${message}` : message), receipt.withdrawals.length ? { receipt } : {})
   for (const [index, recipient] of recipients.entries()) {
-    onStatus(recipients.length > 1 ? `Sending ${index + 1} of ${recipients.length} from your shielded balance…` : 'Sending from your shielded balance…')
-    let result
-    try {
-      const available = withdrawalCapacity(await noteAmounts(privacyCash, common, asset))
-      if (available < BigInt(recipient.baseUnits)) {
-        throw new Error(available ? `Your shielded ${asset} can send at most ${unitsText(available, asset)} at once` : `No shielded ${asset} left in PrivacyCash`)
-      }
-      result = await withdrawTo(privacyCash, common, asset, recipient)
-    } catch (error) { throw fail(error instanceof Error ? error.message : String(error)) }
-    receipt.withdrawals.push(result)
-    if (result.isPartial) throw fail(`PrivacyCash sent less than asked to recipient ${index + 1}`)
+    for (const units of plan[index]) {
+      onStatus(total > 1 ? `Sending withdrawal ${receipt.withdrawals.length + 1} of ${total}…` : 'Sending from your shielded balance…')
+      let result
+      try {
+        await awaitCapacity(privacyCash, common, asset, units, onStatus)
+        result = await withdrawTo(privacyCash, common, asset, { publicKey: recipient.publicKey, baseUnits: units })
+      } catch (error) { throw fail(error instanceof Error ? error.message : String(error)) }
+      receipt.withdrawals.push(result)
+      sent += units
+      if (result.isPartial) throw fail(`PrivacyCash sent less than asked in withdrawal ${receipt.withdrawals.length}`)
+    }
   }
   return receipt
 }
@@ -187,9 +301,7 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
   const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus })
 
   onStatus('Approve deposit in your wallet…')
-  const deposit = asset === 'SOL'
-    ? await privacyCash.deposit({ ...common, amount_in_lamports: Number(totalBaseUnits), transactionSigner })
-    : await privacyCash.depositSPL({ ...common, mintAddress: new PublicKey(MINTS[asset]), base_units: Number(totalBaseUnits), transactionSigner })
+  const deposit = await depositTo(privacyCash, common, asset, totalBaseUnits, transactionSigner)
 
   const receipt = { provider: 'privacycash', asset, depositSignature: deposit.tx, withdrawals: [] }
   if (delayMinutes) {
@@ -230,7 +342,8 @@ async function deliverScheduled({ provider, job, onStatus = () => {} }) {
 }
 
 // The wallet's own unspent notes per asset, in base units: `balances` is the
-// total and `spendable` the most one withdrawal can send (see withdrawalCapacity).
+// total, `spendable` the most a shielded payment can send (see maxPayable), and
+// `notes` with `terms` feed planShieldedSend.
 // Payment-link notes are sealed under keys of their own, so they are not among
 // them. The SDK caches its scan position in localStorage: the first scan reads
 // the whole pool, later ones only what is new. With `prompt: false` nothing asks
@@ -245,24 +358,32 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
   const privacyCash = await import('privacycash/utils')
   reportProgress(privacyCash, onStatus)
   const common = { publicKey, connection: rpcConnection(), storage: localStorage, abortSignal: signal,
-    encryptionService: await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService) }
-  const result = { balances: {}, spendable: {} }
+    encryptionService: (await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)).encryptionService }
+  const result = { balances: {}, spendable: {}, notes: {}, terms: {} }
   // One tree at a time: the SDK keeps its scan progress in module state.
   for (const asset of ['SOL', ...Object.keys(MINTS)]) {
-    const amounts = await noteAmounts(privacyCash, common, asset)
-    result.balances[asset] = amounts.reduce((sum, amount) => sum + amount, 0n)
-    result.spendable[asset] = withdrawalCapacity(amounts)
+    const notes = await noteAmounts(privacyCash, common, asset)
+    const terms = await withdrawalTerms(privacyCash, asset)
+    result.notes[asset] = notes
+    result.terms[asset] = terms
+    result.balances[asset] = notes.reduce((sum, note) => sum + note, 0n)
+    result.spendable[asset] = maxPayable(notes, terms.minimum)
   }
   return result
 }
 
-// The one entry point the UI calls. Bridging lives in bridge.js and is loaded
-// only when asked for, so its relayer code stays out of the transfer path.
+// The one entry point the UI calls. Bridging and swapping live in bridge.js and
+// swap.js and are loaded only when asked for, so their relayer code stays out of
+// the transfer path.
 export async function execute({ kind, ...options }) {
   if (kind === 'send') return exclusive(() => executePrivacyCashTransfer(options))
   if (kind === 'bridge') {
     const { executePrivacyCashBridge } = await import('./bridge.js')
     return exclusive(() => executePrivacyCashBridge(options))
+  }
+  if (kind === 'swap') {
+    const { executePrivacyCashSwap } = await import('./swap.js')
+    return exclusive(() => executePrivacyCashSwap(options))
   }
   throw new Error(`PrivacyCash has no browser ${kind} flow`)
 }

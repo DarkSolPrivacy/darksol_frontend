@@ -26,6 +26,9 @@ export function swapEligibility(protocol, inputAsset, outputAsset) {
   if (!capability.outputAssets.includes(output)) {
     return { available: false, kind: 'swap', capability, reason: `${name} cannot swap to ${output}.` }
   }
+  if (PROTOCOLS[protocol].swap.oneSideSol && input !== 'SOL' && output !== 'SOL') {
+    return { available: false, kind: 'swap', capability, reason: `${name} swaps to or from SOL; ${input} -> ${output} is not supported.` }
+  }
   if (capability.execution === 'documented-only') {
     return {
       available: false,
