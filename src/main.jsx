@@ -969,10 +969,10 @@ const ONBOARDED_KEY = 'darksol:onboarded:v2'
 // on screen (swap and bridge have no shield, delay or add buttons) is skipped.
 const TOUR = [
   { target: '.sendAction', title: 'The best fit for you', example: true,
-    body: 'We look for the traces an analyst would follow in every pool, and pick the route that leaves the fewest.' },
-  { target: '.shieldControl', title: 'Keep part shielded', body: 'Send part and keep the rest private, so the amounts never match.' },
-  { target: '.addReceiver', title: 'Several recipients', body: 'Split one payment across addresses, so no withdrawal matches your deposit.' },
-  { target: '.delayControl', title: 'Delay delivery', body: 'Deliver within 10 to 30 minutes, so the timing gives nothing away.' },
+    body: 'We check every pool for the clues an analyst would use to trace a payment, and choose the route that leaves the fewest.' },
+  { target: '.shieldControl', title: 'Keep part shielded', body: 'Send only part of your deposit and keep the rest private, so the two amounts don’t match.' },
+  { target: '.addReceiver', title: 'Several recipients', body: 'Split one payment between several addresses, so no single withdrawal matches your deposit.' },
+  { target: '.delayControl', title: 'Delay delivery', body: 'Have the payment arrive up to 30 minutes later, so its timing can’t be linked to your deposit.' },
 ]
 const TOUR_GAP = 12
 
