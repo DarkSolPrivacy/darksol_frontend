@@ -972,7 +972,7 @@ const TOUR = [
     body: 'We check every pool for the clues an analyst would use to trace a payment, and choose the route that leaves the fewest.' },
   { target: '.shieldControl', title: 'Keep part shielded', body: 'Send only part of your deposit and keep the rest private, so the two amounts don’t match.' },
   { target: '.addReceiver', title: 'Several recipients', body: 'Split one payment between several addresses, so no single withdrawal matches your deposit.' },
-  { target: '.delayControl', title: 'Delay delivery', body: 'Have the payment arrive up to 30 minutes later, so its timing can’t be linked to your deposit.' },
+  { target: '.delayControl', title: 'Delay delivery', body: 'Have the payment arrive up to 30 minutes later, which can make it harder to link to your deposit by timing.' },
 ]
 const TOUR_GAP = 12
 
