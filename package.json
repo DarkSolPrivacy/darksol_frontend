@@ -33,6 +33,7 @@
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.115.0",
     "@umbra-privacy/sdk": "5.0.0-rc.6",
+    "@vercel/functions": "3.9.9",
     "@vitejs/plugin-react": "^6.1.1",
     "@wallet-standard/app": "^1.1.1",
     "bs58": "^6.0.0",
