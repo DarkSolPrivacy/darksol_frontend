@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks, { forgetAccess, uncollectedTotals } from './payment-links.jsx'
 import PaymentCheckout from './payment-checkout.jsx'
@@ -963,6 +963,58 @@ function GasDialog({ offer }) {
   </dialog>
 }
 
+// Once per browser, on the first wallet connect. The flag holds no address and never leaves this browser.
+const ONBOARDED_KEY = 'darksol:onboarded:v1'
+const ONBOARDING = [
+  { title: 'We red-team every route', icon: ScanSearch, parts: [{
+    body: 'Before you approve anything, DarkSol attacks each pool the way a chain analyst would: how big a share of the pool your amount is, how many recent deposits look like yours, and how close in time your deposit and withdrawal land. Then it recommends the route that holds up best.',
+    why: 'Each check is a real way to link a deposit to its withdrawal, so the route that passes them leaves the weakest trail. The score is an estimate, not a guarantee.',
+  }] },
+  { title: 'Shielding', icon: Shield, parts: [{
+    body: 'Your deposit goes into a shared pool, and a separate withdrawal pays the recipient. Send everything, keep part shielded, or pay from funds that are already shielded.',
+    why: 'An exact deposit followed by the same exact withdrawal is easy to match. Leaving a remainder, or paying from a private balance, means the amounts no longer line up.',
+  }] },
+  { title: 'Multiple recipients and delays', parts: [
+    { icon: Plus, label: 'Multiple recipients', body: 'One deposit can pay several addresses.', why: 'No single withdrawal matches your deposit, and an observer can’t tell which output came from whom.' },
+    { icon: Clock3, label: 'Delays', body: 'Have a payment delivered within 10, 20 or 30 minutes instead of right away.', why: 'A withdrawal seconds after a deposit pairs up by timing alone. A random moment in the window hides it among other pool activity.' },
+  ] },
+]
+
+function Onboarding({ wallet }) {
+  const dialog = useRef(null)
+  const [seen, setSeen] = useState(() => { try { return localStorage.getItem(ONBOARDED_KEY) === '1' } catch { return false } })
+  const [step, setStep] = useState(0)
+  useEffect(() => { if (wallet && !seen && !dialog.current?.open) dialog.current?.showModal() }, [wallet, seen])
+  // Any close counts, so Escape or the X skips it for good.
+  function finish() {
+    setSeen(true)
+    try { localStorage.setItem(ONBOARDED_KEY, '1') } catch {}
+  }
+  const last = step === ONBOARDING.length - 1
+  return <dialog className="paymentDialog onboardingDialog" ref={dialog} aria-labelledby="onboardingTitle" onClose={finish}>
+    <div className="onboardingTop">
+      <div className="onboardingProgress" aria-hidden="true">{ONBOARDING.map((item, index) => <span className={index <= step ? 'done' : ''} key={item.title} />)}</div>
+      <button type="button" className="linkIcon" aria-label="Skip introduction" onClick={() => dialog.current.close()}><X /></button>
+    </div>
+    {/* Every card sits in one grid cell, so the dialog keeps the tallest card's height and Next never moves. */}
+    <div className="onboardingCards">{ONBOARDING.map((card, index) => <div className="onboardingCard" key={card.title} inert={index !== step}>
+      <h3 id={index === step ? 'onboardingTitle' : undefined}>{card.icon && <card.icon aria-hidden="true" />}{card.title}</h3>
+      {card.parts.map(({ icon: Icon, label, body, why }) => <section className="onboardingPart" key={body}>
+        {label && <h4><Icon aria-hidden="true" />{label}</h4>}
+        <p>{body}</p>
+        <p className="onboardingWhy"><b>Why it’s more private</b>{why}</p>
+      </section>)}
+    </div>)}</div>
+    <div className="onboardingFoot">
+      <span className="onboardingCount">{step + 1} of {ONBOARDING.length}</span>
+      <div className="paymentDialogActions">
+        {step > 0 && <button className="ghost" type="button" onClick={() => setStep(step - 1)}>Back</button>}
+        <button className="paymentPrimary" type="button" onClick={() => last ? dialog.current.close() : setStep(step + 1)}>{last ? 'Got it' : 'Next'}</button>
+      </div>
+    </div>
+  </dialog>
+}
+
 function EstimateAnalytics({ estimate }) {
   if (!estimate) return null
   const rawScores = estimate.subScores || {}
@@ -1489,7 +1541,7 @@ function App() {
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
   if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}</div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} /></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
