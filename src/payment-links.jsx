@@ -9,7 +9,6 @@ import { paymentRpcUrl } from './payment-deposit.js'
 import { pairNotes, withdrawPaymentNotes } from './payment-withdraw.js'
 import { usdText, useUsdPrices } from './token-price.js'
 import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
-import { confirmWalletWarning } from './wallet-warning.jsx'
 
 const PRICED = Object.keys(PAYMENT_ASSETS)
 const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
@@ -259,10 +258,9 @@ export default function PaymentLinks({ summary, walletSession }) {
     setNotice('Payment link created')
   }
 
-  async function createPayment(event) {
+  function createPayment(event) {
     event.preventDefault()
     if (wallet && (!amountResult.valid || amountError)) return
-    if (wallet && !await confirmWalletWarning()) return
     run(async (signal) => {
       const identity = await merchantAccess(signal)
       const keys = await paymentKeys(signal)

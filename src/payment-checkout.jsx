@@ -4,7 +4,6 @@ import { getPaymentLink, reportPaymentDeposit, validDepositId } from './payment-
 import { depositExpired, payPaymentInvoice, validateCheckout } from './payment-deposit.js'
 import { LOGOS } from '../protocols/registry.js'
 import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
-import { confirmWalletWarning } from './wallet-warning.jsx'
 
 export default function PaymentCheckout({ paymentId, walletSession }) {
   const { wallet, connecting, connectWallet } = walletSession
@@ -88,7 +87,6 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
       try { await connectWallet() } catch (cause) { setError(cause.message) }
       return
     }
-    if (!await confirmWalletWarning()) return
     const controller = new AbortController()
     operation.current = controller
     setBusy(true); setError(''); setNotice('')
