@@ -70,7 +70,8 @@ async function withdrawPrivacyCash({ records, encryptions, address, recipient, c
 async function withdrawCloak({ notes, provider, address, recipient, connection, onStatus }) {
   const sdk = await import('@cloak.dev/sdk')
   onStatus('Locating your note in the Cloak pool...')
-  const leaves = await sdk.fetchCommitments(sdk.CLOAK_PRODUCTION_RELAY_URL)
+  // Each mint has its own tree; the relay serves SOL's unless asked.
+  const leaves = await sdk.fetchCommitments(sdk.CLOAK_PRODUCTION_RELAY_URL, { mint: notes[0].mintAddress })
   const inputs = notes.map((note) => {
     const commitment = BigInt(note.commitment)
     const leaf = leaves.find((entry) => BigInt('0x' + entry.commitment) === commitment)
@@ -82,7 +83,11 @@ async function withdrawCloak({ notes, provider, address, recipient, connection, 
     // Cloak's relay authenticates the requesting wallet; the recipient can differ.
     walletPublicKey: new PublicKey(address),
     signMessage: async (message) => { const signed = await provider.signMessage(message); return signed?.signature ?? signed },
-    disableChainNotes: true, enforceViewingKeyRegistration: false, onProgress: onStatus,
+    // The relay accepts a withdrawal only with one compact chain note encrypted
+    // under a viewing key registered to this wallet. The SDK derives that key from
+    // the spent note, never the merchant's root nk, and registers it with one
+    // extra message signature.
+    onProgress: onStatus,
   })
   return result.signature
 }

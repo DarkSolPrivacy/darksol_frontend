@@ -103,7 +103,8 @@ export async function executeCloakSend({ provider, asset, totalBaseUnits, recipi
   const { sdk, options, deposit, wallet } = await depositNote({ provider, asset, totalBaseUnits, onStatus })
   try {
     onStatus('Sending privately...')
-    const withdrawal = await sdk.fullWithdraw(deposit.outputUtxos, recipientWallet, { ...options, cachedMerkleTree: deposit.merkleTree })
+    // The relay rejects a withdrawal without exactly one compact chain note.
+    const withdrawal = await sdk.fullWithdraw(deposit.outputUtxos, recipientWallet, { ...options, disableChainNotes: false, cachedMerkleTree: deposit.merkleTree })
     saveUtxos(wallet, sdk, withdrawal.outputUtxos, deposit.outputUtxos)
     return { provider: 'cloakc', asset, depositSignature: deposit.signature, withdrawals: [{ tx: withdrawal.signature }] }
   } catch (error) {
