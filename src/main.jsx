@@ -5,6 +5,7 @@ import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAle
 import './styles.css'
 import PaymentLinks, { forgetAccess, uncollectedTotals } from './payment-links.jsx'
 import PaymentCheckout from './payment-checkout.jsx'
+import { WalletWarning, confirmWalletWarning } from './wallet-warning.jsx'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
@@ -708,6 +709,7 @@ function PrivacyHome({ walletSession }) {
       return setSendError('This recommended route is not enabled for browser execution yet')
     }
     if (scheduledBlocks) return setSendError('Finish or dismiss the delayed delivery above first.')
+    if (!await confirmWalletWarning()) return
     setSending(true)
     try {
       const gas = await askForGas(kind)
@@ -1526,7 +1528,7 @@ function WalletMenu({ walletSession, onPaymentLinks }) {
 
 function App() {
   const walletSession = useWalletSession()
-  const walletPicker = <WalletPicker picker={walletSession.picker} />
+  const walletPicker = <><WalletPicker picker={walletSession.picker} /><WalletWarning /></>
   const getPage = () => window.location.pathname.startsWith('/pay/') ? 'checkout' : ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
