@@ -23,8 +23,10 @@ export function paymentRpcUrl() {
   // 403, so falling back to it only hides a missing deployment setting.
   // Unset and malformed are the same deployment mistake, so they read alike
   // instead of surfacing a bare "Failed to construct 'URL'".
+  // `npm run dev` alone falls back to PublicNode, a keyless mainnet RPC that
+  // accepts browser origins; production builds still need the setting.
   let url
-  try { url = new URL(import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL) }
+  try { url = new URL(import.meta.env?.VITE_PAYMENT_SOLANA_RPC_URL || (import.meta.env?.DEV ? 'https://solana-rpc.publicnode.com' : undefined)) }
   catch { throw new Error('This checkout has no valid Solana RPC endpoint. VITE_PAYMENT_SOLANA_RPC_URL must be a full URL, for example https://mainnet.helius-rpc.com/?api-key=KEY') }
   if (url.protocol !== 'https:' || url.username || url.password
     || /(^|\.)darksol\.app$/.test(url.hostname)
