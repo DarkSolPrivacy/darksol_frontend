@@ -19,7 +19,8 @@ export default function middleware(request) {
   const country = request.headers.get('x-vercel-ip-country') || 'ZZ'
   waitUntil(fetch('https://api.darksol.app/internal/traffic', {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ country: /^[A-Z]{2}$/.test(country) ? country : 'ZZ' }),
+    body: JSON.stringify({ country: /^[A-Z]{2}$/.test(country) ? country : 'ZZ',
+      page: url.pathname.startsWith('/pay/') ? '/pay' : url.pathname.replace(/\/$/, '') || '/' }),
     signal: AbortSignal.timeout(3000), redirect: 'error',
   }).then((response) => {
     if (!response.ok) console.warn('Traffic counter unavailable')

@@ -19,7 +19,7 @@ test('traffic counts document requests without forwarding identifying data or bl
   await Promise.all(pending)
   assert.equal(requests.length, 1)
   assert.equal(requests[0].url, 'https://api.darksol.app/internal/traffic')
-  assert.deepEqual(JSON.parse(requests[0].body), { country: 'ES' })
+  assert.deepEqual(JSON.parse(requests[0].body), { country: 'ES', page: '/pay' })
   assert.deepEqual(requests[0].headers, { Authorization: `Bearer ${'a'.repeat(64)}`, 'Content-Type': 'application/json' })
   assert.equal(JSON.stringify(requests).includes('secret'), false)
   assert.equal(JSON.stringify(requests).includes('192.0.2.3'), false)
@@ -32,7 +32,11 @@ test('traffic counts document requests without forwarding identifying data or bl
   process.env.VERCEL_ENV = 'production'; process.env.TRAFFIC_INGEST_TOKEN = ''; middleware(request()); assert.equal(requests.length, 1)
   process.env.TRAFFIC_INGEST_TOKEN = 'a'.repeat(64)
   middleware(request('/analytics', { 'x-vercel-ip-country': 'invalid' }))
-  assert.deepEqual(JSON.parse(requests.at(-1).body), { country: 'ZZ' })
+  assert.deepEqual(JSON.parse(requests.at(-1).body), { country: 'ZZ', page: '/analytics' })
+  for (const page of ['/', '/payment-links', '/analytics']) {
+    middleware(request(`${page}?secret=hidden`))
+    assert.deepEqual(JSON.parse(requests.at(-1).body), { country: 'ES', page })
+  }
   t.mock.method(console, 'warn', () => {})
   t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline') })
   assert.equal(middleware(request('/payment-links')).headers.get('x-middleware-next'), '1')
