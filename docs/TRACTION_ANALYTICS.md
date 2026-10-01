@@ -58,3 +58,22 @@ Suggested privacy-notice wording, to publish only when implemented accurately:
 ## Acceptance
 
 Verify that repeated payment reports count once; only funded invoices contribute; pending and failed deposits stay out; date boundaries and missing prices are handled honestly; dashboard access is protected; and exports contain only permitted aggregates. Confirm there are no added browser analytics requests, cookies or storage keys. No frontend analytics consent flow is needed by this design because it adds no browser analytics collection.
+
+
+## Live private-send indicator (2026-10-01)
+
+The private backend dashboard now also has a separate **Possible private sends**
+card. Successful single-recipient, same-asset amount queries are compared with
+exact same-asset withdrawal amounts in available pools within 60 seconds. This
+is explicitly an estimate and never enters verified payment totals. The backend
+checks every minute, allows ten minutes for indexing, groups repeated amount
+queries and deduplicates withdrawal transactions. No new browser request or
+identifier is added; DNT and Sec-GPC opt-outs skip observation.
+
+This extends the initial aggregate-only design with temporary in-memory query
+amounts, eligible pools and timestamps, plus temporary transaction references for
+deduplication. They expire after ten minutes. Only hourly counts remain for the
+last 24 hours, with whole-hour boundaries; all state resets on API restart and
+the dashboard shows its actual coverage start. Coincidental matches, fees,
+delays and unsupported send modes limit the estimate. Backend deployment is
+required; see [implementation details](../../darksol-backend/docs/ADMIN_STATS.md#possible-private-sends-live-estimate).
