@@ -1564,6 +1564,22 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .traceIconButton:hover { background: var(--bg-hover); color: var(--text-primary); }
 .traceIconButton svg { width: 14px; height: 14px; }
 .traceStatusText { max-width: 640px; margin: 8px 0 0; color: var(--text-secondary); line-height: 1.6; }
+/* Without the figures row the panel's last line needs its own bottom space. */
+.traceSummary > .traceStatusText:last-child, .traceSummary > .traceVerdict:last-child { padding-bottom: 18px; }
+/* The observer's conclusion: a linked withdrawal is a privacy failure, a hidden one is not. */
+.traceVerdict { margin-top: 16px; }
+.traceVerdict h2 { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; letter-spacing: -.01em; }
+.traceVerdict h2 i { width: 6px; height: 6px; flex: none; border-radius: 50%; }
+.traceVerdict.linked h2 i { background: var(--negative); }
+.traceVerdict.likely h2 i { background: var(--accent-muted); }
+.traceVerdict.hidden h2 i { background: var(--positive); }
+.traceVerdict.pending h2 i { box-shadow: inset 0 0 0 1px var(--text-tertiary); }
+.traceVerdict p { max-width: 640px; margin: 6px 0 0; color: var(--text-secondary); line-height: 1.6; }
+.traceVerdictWallet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.traceVerdictWallet a { display: inline-flex; align-items: center; gap: 5px; color: var(--text-primary); text-decoration: none; }
+.traceVerdictWallet a code { font-size: 12px; }
+.traceVerdictWallet a svg { width: 12px; height: 12px; color: var(--text-tertiary); }
+.traceVerdictWallet > span { color: var(--text-tertiary); }
 .traceBlocking { margin: 12px 0 0; padding: 0 0 6px; list-style: none; }
 .traceBlocking li { padding: 8px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); line-height: 1.6; }
 .traceBlocking strong, .traceLimits strong { color: var(--text-primary); font-weight: 500; }
@@ -1603,6 +1619,9 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .traceRow a svg { width: 12px; height: 12px; color: var(--text-tertiary); }
 .traceKind { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .traceKind em { color: var(--accent); font-size: 12px; font-style: normal; }
+.traceKind em.muted { color: var(--text-tertiary); }
+.traceKind a code { white-space: nowrap; }
+.traceRule { color: var(--text-secondary); font-size: 12px; }
 .traceMore { margin-top: 14px; }
 .traceMore svg { width: 14px; height: 14px; }
 .traceInlineError { margin: 14px 0 0; }

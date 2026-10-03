@@ -102,7 +102,7 @@ export const LIMIT_TEXT = {
   NULLIFIER_UNMAPPED: 'A note that was already spent cannot be identified, so it stays among the possible sources.',
   ANCESTRY_UNRESOLVED: 'A possible source may itself be change from an earlier private transfer. Where that money first came from is not followed.',
   SAME_SLOT_ORDER_UNKNOWN: 'For some transactions in the same slot as the withdrawal, which came first is not known; they are left out.',
-  ENRICHMENT_NOT_PERFORMED: 'Links between the recipient and depositing wallets are not checked yet.',
+  ENRICHMENT_NOT_PERFORMED: 'Apart from the recipient being the depositor itself, the recipient’s other transactions (who funded it, where it sends) are not checked yet.',
   DEPLOYMENT_BEHAVIOUR_VERIFIED: 'The current program matches its published source. Earlier versions are checked by replaying every transaction they made, not by rebuilding them.',
 }
 
@@ -111,3 +111,49 @@ export const DISCLOSURES = new Set(['HIDDEN_VALUE', 'DUMMY_INDISTINGUISHABLE', '
   'SAME_SLOT_ORDER_UNKNOWN', 'ENRICHMENT_NOT_PERFORMED', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'])
 
 export const CREATED_BY = { deposit: 'Deposit', withdraw: 'Withdrawal change', transfer: 'Transfer' }
+
+/** Lamports (a decimal string) as SOL with at most 4 decimals: "0.3502 SOL". */
+export function formatSol(lamports) {
+  if (lamports === null || lamports === undefined) return '–'
+  return `${(Number(lamports) / 1e9).toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL`
+}
+
+/** Seconds from `earlier` to `later`, both block times as decimal strings, or null. */
+export const secondsBetween = (later, earlier) => later == null || earlier == null ? null : Number(later) - Number(earlier)
+
+// The linker's rules (backend docs/FORENSIC_LINKER.md) as an observer would say them.
+export const LINK_RULES = {
+  self_relay: 'The withdrawal was signed by the depositor’s own wallet.',
+  same_address: 'The money went back to the wallet that deposited it.',
+  only_feasible: 'Only one wallet had enough left in the pool to pay for it.',
+  exact_balance: 'It took exactly what this wallet had left in the pool.',
+  exact_deposit: 'It took exactly what this wallet deposited, and no other deposit has that amount.',
+  pair_sum: 'With an earlier withdrawal it emptied this wallet to the lamport.',
+  root_pinned: 'Its proof was made right after this wallet deposited exactly this amount.',
+}
+
+/** Why a candidate wallet ranks where it does, in a few words (the section text explains them). */
+export function candidateReason(entry, linked) {
+  if (linked) return 'Linked'
+  if (entry.exact) return 'Exact balance'
+  if (entry.match) return 'Same-amount deposit'
+  if (entry.pair) return 'Completes a pair'
+  if (entry.pinned) return 'Deposit before proof'
+  return 'Can cover it'
+}
+
+/** What an observer concludes from a withdrawal's linkage, or null without one. */
+export function linkVerdict(linkage) {
+  if (!linkage || linkage.status === 'deposit') return null
+  if (linkage.status === 'linked') {
+    const strong = linkage.tier === 'strong'
+    return { tone: strong ? 'linked' : 'likely', title: strong ? 'Linked to one wallet' : 'Probably linked to one wallet', text: LINK_RULES[linkage.rule] ?? 'A linking rule named one wallet.' }
+  }
+  if (linkage.status === 'ranked') {
+    return { tone: 'hidden', title: `Hidden among ${formatCount(linkage.candidates)} wallets`, text: 'No rule singles out one wallet. Each wallet below could have paid for it, best fit first.' }
+  }
+  if (linkage.status === 'unexplained') {
+    return { tone: 'hidden', title: 'No single wallet could have paid for it', text: 'No depositor had enough left in the pool, so the money may come from deposits made for someone else.' }
+  }
+  return { tone: 'pending', title: 'Not linked yet', text: 'Linking has not reached this transaction. It appears after the next indexing cycle.' }
+}

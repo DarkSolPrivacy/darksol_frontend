@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { amountMatches, formatCount, formatSpan, groupCandidates, parseSignature, signatureOfEvent } from '../src/traceability.js'
+import { LINK_RULES, amountMatches, candidateReason, formatCount, formatSol, formatSpan, groupCandidates, linkVerdict, parseSignature, secondsBetween, signatureOfEvent } from '../src/traceability.js'
 
 const SIG = '3Hsvq9zsWJdD6dxC6CJR479Dj6BxAhpNMiST31bxeREUv2fV3KDVx1W69C6PA3iGidJTeNjbBcvEbWRfWQJP2zjL'
 const event = (signature, outer = 2) => `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD:6VVKJ44WTJGCksTGJHjf1kJWZaMf9Nswgj6w7Dtrw55D:T0:${signature}:${outer}`
@@ -37,4 +37,25 @@ test('candidate leaves group by the transaction that created them, across pages'
   const both = groupCandidates([leaf('6', 'b'), leaf('5', 'c')], first)
   assert.deepEqual(both.map(({ signature, leaves }) => [signature, leaves]), [['a', ['9', '8']], ['b', ['7', '6']], ['c', ['5']]])
   assert.deepEqual(first[1].leaves, ['7'], 'the earlier page is not mutated')
+})
+
+test('a linkage reads as what an observer concludes', () => {
+  assert.equal(linkVerdict(null), null)
+  assert.equal(linkVerdict({ status: 'deposit', wallet: 'w', withdrawals: [] }), null)
+  assert.deepEqual(linkVerdict({ status: 'linked', tier: 'strong', rule: 'exact_deposit' }),
+    { tone: 'linked', title: 'Linked to one wallet', text: LINK_RULES.exact_deposit })
+  assert.equal(linkVerdict({ status: 'linked', tier: 'likely', rule: 'root_pinned' }).title, 'Probably linked to one wallet')
+  assert.deepEqual([linkVerdict({ status: 'ranked', candidates: 1234 }).tone, linkVerdict({ status: 'ranked', candidates: 1234 }).title], ['hidden', 'Hidden among 1,234 wallets'])
+  assert.equal(linkVerdict({ status: 'unexplained', candidates: 0 }).title, 'No single wallet could have paid for it')
+  assert.equal(linkVerdict({ status: 'not_computed' }).tone, 'pending')
+})
+
+test('candidate reasons, SOL amounts and block-time spans', () => {
+  assert.equal(candidateReason({ exact: true, match: true }, true), 'Linked')
+  assert.equal(candidateReason({ exact: true, match: true }, false), 'Exact balance')
+  assert.equal(candidateReason({ match: true }), 'Same-amount deposit')
+  assert.equal(candidateReason({ pair: true }), 'Completes a pair')
+  assert.equal(candidateReason({}), 'Can cover it')
+  assert.deepEqual(['350200000', '1966421000', '5000000000', null].map(formatSol), ['0.3502 SOL', '1.9664 SOL', '5 SOL', '–'])
+  assert.deepEqual([secondsBetween('1790000077', '1790000000'), secondsBetween(null, '1'), secondsBetween('1', undefined)], [77, null, null])
 })
