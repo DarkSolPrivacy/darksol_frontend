@@ -1530,13 +1530,15 @@ function App() {
   const walletPicker = <WalletPicker picker={walletSession.picker} />
   const getPage = () => window.location.pathname.startsWith('/pay/') ? 'checkout' : /^\/trace(\/|$)/.test(window.location.pathname) ? 'trace' : ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
+  // The path as well as the view: going from one trace to another keeps view 'trace'.
+  const [path, setPath] = useState(() => window.location.pathname)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [protocol, setProtocol] = useState('privacycash')
   const [selectedEstimate, setSelectedEstimate] = useState(null)
   useEffect(() => {
     if (getPage() === 'analytics' && window.location.search) window.history.replaceState({}, '', '/analytics')
-    const syncLocation = () => setView(getPage())
+    const syncLocation = () => { setView(getPage()); setPath(window.location.pathname) }
     window.addEventListener('popstate', syncLocation)
     return () => window.removeEventListener('popstate', syncLocation)
   }, [])
@@ -1564,7 +1566,7 @@ function App() {
     window.addEventListener('keydown', closeOnEscape)
     return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', closeOnEscape) }
   }, [drawerOpen])
-  function navigate(path) { window.history.pushState({}, '', path); setView(getPage()) }
+  function navigate(to) { window.history.pushState({}, '', to); setView(getPage()); setPath(window.location.pathname) }
   function openAnalytics(id = protocol) { setProtocol(id); setSelectedEstimate(null); if (view !== 'analytics') navigate('/analytics') }
   function closeDrawer() { setDrawerOpen(false) }
   function launchApp(event) { event.preventDefault(); closeDrawer(); navigate('/') }
@@ -1579,9 +1581,9 @@ function App() {
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
-  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
+  if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={path} paymentId={path.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
   return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
-    : view === 'trace' ? <TracePage key={window.location.pathname} signature={decodeURIComponent(window.location.pathname.split('/')[2] || '')} onTrace={(signature) => navigate(`/trace/${signature}`)} />
+    : view === 'trace' ? <TracePage key={path} signature={decodeURIComponent(path.split('/')[2] || '')} onTrace={(signature) => navigate(`/trace/${signature}`)} />
     : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
 }
 
