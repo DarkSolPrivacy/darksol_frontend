@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks, { forgetAccess, uncollectedTotals } from './payment-links.jsx'
 import PaymentCheckout from './payment-checkout.jsx'
+import TracePage from './traceability.jsx'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
@@ -349,8 +350,8 @@ function MobileBar({ onOpen }) {
 
 const xLink = <a className="xLink" href="https://x.com/DarkSolapp" target="_blank" rel="noopener noreferrer" aria-label="DarkSol on X"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>@DarkSolapp</a>
 
-function Sidebar({ open, view, onToggle, onHome, onPaymentLinks, onAnalytics, onClose }) {
-  return <aside id="primaryNav"><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button><button className="drawerClose" type="button" aria-label="Close navigation" onClick={onClose}><X /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className={view === 'payments' ? 'active' : ''} href="/payment-links" aria-label="Payment links" onClick={onPaymentLinks}><Link2 /><span>Payment links</span></a><a className={view === 'analytics' ? 'analyticsNav active' : 'analyticsNav'} href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code>{xLink}</div></aside>
+function Sidebar({ open, view, onToggle, onHome, onPaymentLinks, onTrace, onAnalytics, onClose }) {
+  return <aside id="primaryNav"><div className="sideTop"><EclipseLogo /><button className="sidebarToggle" type="button" aria-label={open ? 'Collapse navigation' : 'Expand navigation'} onClick={onToggle}><Menu /></button><button className="drawerClose" type="button" aria-label="Close navigation" onClick={onClose}><X /></button></div><nav><a className={view === 'home' ? 'active' : ''} href="/" onClick={onHome}><Home /><span>Private transfer</span></a><a className={view === 'payments' ? 'active' : ''} href="/payment-links" aria-label="Payment links" onClick={onPaymentLinks}><Link2 /><span>Payment links</span></a><a className={view === 'trace' ? 'active' : ''} href="/trace" onClick={onTrace}><ScanSearch /><span>Trace</span></a><a className={view === 'analytics' ? 'analyticsNav active' : 'analyticsNav'} href="/analytics" onClick={onAnalytics}><Database /><span>Analytics</span><ArrowUpRight className="navArrow" /></a></nav><div className="sideBottom"><p>DarkSol private routing</p><code>v1.0 / MAINNET</code>{xLink}</div></aside>
 }
 
 function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selected, suggested, onSelect, onOpenProtocol }) {
@@ -1527,7 +1528,7 @@ function WalletMenu({ walletSession, onPaymentLinks }) {
 function App() {
   const walletSession = useWalletSession()
   const walletPicker = <WalletPicker picker={walletSession.picker} />
-  const getPage = () => window.location.pathname.startsWith('/pay/') ? 'checkout' : ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
+  const getPage = () => window.location.pathname.startsWith('/pay/') ? 'checkout' : /^\/trace(\/|$)/.test(window.location.pathname) ? 'trace' : ({ '/analytics': 'analytics', '/payment-links': 'payments' }[window.location.pathname.replace(/\/+$/, '')] || 'home')
   const [view, setView] = useState(getPage)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -1546,12 +1547,14 @@ function App() {
       document.querySelector('meta[name="description"]')?.setAttribute('content', 'Pay a private DarkSol invoice on Solana.')
       return
     }
-    document.title = isAnalytics ? 'Analytics – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : 'DarkSol'
+    document.title = isAnalytics ? 'Analytics – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : view === 'trace' ? 'Trace a withdrawal – DarkSol' : 'DarkSol'
     const description = isAnalytics
       ? 'On-chain privacy analytics for Solana and Arbitrum private routing protocols.'
-      : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.' : 'DarkSol private routing and on-chain privacy analytics.'
+      : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.'
+      : view === 'trace' ? 'See which notes could have funded a Privacy Cash withdrawal, and the public clues that narrow them down.'
+      : 'DarkSol private routing and on-chain privacy analytics.'
     document.querySelector('meta[name="description"]')?.setAttribute('content', description)
-    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : '/'}`)
+    document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : view === 'trace' ? '/trace' : '/'}`)
   }, [view])
   useEffect(() => {
     if (!drawerOpen) return
@@ -1567,16 +1570,19 @@ function App() {
   function launchApp(event) { event.preventDefault(); closeDrawer(); navigate('/') }
   function openHome(event) { event.preventDefault(); closeDrawer(); navigate('/') }
   function openPaymentLinks(event) { event.preventDefault(); closeDrawer(); navigate('/payment-links') }
+  function openTrace(event) { event.preventDefault(); closeDrawer(); navigate('/trace') }
   function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
   const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks} />
   const mobileNav = <>
     <MobileBar onOpen={() => setDrawerOpen(true)} />
-    <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
+    <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onTrace={openTrace} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
   if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={window.location.pathname} paymentId={window.location.pathname.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
-  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} /> : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
+  return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
+    : view === 'trace' ? <TracePage key={window.location.pathname} signature={decodeURIComponent(window.location.pathname.split('/')[2] || '')} onTrace={(signature) => navigate(`/trace/${signature}`)} />
+    : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

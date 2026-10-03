@@ -1520,6 +1520,142 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 @media (max-width: 380px) { .mobileBar .brandLockup > span { display: none; } }
 
 /* ==========================================================================
+   Trace a withdrawal
+   One column of panels; amber marks the key figure and same-amount deposits.
+   ========================================================================== */
+.app > main > .tracePage { width: min(100%, 880px); margin: 0 auto; padding-bottom: 36px; }
+.traceHeader { padding: 44px 0 22px; text-align: center; }
+.traceHeader p { max-width: 560px; margin: 10px auto 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+
+.traceSearch { width: min(100%, 640px); margin: 0 auto 28px; }
+.traceSearchRow { display: flex; gap: 8px; }
+.traceSearchRow input {
+  min-width: 0;
+  flex: 1;
+  height: var(--control-lg);
+  padding: 0 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font: 13px var(--font-mono);
+  outline: none;
+  transition: border-color .15s;
+}
+.traceSearchRow input::placeholder { color: var(--text-tertiary); }
+.traceSearchRow input:focus { border-color: var(--border-active); }
+.traceSearchRow input[aria-invalid=true] { border-color: var(--negative-line); }
+.traceSearchRow .paymentPrimary { width: auto; flex: none; padding: 0 20px; }
+.traceExample { margin-top: 10px; padding: 0; border: 0; background: none; color: var(--text-tertiary); font-size: 12px; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
+.traceExample:hover { color: var(--text-primary); }
+.traceLoading { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); }
+.traceLoading svg { width: 14px; height: 14px; }
+
+.traceSummary { padding: 18px 20px 0; }
+.traceSummaryHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.traceStatus { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.traceStatus i { width: 6px; height: 6px; border-radius: 50%; }
+.traceStatus.ready i { background: var(--positive); }
+.traceStatus.pending i { background: var(--accent-muted); }
+.traceStatus.muted { color: var(--text-secondary); }
+.traceStatus.muted i { box-shadow: inset 0 0 0 1px var(--text-tertiary); }
+.traceTarget { display: flex; align-items: center; gap: 2px; color: var(--text-secondary); }
+.traceTarget code { margin-right: 6px; font-size: 12px; }
+.traceIconButton { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-tertiary); transition: color .15s, background-color .15s; }
+.traceIconButton:hover { background: var(--bg-hover); color: var(--text-primary); }
+.traceIconButton svg { width: 14px; height: 14px; }
+.traceStatusText { max-width: 640px; margin: 8px 0 0; color: var(--text-secondary); line-height: 1.6; }
+.traceBlocking { margin: 12px 0 0; padding: 0 0 6px; list-style: none; }
+.traceBlocking li { padding: 8px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); line-height: 1.6; }
+.traceBlocking strong, .traceLimits strong { color: var(--text-primary); font-weight: 500; }
+.traceFigures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px -20px 0; border-top: 1px solid var(--border-subtle); }
+.traceFigures .metric.key strong { color: var(--accent); }
+
+.traceSection { margin-top: 16px; }
+.panel.traceSection { padding: 18px 20px 20px; }
+.traceSectionHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.traceSectionHead p { max-width: 560px; margin: 4px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
+.traceLegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 2px 0 0; padding: 0; list-style: none; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
+.traceLegend li { display: inline-flex; align-items: center; gap: 6px; }
+.traceDot { display: inline-block; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
+.traceDot.deposit { background: var(--text-secondary); }
+.traceDot.change { box-shadow: inset 0 0 0 1.5px var(--text-tertiary); }
+.traceDot.match { background: var(--accent); box-shadow: none; }
+
+/* The newest notes on a log time axis that ends at the withdrawal. */
+.traceStrip { position: relative; height: 52px; margin: 22px 6px 4px; }
+.traceStripAxis { position: absolute; top: 18px; right: 0; left: 0; height: 1px; background: var(--border-default); }
+.traceStripTick { position: absolute; top: 12px; width: 1px; height: 13px; background: var(--border-subtle); }
+.traceStripTick small { position: absolute; top: 18px; left: 50%; color: var(--text-tertiary); font: 11px var(--font-mono); white-space: nowrap; transform: translateX(-50%); }
+.traceStripTick.target { top: 10px; height: 17px; background: var(--accent); }
+.traceStripTick.target small { right: 0; left: auto; color: var(--text-secondary); transform: none; }
+.traceStripTick.oldest small { left: 0; transform: none; }
+.traceStrip > .traceDot { position: absolute; top: 15px; margin-left: -3.5px; }
+.traceStrip > .traceDot.match { z-index: 1; }
+
+.traceTable { margin-top: 14px; }
+.traceRow { min-height: 40px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .9fr); align-items: center; gap: 12px; padding: 0 6px; border-top: 1px solid var(--border-subtle); }
+.traceRow.head { min-height: 32px; border-top: 0; color: var(--text-tertiary); font-size: 11px; }
+.traceRow.match { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent); }
+.traceRow > :nth-child(n+3) { text-align: right; }
+.traceRow code { color: var(--text-secondary); font-size: 12px; }
+.traceRow a { width: fit-content; display: inline-flex; align-items: center; gap: 5px; color: var(--text-primary); text-decoration: none; }
+.traceRow a:hover code { color: var(--text-primary); }
+.traceRow a svg { width: 12px; height: 12px; color: var(--text-tertiary); }
+.traceKind { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.traceKind em { color: var(--accent); font-size: 12px; font-style: normal; }
+.traceMore { margin-top: 14px; }
+.traceMore svg { width: 14px; height: 14px; }
+.traceInlineError { margin: 14px 0 0; }
+
+.traceCallout { margin: 16px 0 4px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-input); box-shadow: inset 2px 0 var(--accent-muted); color: var(--text-primary); line-height: 1.6; }
+.traceLeads { margin: 10px 0 0; }
+.traceLeads > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 16px; padding: 14px 0; border-top: 1px solid var(--border-subtle); }
+.traceLeads dt { padding-top: 2px; color: var(--text-secondary); }
+.traceLeads dd { margin: 0; }
+.traceLeads strong { display: block; font: 500 15px var(--font-mono); }
+.traceLeads dd > p, .traceLeads details p { margin: 6px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
+.traceLeads details { margin-top: 6px; }
+.traceLeads summary { width: fit-content; color: var(--text-tertiary); font-size: 12px; list-style: none; cursor: pointer; text-decoration: underline; text-decoration-color: var(--border-default); text-underline-offset: 3px; }
+.traceLeads summary::-webkit-details-marker { display: none; }
+.traceLeads summary:hover { color: var(--text-secondary); }
+
+.traceLimits, .traceEvidence { margin-top: 28px; padding: 0 4px; }
+.traceLimits h2, .traceEvidence h2 { font-size: 14px; }
+.traceLimits ul { margin: 10px 0 0; padding: 0; list-style: none; }
+.traceLimits li { padding: 9px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
+.traceEvidence dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; margin: 12px 0 0; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
+.traceEvidence dt { color: var(--text-tertiary); font-size: 11px; }
+.traceEvidence dd { margin: 5px 0 0; font: 500 13px var(--font-mono); overflow-wrap: anywhere; }
+.traceEvidence small { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+
+@media (max-width: 900px) {
+  .traceEvidence dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .traceHeader { padding: 28px 0 18px; }
+  .traceSummaryHead { flex-wrap: wrap; }
+  .traceFigures { grid-template-columns: 1fr; }
+  .traceFigures .metric + .metric { border-top: 1px solid var(--border-subtle); border-left: 0; }
+  .traceSectionHead { flex-direction: column; gap: 10px; }
+  .traceLeads > div { grid-template-columns: 1fr; gap: 6px; }
+  .traceEvidence dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  /* Type over transaction on the left, time on the right; no note indexes. */
+  .traceRow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind time" "tx time"; gap: 4px 12px; padding: 8px 6px; }
+  .traceRow > :nth-child(1) { grid-area: kind; }
+  .traceRow > :nth-child(2) { grid-area: tx; padding-left: 15px; }
+  .traceRow > :nth-child(3) { display: none; }
+  .traceRow > :nth-child(4) { grid-area: time; }
+  .traceRow.head { grid-template-areas: "kind time"; padding: 0 6px; }
+  .traceRow.head > :nth-child(2) { display: none; }
+}
+@media (max-width: 430px) {
+  .traceSearchRow { flex-direction: column; }
+  .traceSearchRow .paymentPrimary { width: 100%; }
+}
+
+/* ==========================================================================
    Motion: loading, state changes and menus only
    ========================================================================== */
 @keyframes ds-spin { to { transform: rotate(360deg); } }
