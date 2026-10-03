@@ -1,6 +1,6 @@
 // Pure helpers for the trace page (src/traceability.jsx). The report itself is
 // the backend's traceability/1 contract: GET /api/traceability/auto/:signature,
-// which answers for Privacy Cash and the Cloak pools alike.
+// which answers for the Privacy Cash and Cloak SOL, USDC and USDT pools alike.
 
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/
 // Solana's target slot time; the report gives block-time spans where it has them.
@@ -65,7 +65,7 @@ export function groupCandidates(items = [], previous = []) {
 export const STATUS = {
   ready: { label: 'Complete evidence', tone: 'ready', text: 'Every note that could have paid for this withdrawal is known, and the pool history behind it was replayed and checked.' },
   incomplete: { label: 'Evidence still being collected', tone: 'pending', text: 'Part of the history this withdrawal depends on is not verified yet. The figures below are bounds, not exact values.' },
-  not_indexed: { label: 'Not found', tone: 'muted', text: 'No Privacy Cash or Cloak transaction with this signature is stored. A withdrawal from the last few minutes appears after the next indexing cycle; anything else is not from a traced pool.' },
+  not_indexed: { label: 'Not found', tone: 'muted', text: 'No transaction from a traced pool (Privacy Cash or Cloak SOL, USDC and USDT) with this signature is stored. A withdrawal from the last few minutes appears after the next indexing cycle; anything else is not from a traced pool.' },
   unsupported: { label: 'Cannot be traced', tone: 'muted', text: 'This transaction is outside what the analysis covers.' },
 }
 
@@ -74,7 +74,7 @@ export const REASON_TITLES = {
   TARGET_NOT_WITHDRAWAL: 'This is a deposit. Only withdrawals can be traced.',
   TARGET_FAILED: 'This transaction failed on chain, so it moved no funds.',
   TARGET_NOT_PROTOCOL_INSTRUCTION: 'This transaction does not withdraw from a traced pool.',
-  TREE_NOT_SUPPORTED: 'This pool is not traced. Privacy Cash SOL and the Cloak SOL, USDC and USDT pools are.',
+  TREE_NOT_SUPPORTED: 'This pool is not traced. The Privacy Cash and Cloak SOL, USDC and USDT pools are.',
   LAYOUT_UNKNOWN: 'This transaction uses a program format the decoder does not know.',
   LAYOUT_EPOCH_MISMATCH: 'This transaction does not match the program version deployed at its slot.',
   ROOT_NOT_IN_WINDOW: 'The proof root of this withdrawal could not be matched to pool history.',
