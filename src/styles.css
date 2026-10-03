@@ -783,6 +783,16 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .paymentPoolPicker small { color: var(--text-tertiary); font: 12px var(--font-mono); text-align: right; overflow-wrap: anywhere; }
 .paymentPoolPicker label.selected small { color: var(--text-secondary); }
 .paymentPoolHint { margin: 10px 0 18px; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
+.paymentPoolPicker label.unavailable { color: var(--text-disabled); cursor: not-allowed; }
+.paymentPoolPicker label.unavailable:hover { background: none; color: var(--text-disabled); }
+.paymentPoolPicker label.unavailable img { filter: grayscale(1); opacity: .5; }
+/* Shield only: the pools take the recipients' place in their well. */
+.recipientRows .paymentPoolPicker > div { border-radius: 0 0 var(--radius-sm) var(--radius-sm); background: transparent; }
+.recipientRows .paymentPoolPicker label { border-top: 1px solid var(--border-subtle); padding-left: 16px; }
+.recipientHead .paymentSort { margin-right: 4px; }
+.shieldPoolHint { margin: 8px 8px 0; text-align: right; }
+.splitStatus button { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.splitStatus button:hover { text-decoration: underline; }
 
 .paymentError { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--negative-line); border-radius: var(--radius-sm); background: var(--negative-tint); color: var(--negative); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .paymentActions { display: flex; gap: 10px; }

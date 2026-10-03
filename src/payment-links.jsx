@@ -4,14 +4,14 @@ import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { parseAmount, sanitizeAmount, sanitizeSolanaAddress, validateSolanaAddress } from './transfer-validation.js'
 import { Connection } from '@solana/web3.js'
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts, removePaymentDraft } from './payment-notes.js'
-import { createPaymentLink, deletePaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
-import { paymentRpcUrl } from './payment-deposit.js'
+import { createPaymentLink, deletePaymentLink, getPaymentLink, listPaymentLinks, paymentLinkUrl, reportPaymentDeposit } from './payment-api.js'
+import { payPaymentInvoice, paymentRpcUrl, validateCheckout } from './payment-deposit.js'
 import { pairNotes, withdrawPaymentNotes } from './payment-withdraw.js'
 import { usdText, useUsdPrices } from './token-price.js'
 import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
 const PRICED = Object.keys(PAYMENT_ASSETS)
-const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
+export const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
 const short = (value) => `${value.slice(0, 6)}…${value.slice(-6)}`
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
 const tokenAmount = (raw, asset) => format(assetAmount(raw, asset), 9)
@@ -34,6 +34,51 @@ function savedAccess(address) {
   } catch { return null }
 }
 export const forgetAccess = (address) => { try { localStorage.removeItem(accessKey(address)) } catch { /* Nothing was saved. */ } }
+async function signAccess(wallet, signal) {
+  const result = await prepareMerchantAccess({ ...wallet, signal })
+  signal?.throwIfAborted()
+  try { localStorage.setItem(accessKey(wallet.address), JSON.stringify({ merchant_id: result.merchant_id, credential: result.credential })) } catch { /* Sign again next visit. */ }
+  return { ...result, address: wallet.address }
+}
+// Every derived index this browser or the server has used; the next note takes the one after.
+const nextNoteIndex = (serverNext, drafts) => Math.max(serverNext ?? 0, ...drafts.filter((record) => record.version === 2).map((record) => record.index + 1))
+
+// Shields `amount` as a payment link the wallet pays itself: the note is derived
+// from the wallet's signature and the server keeps its record, so the deposit is
+// recovered and collected from Payment links like any customer's.
+export async function shieldToSelf({ wallet, protocol, asset, amount, onStatus = () => {} }) {
+  let access = savedAccess(wallet.address)
+  if (!access) { onStatus('Approve merchant access…'); access = await signAccess(wallet) }
+  onStatus('Approve your payment note keys…')
+  const keys = await preparePaymentKeys({ ...wallet })
+  onStatus('Reserving a private note…')
+  // Read fresh: a key reused across two invoices would link them.
+  const { next_index } = await listPaymentLinks({ access }).catch(async (cause) => {
+    // A saved credential the server no longer accepts: sign again.
+    if (cause.status !== 401) throw cause
+    forgetAccess(wallet.address); onStatus('Approve merchant access…')
+    access = await signAccess(wallet)
+    return listPaymentLinks({ access })
+  })
+  const record = await preparePaymentNote({ ...wallet, keys, index: nextNoteIndex(next_index, readPaymentDrafts(localStorage, wallet.address)),
+    protocol, asset, amount, reference: 'Shielded from wallet', onStatus })
+  const link = await createPaymentLink({ record, access })
+  try { localStorage.setItem(`darksol:published:${wallet.address}:${record.invoice.id}`, link.payment_id) } catch { /* The server record remains. */ }
+  const invoice = validateCheckout(await getPaymentLink(link.payment_id))
+  const pending = (depositSignature, message) => Object.assign(new Error(`${message} Verify it under Payment links with transaction ${depositSignature} before shielding again.`),
+    { receipt: { provider: protocol, asset, depositSignature, withdrawals: [] } })
+  let depositSignature
+  try { depositSignature = await payPaymentInvoice({ invoice, ...wallet, onStatus, onSigned: () => {} }) }
+  catch (cause) { throw cause.transactionId ? pending(cause.transactionId, 'The deposit was signed but may not have landed.') : cause }
+  // The server marks the link paid once the deposit is finalized, about half a minute.
+  onStatus('Confirming the deposit…')
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const result = await reportPaymentDeposit(link.payment_id, depositSignature).catch(() => null)
+    if (result?.status === 'paid') return { provider: protocol, asset, depositSignature, withdrawals: [], viaLinks: true }
+    await new Promise((resolve) => setTimeout(resolve, 5000))
+  }
+  throw pending(depositSignature, 'Deposit sent, but not confirmed yet.')
+}
 // A collection is recorded in this browser only: telling the server would link it to the deposit.
 const withdrawnKey = (address, id) => `darksol:withdrawn:${address}:${id}`
 
@@ -49,6 +94,61 @@ function withdrawalFee(protocol, asset, amount, prices) {
   const fixed = fees.fixedToken === asset ? fees.fixedAmount : prices.SOL && prices[asset] ? fees.fixedAmount * prices.SOL / prices[asset] : NaN
   return fixed + amount * fees.variableRate
 }
+
+// POOLS with each one's estimated withdrawal fee on `amount` and its 24h volume,
+// in `sort` order. A pool with an `unavailable` reason goes last.
+export function rankPools({ asset, amount, prices, summary, sort, unavailable = {} }) {
+  const pools = POOLS.map((item) => {
+    const fees = poolFees(item.id, asset)
+    const activity = summary.pools.find((entry) => entry.protocol === item.id)
+    const hasVolume = !summary.loading && !summary.error && activity
+      && Number.isFinite(activity.inflow) && activity.inflow >= 0
+      && Number.isFinite(activity.outflow) && activity.outflow >= 0
+    return {
+      ...item, fees, reason: unavailable[item.id],
+      // A fee in the requested asset: the SOL-denominated fixed part is converted at the current price.
+      fee: withdrawalFee(item.id, asset, amount ?? 0, prices),
+      volume: hasVolume ? activity.inflow + activity.outflow : null,
+    }
+  })
+  const volumeAvailable = pools.every((item) => item.volume !== null)
+  // Keep the known order when activity is unavailable; missing data is not zero volume.
+  pools.sort((a, b) => Boolean(a.reason) - Boolean(b.reason) || (sort === 'fees' ? a.fee - b.fee || 0 : volumeAvailable ? b.volume - a.volume : 0))
+  return { pools, volumeAvailable }
+}
+
+export function PoolSort({ sort, onSort }) {
+  const settings = useRef(null)
+  // Closing on blur hides the radio during label activation and can crash Chrome.
+  return <details className="paymentSort" ref={settings} onKeyDown={(event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      settings.current.open = false
+      settings.current.querySelector('summary').focus()
+    }
+  }}>
+    {/* The current order is the control itself, so it reads as metadata until pressed. */}
+    <summary aria-label="Pool sorting preferences" title="Pool sorting preferences"><ArrowUpDown aria-hidden="true" /><span className="paymentSortLabel">{sort === 'fees' ? 'Lowest fees first' : 'Most active first'}</span></summary>
+    <fieldset className="paymentSortOptions"><legend>Sort pools by</legend>
+      <label><input type="radio" name="paymentSort" value="fees" checked={sort === 'fees'} onChange={() => onSort('fees')} /><span><strong>Lowest fees</strong><small>Lower estimated withdrawal costs first.</small></span></label>
+      <label><input type="radio" name="paymentSort" value="volume" checked={sort === 'volume'} onChange={() => onSort('volume')} /><span><strong>Most active pools</strong><small>Higher 24-hour volume first. More activity can offer better privacy cover.</small></span></label>
+    </fieldset>
+  </details>
+}
+
+// `amountValid` shows each pool's fee on the amount; without one, its rates.
+export function PoolPicker({ pools, value, onChange, asset, amountValid, sort, summary, disabled, labelledBy }) {
+  return <fieldset className="paymentPoolPicker" aria-labelledby={labelledBy}><div>{pools.map((item) => <label className={item.reason ? 'unavailable' : value === item.id ? 'selected' : ''} key={item.id}>
+    <input type="radio" name="paymentPool" disabled={disabled || Boolean(item.reason)} value={item.id} checked={value === item.id} onChange={() => onChange(item.id)} />
+    <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{item.reason || (sort === 'fees'
+      ? amountValid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fees.fixedToken}`
+      : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`)}</small></span>
+  </label>)}</div></fieldset>
+}
+
+export const poolHint = (sort, summary, volumeAvailable, feeHint) => sort === 'fees' ? feeHint
+  : summary.loading ? 'Loading pool activity…' : !volumeAvailable ? 'Activity ranking is unavailable right now. You can still choose a pool.'
+    : 'Based on total pool volume over 24 hours. Activity alone does not guarantee privacy.'
 
 // Raw totals per asset, in first-seen order.
 function assetTotals(records) {
@@ -113,7 +213,6 @@ export default function PaymentLinks({ summary, walletSession }) {
   const [reference, setReference] = useState('')
   const [pool, setPool] = useState('cloakc')
   const [sort, setSort] = useState('fees')
-  const settings = useRef(null)
 
   const { wallet, connecting, connectWallet } = walletSession
   const [draftState, setDraftState] = useState({ address: null, records: [] })
@@ -202,11 +301,8 @@ export default function PaymentLinks({ summary, walletSession }) {
   async function merchantAccess(signal) {
     if (access?.address === wallet.address) return access
     setStatus('Approve merchant access...')
-    const result = await prepareMerchantAccess({ ...wallet, signal })
-    signal.throwIfAborted()
-    const scoped = { ...result, address: wallet.address }
+    const scoped = await signAccess(wallet, signal)
     setAccess(scoped)
-    try { localStorage.setItem(accessKey(wallet.address), JSON.stringify({ merchant_id: result.merchant_id, credential: result.credential })) } catch { /* Sign again next visit. */ }
     return scoped
   }
 
@@ -219,9 +315,7 @@ export default function PaymentLinks({ summary, walletSession }) {
     return keys
   }
 
-  // Every derived index this browser or the server has used; the next note takes the one after.
-  const usedIndexes = (serverNext) => Math.max(serverNext ?? 0,
-    ...draftState.records.filter((record) => record.version === 2).map((record) => record.index + 1))
+  const usedIndexes = (serverNext) => nextNoteIndex(serverNext, draftState.records)
 
   // `fail` receives the message of an error the action throws; `kind` says which
   // part of the page shows the operation's progress.
@@ -421,22 +515,7 @@ export default function PaymentLinks({ summary, walletSession }) {
   const amountResult = parseAmount(amount, asset)
   const amountError = amount && !amountResult.valid ? amountResult.error
     : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < PAYMENT_ASSETS[asset].cloakMin ? `Cloak requires at least ${cloakMinimum(asset)}.` : ''
-  const pools = POOLS.map((item) => {
-    const fees = poolFees(item.id, asset)
-    const activity = summary.pools.find((entry) => entry.protocol === item.id)
-    const hasVolume = !summary.loading && !summary.error && activity
-      && Number.isFinite(activity.inflow) && activity.inflow >= 0
-      && Number.isFinite(activity.outflow) && activity.outflow >= 0
-    return {
-      ...item, fees,
-      // A fee in the requested asset: the SOL-denominated fixed part is converted at the current price.
-      fee: withdrawalFee(item.id, asset, amountResult.valid ? Number(amountResult.normalized) : 0, prices),
-      volume: hasVolume ? activity.inflow + activity.outflow : null,
-    }
-  })
-  const volumeAvailable = pools.every((item) => item.volume !== null)
-  // Keep the known order when activity is unavailable; missing data is not zero volume.
-  pools.sort((a, b) => sort === 'fees' ? a.fee - b.fee || 0 : volumeAvailable ? b.volume - a.volume : 0)
+  const { pools, volumeAvailable } = rankPools({ asset, amount: amountResult.valid ? Number(amountResult.normalized) : 0, prices, summary, sort })
 
   const verifyForm = (payment) => <form className="linkVerify" onSubmit={(event) => {
     event.preventDefault()
@@ -504,32 +583,10 @@ export default function PaymentLinks({ summary, walletSession }) {
       <div className="paymentReference"><label className="paymentFieldLabel" htmlFor="paymentReference">Reference <span>Optional</span></label><input id="paymentReference" disabled={busy} placeholder="Add an invoice or order reference" maxLength={80} value={reference} onChange={(event) => setReference(event.target.value)} /></div>
       <div className="paymentPoolHeading">
         <span className="paymentFieldLabel" id="paymentPoolLabel">Receive through</span>
-        {/* Closing on blur hides the radio during label activation and can crash Chrome. */}
-        <details className="paymentSort" ref={settings} onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            settings.current.open = false
-            settings.current.querySelector('summary').focus()
-          }
-        }}>
-          {/* The current order is the control itself, so it reads as metadata until pressed. */}
-          <summary aria-label="Pool sorting preferences" title="Pool sorting preferences"><ArrowUpDown aria-hidden="true" /><span className="paymentSortLabel">{sort === 'fees' ? 'Lowest fees first' : 'Most active first'}</span></summary>
-          <fieldset className="paymentSortOptions"><legend>Sort pools by</legend>
-            <label><input type="radio" name="paymentSort" value="fees" checked={sort === 'fees'} onChange={() => setSort('fees')} /><span><strong>Lowest fees</strong><small>Lower estimated withdrawal costs first.</small></span></label>
-            <label><input type="radio" name="paymentSort" value="volume" checked={sort === 'volume'} onChange={() => setSort('volume')} /><span><strong>Most active pools</strong><small>Higher 24-hour volume first. More activity can offer better privacy cover.</small></span></label>
-          </fieldset>
-        </details>
+        <PoolSort sort={sort} onSort={setSort} />
       </div>
-      <fieldset className="paymentPoolPicker" aria-labelledby="paymentPoolLabel"><div>{pools.map((item) => <label className={pool === item.id ? 'selected' : ''} key={item.id}>
-        <input type="radio" name="paymentPool" disabled={busy} value={item.id} checked={pool === item.id} onChange={() => setPool(item.id)} />
-        <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{sort === 'fees'
-          ? amountResult.valid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fees.fixedToken}`
-          : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`}</small></span>
-      </label>)}</div></fieldset>
-      <p className="paymentPoolHint" role="status">{sort === 'fees'
-        ? 'Estimated withdrawal fees. Network and deposit costs are additional.'
-        : summary.loading ? 'Loading pool activity…' : !volumeAvailable ? 'Activity ranking is unavailable right now. You can still choose a pool.'
-          : 'Based on total pool volume over 24 hours. Activity alone does not guarantee privacy.'}</p>
+      <PoolPicker pools={pools} value={pool} onChange={setPool} asset={asset} amountValid={amountResult.valid} sort={sort} summary={summary} disabled={busy} labelledBy="paymentPoolLabel" />
+      <p className="paymentPoolHint" role="status">{poolHint(sort, summary, volumeAvailable, 'Estimated withdrawal fees. Network and deposit costs are additional.')}</p>
       {error && <p className="paymentError" role="alert">{error}</p>}
       <div className="paymentActions">
         <button className="paymentPrimary" type="submit" disabled={busy || connecting || Boolean(wallet && (!amountResult.valid || amountError))} aria-describedby={wallet ? 'paymentAvailability' : undefined}>
