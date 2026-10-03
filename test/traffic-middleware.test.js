@@ -1,9 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import middleware from '../middleware.js'
+import middleware, { config } from '../middleware.js'
 
 test('traffic counts document requests without forwarding identifying data or blocking the page', async (t) => {
   t.mock.property(process, 'env', { ...process.env, VERCEL_ENV: 'production', TRAFFIC_INGEST_TOKEN: 'a'.repeat(64) })
+  assert.ok(config.matcher.includes('/trace/:path*'))
+  assert.ok(config.matcher.includes('/docs/:path*'))
   const requests = [], pending = []
   const key = Symbol.for('@vercel/request-context'), original = globalThis[key]
   globalThis[key] = { get: () => ({ waitUntil: (promise) => pending.push(promise) }) }
@@ -33,7 +35,7 @@ test('traffic counts document requests without forwarding identifying data or bl
   process.env.TRAFFIC_INGEST_TOKEN = 'a'.repeat(64)
   middleware(request('/analytics', { 'x-vercel-ip-country': 'invalid' }))
   assert.deepEqual(JSON.parse(requests.at(-1).body), { country: 'ZZ', page: '/analytics' })
-  for (const page of ['/', '/payment-links', '/analytics']) {
+  for (const page of ['/', '/payment-links', '/analytics', '/trace', '/docs']) {
     middleware(request(`${page}?secret=hidden`))
     assert.deepEqual(JSON.parse(requests.at(-1).body), { country: 'ES', page })
   }
@@ -43,16 +45,37 @@ test('traffic counts document requests without forwarding identifying data or bl
   await Promise.all(pending)
 })
 
-test('docs hostname serves the static guide without counting traffic or rewriting app routes', (t) => {
+test('docs and trace count normalized page loads while preserving rewrites and privacy exclusions', async (t) => {
   t.mock.property(process, 'env', { ...process.env, VERCEL_ENV: 'production', TRAFFIC_INGEST_TOKEN: 'a'.repeat(64) })
-  const fetch = t.mock.method(globalThis, 'fetch', () => { throw new Error('Docs must not count traffic') })
-  const response = middleware(new Request('https://docs.darksol.app/?ref=guide', { headers: { accept: 'text/html' } }))
+  assert.ok(config.matcher.includes('/trace/:path*'))
+  assert.ok(config.matcher.includes('/docs/:path*'))
+  const requests = [], pending = []
+  const key = Symbol.for('@vercel/request-context'), original = globalThis[key]
+  globalThis[key] = { get: () => ({ waitUntil: promise => pending.push(promise) }) }
+  t.after(() => { if (original) globalThis[key] = original; else delete globalThis[key] })
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    requests.push(JSON.parse(options.body)); return new Response(null, { status: 204 })
+  })
+  const visit = (url, headers = {}) => middleware(new Request(url, { headers: { accept: 'text/html', ...headers } }))
+  const response = visit('https://docs.darksol.app/?ref=secret')
   assert.equal(response.headers.get('x-middleware-rewrite'), 'https://docs.darksol.app/docs/index.html')
-  assert.equal(fetch.mock.callCount(), 0)
-  for (const url of ['https://darksol.app/', 'https://preview.vercel.app/', 'https://docs.darksol.app.evil.test/',
-    'https://docs.darksol.app/docs/styles.css', 'https://docs.darksol.app/api/summary']) {
-    const result = middleware(new Request(url))
-    assert.equal(result.headers.get('x-middleware-rewrite'), null)
-    assert.equal(result.headers.get('x-middleware-next'), '1')
+  assert.deepEqual(requests.at(-1), { country: 'ZZ', page: '/docs' })
+  for (const url of ['https://darksol.app/docs/', 'https://darksol.app/docs/index.html', 'https://docs.darksol.app/docs/']) {
+    visit(url); assert.deepEqual(requests.at(-1), { country: 'ZZ', page: '/docs' })
   }
+  for (const url of ['https://darksol.app/trace', 'https://darksol.app/trace/', 'https://darksol.app/trace/secret?wallet=secret']) {
+    visit(url); assert.deepEqual(requests.at(-1), { country: 'ZZ', page: '/trace' })
+  }
+  const counted = requests.length
+  for (const url of ['https://preview.vercel.app/docs', 'https://docs.darksol.app.evil.test/',
+    'https://docs.darksol.app/docs/styles.css', 'https://docs.darksol.app/api/summary', 'https://docs.darksol.app/trace']) visit(url)
+  for (const headers of [{ dnt: '1' }, { 'sec-gpc': '1' }, { 'user-agent': 'Googlebot' }, { 'sec-purpose': 'prefetch' }]) {
+    assert.equal(visit('https://docs.darksol.app/', headers).headers.get('x-middleware-rewrite'), 'https://docs.darksol.app/docs/index.html')
+    visit('https://darksol.app/trace', headers)
+  }
+  process.env.TRAFFIC_INGEST_TOKEN = ''
+  assert.equal(visit('https://docs.darksol.app/').headers.get('x-middleware-rewrite'), 'https://docs.darksol.app/docs/index.html')
+  assert.equal(requests.length, counted)
+  assert.equal(JSON.stringify(requests).includes('secret'), false)
+  await Promise.all(pending)
 })
