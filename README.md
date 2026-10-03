@@ -6,6 +6,18 @@ Live-test findings, routes, fee measurements and integration caveats live in [`d
 
 Private traction metrics live at `/admin-stats`, served and authenticated by the VPS backend. It reports verified payment-link funding without browser tracking. Deploy the backend and configure its generated admin credential before using the frontend route; see [admin setup](../darksol-backend/docs/ADMIN_STATS.md) and [metric definitions](docs/TRACTION_ANALYTICS.md).
 
+## Public documentation
+
+The brief public guide is plain HTML and CSS in [`public/docs/`](public/docs/index.html).
+Vite copies it into the build; preview it at `/docs/`. The app navigation links there.
+Edit the copy in `index.html` and the layout in `styles.css`; no extra build tool is needed.
+
+`middleware.js` serves the same page at the root of `docs.darksol.app`, before Vercel serves the app homepage.
+To make that hostname live, deploy this revision, add `docs.darksol.app` to the existing
+Vercel project's domains, and apply the DNS records Vercel supplies. The routing is
+prepared here; the domain attachment and DNS setup must be completed in the hosting account.
+See [Vercel's domain setup](https://vercel.com/docs/domains/working-with-domains/add-a-domain).
+
 ## Repository map
 
 | Path | Role |

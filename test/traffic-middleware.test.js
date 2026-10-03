@@ -42,3 +42,17 @@ test('traffic counts document requests without forwarding identifying data or bl
   assert.equal(middleware(request('/payment-links')).headers.get('x-middleware-next'), '1')
   await Promise.all(pending)
 })
+
+test('docs hostname serves the static guide without counting traffic or rewriting app routes', (t) => {
+  t.mock.property(process, 'env', { ...process.env, VERCEL_ENV: 'production', TRAFFIC_INGEST_TOKEN: 'a'.repeat(64) })
+  const fetch = t.mock.method(globalThis, 'fetch', () => { throw new Error('Docs must not count traffic') })
+  const response = middleware(new Request('https://docs.darksol.app/?ref=guide', { headers: { accept: 'text/html' } }))
+  assert.equal(response.headers.get('x-middleware-rewrite'), 'https://docs.darksol.app/docs/index.html')
+  assert.equal(fetch.mock.callCount(), 0)
+  for (const url of ['https://darksol.app/', 'https://preview.vercel.app/', 'https://docs.darksol.app.evil.test/',
+    'https://docs.darksol.app/docs/styles.css', 'https://docs.darksol.app/api/summary']) {
+    const result = middleware(new Request(url))
+    assert.equal(result.headers.get('x-middleware-rewrite'), null)
+    assert.equal(result.headers.get('x-middleware-next'), '1')
+  }
+})

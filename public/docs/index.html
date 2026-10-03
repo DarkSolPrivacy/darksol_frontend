@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080808" />
+  <meta name="description" content="A short guide to DarkSol: private send, private receive, fees, red team, and the architecture behind private transfers." />
+  <link rel="canonical" href="https://docs.darksol.app/" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/docs/styles.css" />
+  <title>Introduction · DarkSol Docs</title>
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://docs.darksol.app/" />
+  <meta property="og:title" content="Introduction · DarkSol Docs" />
+  <meta property="og:description" content="Private transfers, fees, and how DarkSol works. The essentials in a few minutes." />
+  <meta property="og:image" content="https://darksol.app/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+</head>
+<body>
+  <a class="skip-link" href="#introduction">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#introduction" aria-label="DarkSol Docs home">
+      <img src="/logo.svg" alt="" width="34" height="34" />
+      <span>DARKSOL</span><span class="docs-label">Docs</span>
+    </a>
+    <a class="open-app" href="https://darksol.app/">Open app <span aria-hidden="true">↗</span></a>
+  </header>
+  <div class="layout">
+    <nav class="contents" aria-label="Documentation">
+      <p class="nav-label">GET STARTED</p>
+      <a href="#introduction">Introduction</a>
+      <a href="#private-send">Private send</a>
+      <a href="#private-receive">Private receive</a>
+      <a href="#fees">Fees</a>
+      <p class="nav-label">UNDER THE HOOD</p>
+      <a href="#red-team">Red team</a>
+      <a href="#core-concepts">Core concepts</a>
+      <a href="#architecture">Architecture</a>
+    </nav>
+    <main id="introduction" tabindex="-1">
+      <div class="intro">
+        <p class="eyebrow">DARKSOL / THE ESSENTIALS</p>
+        <h1>Introduction</h1>
+        <p class="lead">DarkSol helps you send and receive privately by comparing privacy pools and routing transfers through supported protocols.</p>
+        <p>Choose a route using real pool activity, estimated privacy, and cost. Your wallet approves the transactions; the selected protocol handles the shielded funds.</p>
+      </div>
+      <section id="private-send" aria-labelledby="send-title">
+        <h2 id="send-title">Private send</h2>
+        <p>Send from your wallet through a privacy pool to a recipient. Choose the asset, amount, and destination, compare available routes, then approve the transfer. The pool helps separate the deposit from the withdrawal.</p>
+        <a class="text-link" href="https://darksol.app/">Send privately <span aria-hidden="true">↗</span></a>
+      </section>
+      <section id="private-receive" aria-labelledby="receive-title">
+        <h2 id="receive-title">Private receive</h2>
+        <p>Create a payment link without sharing your receiving wallet. The payer deposits into a privacy pool; you collect the funds later to a chosen address. You'll find this feature under <strong>Payment links</strong> in the app.</p>
+        <a class="text-link" href="https://darksol.app/payment-links">Create a payment link <span aria-hidden="true">↗</span></a>
+      </section>
+      <section id="fees" aria-labelledby="fees-title">
+        <h2 id="fees-title">Fees</h2>
+        <table>
+          <caption>DarkSol fees</caption>
+          <thead><tr><th scope="col">Action</th><th scope="col">DarkSol fee</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Private send</th><td>0% <span>No DarkSol fee</span></td></tr>
+            <tr><th scope="row">Private receive</th><td>0.05%</td></tr>
+          </tbody>
+        </table>
+        <p class="note">Network and underlying protocol fees still apply. Review the route's estimated costs before approving.</p>
+      </section>
+      <section id="red-team" aria-labelledby="red-team-title">
+        <h2 id="red-team-title">Red team</h2>
+        <p>The red team tests privacy from an outside observer's perspective. It examines public deposits and withdrawals for possible links using amounts, timing, address reuse, and pool history.</p>
+        <p>Its findings show the evidence and its limits. A suspected link is an inference, not proof of ownership. Finding no link does not prove anonymity.</p>
+      </section>
+      <section id="core-concepts" aria-labelledby="concepts-title">
+        <h2 id="concepts-title">Core concepts</h2>
+        <dl class="concepts">
+          <div><dt>Privacy pool</dt><dd>A protocol that holds shielded funds and verifies private transfers.</dd></div>
+          <div><dt>Shielding</dt><dd>Moving public funds into a pool. Withdrawing makes the destination and amount public again.</dd></div>
+          <div><dt>Private note</dt><dd>The secret data used to spend shielded funds. Keep recovery material private.</dd></div>
+          <div><dt>Privacy estimate</dt><dd>A score based on pool activity and your transfer. Amount, timing, and available cover matter; the score is not a guarantee.</dd></div>
+        </dl>
+      </section>
+      <section id="architecture" aria-labelledby="architecture-title">
+        <h2 id="architecture-title">Architecture</h2>
+        <p>DarkSol connects three parts:</p>
+        <ol class="architecture">
+          <li><strong>Browser &amp; wallet</strong><span>Choose routes, prepare private proofs, and approve transactions.</span></li>
+          <li><strong>Privacy protocols</strong><span>Hold shielded funds and verify deposits and withdrawals on-chain.</span></li>
+          <li><strong>Data &amp; planning</strong><span>Indexers collect public activity. Stored data powers pool comparisons, privacy estimates, and red-team analysis.</span></li>
+        </ol>
+        <p>The payment-link service stores invoices and payment status. Payment-note spending keys are derived in your browser from your wallet signature.</p>
+      </section>
+      <footer class="page-footer"><span>DarkSol documentation</span><a href="#introduction">Back to top <span aria-hidden="true">↑</span></a></footer>
+    </main>
+  </div>
+</body>
+</html>

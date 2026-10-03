@@ -1,4 +1,4 @@
-import { next, waitUntil } from '@vercel/functions'
+import { next, rewrite, waitUntil } from '@vercel/functions'
 
 // Count document requests only. Nothing is injected into the browser.
 export const config = { matcher: ['/', '/analytics', '/payment-links', '/pay/:id'] }
@@ -6,6 +6,10 @@ export const config = { matcher: ['/', '/analytics', '/payment-links', '/pay/:id
 export default function middleware(request) {
   const token = process.env.TRAFFIC_INGEST_TOKEN
   const url = new URL(request.url)
+  // Middleware runs before static files, including the app's root index.html.
+  if (url.hostname === 'docs.darksol.app' && url.pathname === '/') {
+    return rewrite(new URL('/docs/index.html', request.url))
+  }
   const page = ['/', '/analytics', '/payment-links'].includes(url.pathname.replace(/\/$/, '') || '/')
     || /^\/pay\/[a-f0-9]{64}\/?$/.test(url.pathname)
   if (process.env.VERCEL_ENV !== 'production' || !/^[a-f0-9]{64}$/.test(token || '')
