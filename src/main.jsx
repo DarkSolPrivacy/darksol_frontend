@@ -1553,7 +1553,7 @@ function App() {
     const description = isAnalytics
       ? 'On-chain privacy analytics for Solana and Arbitrum private routing protocols.'
       : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.'
-      : view === 'trace' ? 'See which wallet most likely funded a Privacy Cash withdrawal, and how many others could have.'
+      : view === 'trace' ? 'See which wallet most likely funded a Privacy Cash or Cloak withdrawal, and how many others could have.'
       : 'DarkSol private routing and on-chain privacy analytics.'
     document.querySelector('meta[name="description"]')?.setAttribute('content', description)
     document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : view === 'trace' ? '/trace' : '/'}`)

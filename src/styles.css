@@ -1560,6 +1560,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .traceStatus.muted i { box-shadow: inset 0 0 0 1px var(--text-tertiary); }
 .traceTarget { display: flex; align-items: center; gap: 2px; color: var(--text-secondary); }
 .traceTarget code { margin-right: 6px; font-size: 12px; }
+.traceTarget > span { margin-right: 12px; font-size: 12px; }
 .traceIconButton { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-tertiary); transition: color .15s, background-color .15s; }
 .traceIconButton:hover { background: var(--bg-hover); color: var(--text-primary); }
 .traceIconButton svg { width: 14px; height: 14px; }

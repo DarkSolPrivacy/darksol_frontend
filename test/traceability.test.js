@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { LINK_RULES, amountMatches, candidateReason, formatCount, formatSol, formatSpan, groupCandidates, linkVerdict, parseSignature, secondsBetween, signatureOfEvent } from '../src/traceability.js'
+import { LINK_RULES, amountMatches, candidateReason, formatAmount, formatCount, formatSpan, groupCandidates, linkVerdict, parseSignature, poolName, reasonText, REASON_TITLES, secondsBetween, signatureOfEvent } from '../src/traceability.js'
 
 const SIG = '3Hsvq9zsWJdD6dxC6CJR479Dj6BxAhpNMiST31bxeREUv2fV3KDVx1W69C6PA3iGidJTeNjbBcvEbWRfWQJP2zjL'
 const event = (signature, outer = 2) => `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD:6VVKJ44WTJGCksTGJHjf1kJWZaMf9Nswgj6w7Dtrw55D:T0:${signature}:${outer}`
@@ -56,6 +56,17 @@ test('candidate reasons, SOL amounts and block-time spans', () => {
   assert.equal(candidateReason({ match: true }), 'Same-amount deposit')
   assert.equal(candidateReason({ pair: true }), 'Completes a pair')
   assert.equal(candidateReason({}), 'Can cover it')
-  assert.deepEqual(['350200000', '1966421000', '5000000000', null].map(formatSol), ['0.3502 SOL', '1.9664 SOL', '5 SOL', '–'])
+  assert.deepEqual(['350200000', '1966421000', '5000000000', null].map((units) => formatAmount(units)), ['0.3502 SOL', '1.9664 SOL', '5 SOL', '–'])
+  const usdc = { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 }
+  assert.deepEqual(['12340000', '7513337', '450000'].map((units) => formatAmount(units, usdc)), ['12.34 USDC', '7.51 USDC', '0.45 USDC'])
+  assert.equal(formatAmount('350200000', { symbol: 'SOL', decimals: 9 }), '0.3502 SOL')
   assert.deepEqual([secondsBetween('1790000077', '1790000000'), secondsBetween(null, '1'), secondsBetween('1', undefined)], [77, null, null])
+})
+
+test('the pool name comes from the report, and Cloak reports get their own wording', () => {
+  assert.equal(poolName({ target: { protocol: 'cloakc' }, deployment: { asset: { symbol: 'USDC', decimals: 6 } } }), 'Cloak USDC pool')
+  assert.equal(poolName({ target: { protocol: 'privacycash' }, deployment: { asset: null } }), 'Privacy Cash pool')
+  assert.equal(poolName({ target: { protocol: 'auto' }, deployment: { asset: null } }), null)
+  assert.equal(reasonText(REASON_TITLES, 'cloakc', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), 'Program versions are verified by replay, not by a reproducible build.')
+  assert.equal(reasonText(REASON_TITLES, 'privacycash', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), REASON_TITLES.DEPLOYMENT_BEHAVIOUR_VERIFIED)
 })

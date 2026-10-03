@@ -1,5 +1,6 @@
 // Pure helpers for the trace page (src/traceability.jsx). The report itself is
-// the backend's traceability/1 contract: GET /api/traceability/privacycash/:signature.
+// the backend's traceability/1 contract: GET /api/traceability/auto/:signature,
+// which answers for Privacy Cash and the Cloak pools alike.
 
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/
 // Solana's target slot time; the report gives block-time spans where it has them.
@@ -64,16 +65,16 @@ export function groupCandidates(items = [], previous = []) {
 export const STATUS = {
   ready: { label: 'Complete evidence', tone: 'ready', text: 'Every note that could have paid for this withdrawal is known, and the pool history behind it was replayed and checked.' },
   incomplete: { label: 'Evidence still being collected', tone: 'pending', text: 'Part of the history this withdrawal depends on is not verified yet. The figures below are bounds, not exact values.' },
-  not_indexed: { label: 'Not found', tone: 'muted', text: 'No Privacy Cash transaction with this signature is stored. A withdrawal from the last few minutes appears after the next indexing cycle; anything else is not a Privacy Cash transaction.' },
+  not_indexed: { label: 'Not found', tone: 'muted', text: 'No Privacy Cash or Cloak transaction with this signature is stored. A withdrawal from the last few minutes appears after the next indexing cycle; anything else is not from a traced pool.' },
   unsupported: { label: 'Cannot be traced', tone: 'muted', text: 'This transaction is outside what the analysis covers.' },
 }
 
 // Plain titles for the reason codes; the backend's own detail text follows each.
 export const REASON_TITLES = {
-  TARGET_NOT_WITHDRAWAL: 'This is a deposit. Only SOL withdrawals can be traced.',
+  TARGET_NOT_WITHDRAWAL: 'This is a deposit. Only withdrawals can be traced.',
   TARGET_FAILED: 'This transaction failed on chain, so it moved no funds.',
-  TARGET_NOT_PROTOCOL_INSTRUCTION: 'This transaction does not withdraw from Privacy Cash.',
-  TREE_NOT_SUPPORTED: 'Only the SOL pool is covered. USDC and USDT pools are not traced yet.',
+  TARGET_NOT_PROTOCOL_INSTRUCTION: 'This transaction does not withdraw from a traced pool.',
+  TREE_NOT_SUPPORTED: 'This pool is not traced. Privacy Cash SOL and the Cloak SOL, USDC and USDT pools are.',
   LAYOUT_UNKNOWN: 'This transaction uses a program format the decoder does not know.',
   LAYOUT_EPOCH_MISMATCH: 'This transaction does not match the program version deployed at its slot.',
   ROOT_NOT_IN_WINDOW: 'The proof root of this withdrawal could not be matched to pool history.',
@@ -93,6 +94,9 @@ export const REASON_TITLES = {
   SAME_SLOT_ORDER_UNKNOWN: 'The order within one slot is not known for every transaction.',
   ENRICHMENT_NOT_PERFORMED: 'Wallet relationships are not analysed.',
   DEPLOYMENT_BEHAVIOUR_VERIFIED: 'Older program versions are verified by replay, not by a reproducible build.',
+  'cloakc:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'Program versions are verified by replay, not by a reproducible build.',
+  PROGRAM_SOURCE_UNAVAILABLE: 'The program’s source code is not published.',
+  SHIELDED_TRANSFERS: 'Money can move between users inside the pool.',
 }
 
 // What each limit means for the reader; the backend's detail is written for operators.
@@ -104,18 +108,38 @@ export const LIMIT_TEXT = {
   SAME_SLOT_ORDER_UNKNOWN: 'For some transactions in the same slot as the withdrawal, which came first is not known; they are left out.',
   ENRICHMENT_NOT_PERFORMED: 'Apart from the recipient being the depositor itself, the recipient’s other transactions (who funded it, where it sends) are not checked yet.',
   DEPLOYMENT_BEHAVIOUR_VERIFIED: 'The current program matches its published source. Earlier versions are checked by replaying every transaction they made, not by rebuilding them.',
+  'cloakc:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'No Cloak program version has a reproducible build. Each is checked by replaying every transaction it made.',
+  PROGRAM_SOURCE_UNAVAILABLE: 'Cloak publishes neither its program nor its circuit. What its instructions do is read from the chain, and the order of its notes is checked by replaying the whole pool against the live account.',
+  SHIELDED_TRANSFERS: 'Cloak has private transfers, so a note can hold money its owner never deposited. A wallet’s balance on this page is what it deposited, not what it holds.',
 }
 
 // Codes that never block a report: the limits every report states.
 export const DISCLOSURES = new Set(['HIDDEN_VALUE', 'DUMMY_INDISTINGUISHABLE', 'NULLIFIER_UNMAPPED', 'ANCESTRY_UNRESOLVED',
-  'SAME_SLOT_ORDER_UNKNOWN', 'ENRICHMENT_NOT_PERFORMED', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'])
+  'SAME_SLOT_ORDER_UNKNOWN', 'ENRICHMENT_NOT_PERFORMED', 'DEPLOYMENT_BEHAVIOUR_VERIFIED', 'PROGRAM_SOURCE_UNAVAILABLE', 'SHIELDED_TRANSFERS'])
 
-export const CREATED_BY = { deposit: 'Deposit', withdraw: 'Withdrawal change', transfer: 'Transfer' }
+/** A reason's title or explanation, the pool's own wording first. */
+export const reasonText = (table, protocol, code) => table[`${protocol}:${code}`] ?? table[code]
 
-/** Lamports (a decimal string) as SOL with at most 4 decimals: "0.3502 SOL". */
-export function formatSol(lamports) {
-  if (lamports === null || lamports === undefined) return '–'
-  return `${(Number(lamports) / 1e9).toLocaleString('en-US', { maximumFractionDigits: 4 })} SOL`
+export const CREATED_BY = { deposit: 'Deposit', withdraw: 'Withdrawal change', transfer: 'Transfer', swap: 'Swap change', refund: 'Swap refund' }
+
+const POOLS = { privacycash: 'Privacy Cash', cloakc: 'Cloak' }
+
+/** "Cloak USDC pool", from the report's protocol and asset, or null for a report on no pool. */
+export function poolName(report) {
+  const protocol = POOLS[report?.target?.protocol]
+  const symbol = report?.deployment?.asset?.symbol
+  return protocol ? `${protocol} ${symbol ? `${symbol} ` : ''}pool` : null
+}
+
+/**
+ * Base units (a decimal string) in the pool's asset: SOL has 9 decimals and
+ * shows at most 4; USDC and USDT have 6 and show cents. A report without an
+ * asset is SOL. "0.3502 SOL", "12.34 USDC".
+ */
+export function formatAmount(units, asset = null) {
+  if (units === null || units === undefined) return '–'
+  const decimals = asset?.decimals ?? 9
+  return `${(Number(units) / 10 ** decimals).toLocaleString('en-US', { maximumFractionDigits: decimals === 9 ? 4 : 2 })} ${asset?.symbol ?? 'SOL'}`
 }
 
 /** Seconds from `earlier` to `later`, both block times as decimal strings, or null. */
@@ -128,7 +152,7 @@ export const LINK_RULES = {
   only_feasible: 'Only one wallet had enough left in the pool to pay for it.',
   exact_balance: 'It took exactly what this wallet had left in the pool.',
   exact_deposit: 'It took exactly what this wallet deposited, and no other deposit has that amount.',
-  pair_sum: 'With an earlier withdrawal it emptied this wallet to the lamport.',
+  pair_sum: 'With an earlier withdrawal it emptied this wallet exactly.',
   root_pinned: 'Its proof was made right after this wallet deposited exactly this amount.',
 }
 

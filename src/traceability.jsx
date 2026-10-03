@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, ArrowUpRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import {
-  CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountMatches, candidateReason, formatCount, formatSol, formatSpan,
-  groupCandidates, linkVerdict, observationsById, parseSignature, secondsBetween, shortSignature, slotsToSeconds,
+  CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountMatches, candidateReason, formatAmount, formatCount, formatSpan,
+  groupCandidates, linkVerdict, observationsById, parseSignature, poolName, reasonText, secondsBetween, shortSignature, slotsToSeconds,
 } from './traceability.js'
 
 const PAGE = 40
@@ -23,9 +23,10 @@ function Transaction({ signature }) {
 
 async function fetchReport(signature, cursor = null) {
   const query = new URLSearchParams({ limit: String(PAGE), ...(cursor && { cursor }) })
-  const response = await fetch(`/api/traceability/privacycash/${signature}?${query}`)
+  // auto: the backend picks the pool (Privacy Cash or Cloak) from the stored transaction.
+  const response = await fetch(`/api/traceability/auto/${signature}?${query}`)
   const body = await response.json().catch(() => null)
-  if (response.status === 409) throw new Error('This transaction holds several Privacy Cash instructions; tracing one of them is not supported here yet.')
+  if (response.status === 409) throw new Error('This transaction holds several pool instructions; tracing one of them is not supported here yet.')
   if (!response.ok || !body) throw new Error(body?.detail || body?.error || `The trace service answered ${response.status}.`)
   return body
 }
@@ -80,11 +81,11 @@ function NoteStrip({ groups, targetSlot, matches }) {
 }
 
 // The linker's best-fitting wallets for a withdrawal, the linked one first.
-function LikelySources({ linkage }) {
+function LikelySources({ linkage, asset }) {
   const top = linkage?.top ?? []
   if (!top.length) return null
   return <section className="panel traceSection">
-    <div className="traceSectionHead"><div><h2>Most likely sources</h2><p>Depositor wallets that had enough in the pool to pay for this withdrawal, best fit first: an exact balance, then a deposit of exactly this amount, then the most recent depositors. A wallet’s balance is what it deposited minus the withdrawals already linked to it.</p></div></div>
+    <div className="traceSectionHead"><div><h2>Most likely sources</h2><p>Depositor wallets that had enough in the pool to pay for this withdrawal, best fit first: an exact balance, then a deposit of exactly this amount, then the most recent depositors. A wallet’s balance is what it deposited minus the withdrawals already linked to it.{linkage.candidatesMeaning && ' Private transfers inside this pool can move money between wallets, so a balance is what a wallet deposited, not what it holds.'}</p></div></div>
     <div className="traceTable" role="table" aria-label="Most likely sources">
       <div className="traceRow head" role="row"><span role="columnheader">Wallet</span><span role="columnheader">Last deposit</span><span role="columnheader">Balance</span><span role="columnheader">Before withdrawal</span></div>
       {top.map((entry) => {
@@ -93,7 +94,7 @@ function LikelySources({ linkage }) {
         return <div className={`traceRow${linked ? ' match' : ''}`} role="row" key={entry.wallet}>
           <span role="cell" className="traceKind"><Address address={entry.wallet} /><em className={linked ? '' : 'muted'}>{candidateReason(entry, linked)}</em></span>
           <span role="cell">{entry.lastDeposit ? <Transaction signature={entry.lastDeposit.signature} /> : '–'}</span>
-          <code role="cell">{formatSol(entry.budget)}</code>
+          <code role="cell">{formatAmount(entry.budget, asset)}</code>
           <code role="cell">{seconds === null ? '–' : formatSpan(seconds)}</code>
         </div>
       })}
@@ -102,7 +103,7 @@ function LikelySources({ linkage }) {
 }
 
 // A deposit: the withdrawals the linker attributes to its wallet from then on.
-function DepositLinks({ linkage }) {
+function DepositLinks({ linkage, asset }) {
   const rows = linkage.withdrawals ?? []
   return <section className="panel traceSection">
     <div className="traceSectionHead"><div><h2>Withdrawals linked to this wallet</h2><p>{rows.length
@@ -115,7 +116,7 @@ function DepositLinks({ linkage }) {
         return <div className="traceRow" role="row" key={row.signature}>
           <span role="cell"><Transaction signature={row.signature} /></span>
           <span role="cell" className="traceRule">{LINK_RULE_NAMES[row.rule] ?? row.rule}{row.tier === 'likely' ? ' (likely)' : ''}</span>
-          <code role="cell">{formatSol(row.gross)}</code>
+          <code role="cell">{formatAmount(row.gross, asset)}</code>
           <code role="cell">{seconds === null ? '–' : formatSpan(seconds)}</code>
         </div>
       })}
@@ -227,7 +228,7 @@ function Limits({ report }) {
   if (!limits.length) return null
   return <section className="traceSection traceLimits">
     <h2>What this report cannot tell</h2>
-    <ul>{limits.map(({ code, detail }) => <li key={code}><strong>{REASON_TITLES[code] ?? code}</strong> {LIMIT_TEXT[code] ?? detail}</li>)}</ul>
+    <ul>{limits.map(({ code, detail }) => <li key={code}><strong>{reasonText(REASON_TITLES, report.target.protocol, code) ?? code}</strong> {reasonText(LIMIT_TEXT, report.target.protocol, code) ?? detail}</li>)}</ul>
   </section>
 }
 
@@ -262,11 +263,14 @@ function Report({ report, signature }) {
   const verdict = linkVerdict(linkage)
   const wallets = linkage?.candidates ?? null
   const notes = candidates && (candidates.exact ? formatCount(candidates.count) : `${formatCount(candidates.bounds?.min)}–${formatCount(candidates.bounds?.max)}`)
+  const pool = poolName(report)
+  const asset = report.deployment?.asset ?? null
   return <>
     <section className="panel traceSummary">
       <div className="traceSummaryHead">
         <Status copy={deposit ? DEPOSIT : copy} />
         <div className="traceTarget">
+          {pool && <span>{pool}</span>}
           <code title={signature}>{shortSignature(signature)}</code>
           <CopyButton text={signature} />
           <a className="traceIconButton" href={solscan(signature)} target="_blank" rel="noreferrer" aria-label="View on Solscan" title="View on Solscan"><ArrowUpRight /></a>
@@ -277,15 +281,15 @@ function Report({ report, signature }) {
           : <p className="traceStatusText">{copy.text}</p>}
       {blocking.length > 0 && <ul className="traceBlocking">{blocking.map(({ code, detail }) => <li key={code} title={detail}>{REASON_TITLES[code] ? <strong>{REASON_TITLES[code]}</strong> : detail}</li>)}</ul>}
       {candidates && <div className="traceFigures">
-        {wallets !== null && <div className="metric key"><p>Wallets with enough in the pool</p><strong>{formatCount(wallets)}</strong><small>After the withdrawals already linked to other wallets</small></div>}
+        {wallets !== null && <div className="metric key"><p>{linkage.candidatesMeaning ? 'Wallets that deposited enough' : 'Wallets with enough in the pool'}</p><strong>{formatCount(wallets)}</strong><small>After the withdrawals already linked to other wallets</small></div>}
         <div className={`metric${wallets === null ? ' key' : ''}`}><p>{wallets === null ? 'Possible source notes' : 'Notes in the pool'}</p><strong>{notes}</strong><small>Every note in the pool when the proof was made</small></div>
         <div className="metric"><p>Proof freshness</p><strong>{rootLag === undefined || rootLag === null ? '–' : rootLag === '0' ? 'Newest' : `${formatCount(rootLag)} behind`}</strong><small>{rootLag === '0' ? 'The proof used the pool’s latest state' : 'Notes added after the proof are excluded'}</small></div>
         {wallets === null && <div className="metric"><p>Oldest possible source</p><strong>{formatSpan(oldest)}</strong><small>before this withdrawal</small></div>}
       </div>}
     </section>
-    {deposit && <DepositLinks linkage={linkage} />}
+    {deposit && <DepositLinks linkage={linkage} asset={asset} />}
     {candidates && <>
-      <LikelySources linkage={linkage} />
+      <LikelySources linkage={linkage} asset={asset} />
       <Candidates report={report} signature={signature} />
       <Leads report={report} />
       <Limits report={report} />
@@ -321,7 +325,7 @@ export default function TracePage({ signature = '', onTrace }) {
   return <div className="tracePage">
     <header className="traceHeader">
       <h1>Trace a withdrawal</h1>
-      <p>Paste a Privacy Cash withdrawal to see which wallet most likely paid for it and how many others could have. A deposit shows the withdrawals linked to its wallet.</p>
+      <p>Paste a Privacy Cash or Cloak withdrawal to see which wallet most likely paid for it and how many others could have. A deposit shows the withdrawals linked to its wallet.</p>
     </header>
     <form className="traceSearch" onSubmit={submit} noValidate>
       <label className="paymentFieldLabel" htmlFor="traceSignature">Withdrawal or deposit <span>Signature or Solscan link</span></label>
