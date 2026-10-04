@@ -66,6 +66,7 @@ test('candidate reasons, SOL amounts and block-time spans', () => {
 test('the pool name comes from the report, and Cloak reports get their own wording', () => {
   assert.equal(poolName({ target: { protocol: 'cloakc' }, deployment: { asset: { symbol: 'USDC', decimals: 6 } } }), 'Cloak USDC pool')
   assert.equal(poolName({ target: { protocol: 'privacycash' }, deployment: { asset: null } }), 'Privacy Cash pool')
+  assert.equal(poolName({ target: { protocol: 'privacycash' }, deployment: { asset: { symbol: 'USDT', decimals: 6 } } }), 'Privacy Cash USDT pool')
   assert.equal(poolName({ target: { protocol: 'auto' }, deployment: { asset: null } }), null)
   assert.equal(reasonText(REASON_TITLES, 'cloakc', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), 'Program versions are verified by replay, not by a reproducible build.')
   assert.equal(reasonText(REASON_TITLES, 'privacycash', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), REASON_TITLES.DEPLOYMENT_BEHAVIOUR_VERIFIED)
