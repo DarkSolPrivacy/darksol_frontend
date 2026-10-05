@@ -24,7 +24,7 @@ function Transaction({ signature }) {
 async function fetchReport(signature, cursor = null) {
   const query = new URLSearchParams({ limit: String(PAGE), ...(cursor && { cursor }) })
   // auto: the backend picks the pool (Privacy Cash or Cloak) from the stored transaction.
-  const response = await fetch(`/api/traceability/auto/${signature}?${query}`)
+  const response = await fetch(`/api/traceability/auto/${signature}?${query}`, { cache: 'no-store' })
   const body = await response.json().catch(() => null)
   if (response.status === 409) throw new Error('This transaction holds several pool instructions; tracing one of them is not supported here yet.')
   if (!response.ok || !body) throw new Error(body?.detail || body?.error || `The trace service answered ${response.status}.`)

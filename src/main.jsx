@@ -7,6 +7,7 @@ import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rank
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
+import { recordPageView } from './page-views.js'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
@@ -1555,6 +1556,13 @@ function App() {
   const [view, setView] = useState(getPage)
   // The path as well as the view: going from one trace to another keeps view 'trace'.
   const [path, setPath] = useState(() => window.location.pathname)
+  const lastViewedPath = useRef(path)
+  useEffect(() => {
+    // The initial document was counted by middleware; only count route changes.
+    if (lastViewedPath.current === path) return
+    lastViewedPath.current = path
+    recordPageView(path)
+  }, [path])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [protocol, setProtocol] = useState('privacycash')
