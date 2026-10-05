@@ -77,3 +77,27 @@ last 24 hours, with whole-hour boundaries; all state resets on API restart and
 the dashboard shows its actual coverage start. Coincidental matches, fees,
 delays and unsupported send modes limit the estimate. Backend deployment is
 required; see [implementation details](../../darksol-backend/docs/ADMIN_STATS.md#possible-private-sends-live-estimate).
+
+## Trace activity and in-app visits (2026-10-04)
+
+The traffic counter now includes navigation within the app as well as full page
+loads. Only a fixed page category is sent to the same-origin edge middleware;
+there is no invoice ID, transaction signature, original URL, referrer, cookie or
+visitor identifier in this request. The initial document is counted only at the
+edge, so mounting the app does not count it again. DNT and Global Privacy Control
+opt-outs apply to these counters. This anonymous navigation request supersedes
+the initial prohibition on additional browser analytics requests above; no
+individual analytics profiles are created.
+
+The private dashboard distinguishes **Payment links** (the merchant page) from
+**Payment checkout** (a valid `/pay/<invoice>` page). Checkout polling is not a visit.
+Trace activity shows page views and primary deposit, withdrawal and other checks
+in the selected period. Pagination and automatic supporting deposit lookups stay
+in the separate operational API-call total and do not inflate check counts.
+Repeated user checks count again. Other checks include unclassified transactions
+and failed requests; these are not successful deposits or withdrawals.
+
+These are visits and checks, not unique people. No identity or per-transaction
+history is stored. The new breakdown starts when backend migration
+`0016_trace_check_counts.sql` and the backend are deployed; older raw API totals
+cannot be split retrospectively. Deploy the backend before the frontend.
