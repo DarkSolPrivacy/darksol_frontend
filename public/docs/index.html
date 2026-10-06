@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#080808" />
-  <meta name="description" content="A short guide to DarkSol: private send, private receive, fees, red team, and the architecture behind private transfers." />
+  <meta name="description" content="A short guide to DarkSol: private send, private receive, payment links, red team, and the architecture behind private transfers." />
   <link rel="canonical" href="https://docs.darksol.app/" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/docs/styles.css" />
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://docs.darksol.app/" />
   <meta property="og:title" content="Introduction · DarkSol Docs" />
-  <meta property="og:description" content="Private transfers, fees, and how DarkSol works. The essentials in a few minutes." />
+  <meta property="og:description" content="Private transfers, payment links, and how DarkSol works. The essentials in a few minutes." />
   <meta property="og:image" content="https://darksol.app/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
 </head>
@@ -31,8 +31,9 @@
       <a href="#introduction">Introduction</a>
       <a href="#private-send">Private send</a>
       <a href="#private-receive">Private receive</a>
-      <a href="#fees">Fees</a>
       <p class="nav-label">UNDER THE HOOD</p>
+      <a href="#private-transfers">Private transfers</a>
+      <a href="#payment-links">Payment links</a>
       <a href="#red-team">Red team</a>
       <a href="#core-concepts">Core concepts</a>
       <a href="#architecture">Architecture</a>
@@ -46,30 +47,122 @@
       </div>
       <section id="private-send" aria-labelledby="send-title">
         <h2 id="send-title">Private send</h2>
-        <p>Send from your wallet through a privacy pool to a recipient. Choose the asset, amount, and destination, compare available routes, then approve the transfer. The pool helps separate the deposit from the withdrawal.</p>
+        <p>Send from your wallet through a privacy pool to a recipient. Choose the asset, amount, and destination; DarkSol compares the available routes for you, then you approve the transfer. The pool helps separate the deposit from the withdrawal. See <a href="#private-transfers">how private transfers work</a>.</p>
         <a class="text-link" href="https://darksol.app/">Send privately <span aria-hidden="true">↗</span></a>
       </section>
       <section id="private-receive" aria-labelledby="receive-title">
         <h2 id="receive-title">Private receive</h2>
-        <p>Create a payment link without sharing your receiving wallet. The payer deposits into a privacy pool; you collect the funds later to a chosen address. You'll find this feature under <strong>Payment links</strong> in the app.</p>
+        <p>Create a payment link without sharing your receiving wallet. The payer deposits into a privacy pool; you collect the funds later to a chosen address. You'll find this feature under <strong>Payment links</strong> in the app. See <a href="#payment-links">how payment links work</a>.</p>
         <a class="text-link" href="https://darksol.app/payment-links">Create a payment link <span aria-hidden="true">↗</span></a>
       </section>
-      <section id="fees" aria-labelledby="fees-title">
-        <h2 id="fees-title">Fees</h2>
+      <section id="private-transfers" aria-labelledby="private-transfers-title">
+        <h2 id="private-transfers-title">Private transfers</h2>
+        <p>A private transfer moves funds through a privacy pool so the recipient's payment isn't directly linked to your wallet. You deposit into the pool, and the funds leave it separately to your recipient. DarkSol picks the pool for you from live pool activity; your wallet approves every transaction that moves your funds.</p>
+        <figure class="diagram">
+          <a href="/docs/private-send-flow.svg"><img src="/docs/private-send-flow.svg" width="880" height="510" alt="Sequence diagram. 1: the sender enters the token, amount and recipients. 2: the browser asks the DarkSol planner to compare routes, sending only the amount and tokens, no addresses. 3: the planner returns the best route with a privacy estimate and estimated fee. 4: the sender's wallet approves a deposit into the privacy pool. 5: the pool delivers the funds to the recipient, either now or within 10 to 30 minutes. Route planning never receives the sender's or recipients' addresses." /></a>
+          <figcaption>What happens between entering a transfer and the recipient receiving it.</figcaption>
+        </figure>
+        <ol class="architecture">
+          <li><strong>Enter</strong><span>Open <strong>Private transfer</strong> in the app, choose a token (SOL, USDC or USDT) and an amount, and add one or more recipients. With several recipients, their amounts must add up to the total.</span></li>
+          <li><strong>Compare</strong><span>As soon as the form is complete, DarkSol compares the supported pools and picks the route most likely to reach good privacy soonest, using fees to break close ties. Open <strong>Details</strong> to see the estimated privacy, pool size, similar-size activity, expected wait and estimated fee.</span></li>
+          <li><strong>Deposit</strong><span>Your wallet approves one deposit into the selected pool. Privacy Cash also asks you to sign a sign-in message once per browser; it moves no funds. Umbra asks for a one-time registration.</span></li>
+          <li><strong>Deliver</strong><span>The funds leave the pool to your recipient. On Privacy Cash and Cloak, the pool's relayer submits this withdrawal and pays its network fee, so there is nothing more to approve. When it lands, the app shows <strong>Transfer complete</strong> with a link to the transaction.</span></li>
+        </ol>
+        <h3>How routes are scored</h3>
+        <p>The privacy estimate is a score from 0 to 100, based on how deep the pool is compared with your amount, how much recent activity there is, how many flows of a similar size it has seen, how spread out that activity is over time, and how unusual your amount is. A transfer larger than the pool, or a pool with too small a published anonymity set, is marked <strong>Not private</strong> and can't be sent. The score is an estimate, not a guarantee.</p>
+        <h3>What DarkSol sees</h3>
+        <p>To compare routes, your browser sends only the token, the amount and how it is split between recipients. Your wallet address and your recipients' addresses are not part of route planning. Deposits and withdrawals are public Solana transactions, as with any pool.</p>
+        <h3>Supported pools</h3>
         <table>
-          <caption>DarkSol fees</caption>
-          <thead><tr><th scope="col">Action</th><th scope="col">DarkSol fee</th></tr></thead>
+          <caption>Pools available for private transfers</caption>
+          <thead><tr><th scope="col">Pool</th><th scope="col">Tokens</th><th scope="col">Supports</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Private send</th><td>0% <span>No DarkSol fee</span></td></tr>
-            <tr><th scope="row">Private receive</th><td>0.05%</td></tr>
+            <tr><td>Privacy Cash</td><td>SOL, USDC, USDT</td><td>Several recipients, delayed delivery, swaps, bridging</td></tr>
+            <tr><td>Cloak</td><td>SOL, USDC, USDT</td><td>One recipient, swaps from SOL</td></tr>
+            <tr><td>Umbra</td><td>SOL, USDC, USDT</td><td>One recipient</td></tr>
           </tbody>
         </table>
-        <p class="note">Network and underlying protocol fees still apply. Review the route's estimated costs before approving.</p>
+        <p class="note">Each pool charges its own withdrawal fee, shown as <strong>Estimated fee</strong> in Details. Your wallet also pays the deposit's Solana network fee.</p>
+        <h3>More options</h3>
+        <dl class="concepts">
+          <div><dt>Swap</dt><dd>Pick a different token under <strong>Receive</strong> and the recipient gets that token instead. Cloak swaps SOL to USDC or USDT; Privacy Cash swaps between SOL and USDC or USDT.</dd></div>
+          <div><dt>Bridge</dt><dd>Choose <strong>Bridge</strong> under <strong>Receive</strong> to deliver to Ethereum, BNB Chain, Base, Polygon or Bitcoin through Privacy Cash. The amount must be worth at least about 0.05 SOL.</dd></div>
+          <div><dt>Delay</dt><dd>The clock button delivers within 10, 20 or 30 minutes instead of right away, which puts more pool activity between deposit and delivery. For a delayed delivery, DarkSol's server holds the prepared withdrawal, including its recipient, until it is sent. The recipient and amount are fixed inside it, so it can only be delivered or dropped, never redirected. If it isn't delivered, the funds stay in the pool and <strong>Send now</strong> sends them. One recipient, Privacy Cash only.</dd></div>
+          <div><dt>Shielding</dt><dd>The shield button offers <strong>Keep part shielded</strong> to send some and keep the rest in the pool, <strong>Shield only</strong> to deposit without sending, and <strong>Use shielded funds</strong> to pay from what you already hold in the pool, with no new deposit.</dd></div>
+        </dl>
+        <h3>If a transfer is interrupted</h3>
+        <p>Once the deposit lands, your funds are safe in the pool even if the page closes. Privacy Cash funds are tied to your wallet: sign in on any device and send them with <strong>Use shielded funds</strong>. Cloak saves its private note in this browser only, so finish the transfer here and don't clear site data until it completes.</p>
+      </section>
+      <section id="payment-links" aria-labelledby="payment-links-title">
+        <h2 id="payment-links-title">Payment links</h2>
+        <p>A payment link is an invoice whose funds land in a privacy pool instead of your wallet. Your browser prepares the private note the payment will fund; DarkSol only stores the invoice and tracks whether it was paid. The payer's wallet deposits straight into the pool, and only your wallet can spend what arrives.</p>
+        <figure class="diagram">
+          <a href="/docs/payment-links-flow.svg"><img src="/docs/payment-links-flow.svg" width="880" height="690" alt="Sequence diagram. 1: the merchant signs and the browser builds a private note. 2: it publishes the invoice terms and note commitment to the DarkSol service. 3: the merchant shares a darksol.app/pay link with the payer. 4: the payer opens the checkout, whose terms are re-checked before signing. 5: the payer deposits into the privacy pool, into the merchant's note. 6: the payer's browser reports the public transaction ID. 7: the service verifies the deposit is finalized on-chain and marks the invoice paid. 8: the merchant collects: the pool's relayer withdraws the funds to an address the merchant chooses. The merchant's wallet address, signatures and note spending keys are never sent to DarkSol." /></a>
+          <figcaption>Who talks to whom when a payment link is created, paid and collected.</figcaption>
+        </figure>
+        <ol class="architecture">
+          <li><strong>Create</strong><span>Choose a pool, token and amount, plus an optional reference. Your wallet signs two messages, which are used to create your private merchant ID and the private note your payment is sent to. The signatures stay in your browser and never move funds. Your browser builds the note and sends DarkSol only the public invoice: amount, pool, token and the note's commitment. For Privacy Cash, it also sends the note encrypted under your key.</span></li>
+          <li><strong>Share</strong><span>Each invoice gets its own link, <code>darksol.app/pay/&lt;id&gt;</code>. It does not contain or reveal your wallet address.</span></li>
+          <li><strong>Pay</strong><span>The payer connects any Solana wallet and approves one deposit into the pool, funding your note. Right before signing, the checkout reloads the invoice and stops if its terms changed or it was already paid. The transaction goes directly to a Solana RPC, not through DarkSol.</span></li>
+          <li><strong>Confirm</strong><span>The checkout reports the deposit's public transaction ID. DarkSol checks that the deposit is finalized on-chain and matches the invoice, then marks it paid. If the page closed early, the payer can paste the transaction ID to verify it later.</span></li>
+          <li><strong>Collect</strong><span>Open <strong>Collect</strong>, enter any destination address and sign the same message again. Your browser proves ownership of each paid note, and the pool's relayer submits the withdrawal and pays its network fee. Two payments in the same pool and token are combined into one withdrawal.</span></li>
+        </ol>
+        <h3>What DarkSol sees</h3>
+        <table>
+          <caption>Data held by the payment-link service</caption>
+          <thead><tr><th scope="col">Stored</th><th scope="col">Never received</th></tr></thead>
+          <tbody>
+            <tr><td>An anonymous merchant ID derived from your signature</td><td>Your wallet address</td></tr>
+            <tr><td>Invoice terms: pool, token, amount, reference</td><td>Your wallet signatures</td></tr>
+            <tr><td>Note commitments and encrypted notes</td><td>Note spending keys</td></tr>
+            <tr><td>Payment status and the deposit's transaction ID</td><td>Collections and their destinations</td></tr>
+          </tbody>
+        </table>
+        <p class="note">The payer's deposit is a public Solana transaction, so anyone, including DarkSol, can see which wallet paid. Which collections belong to you is tracked in your browser only.</p>
+        <h3>Supported pools and tokens</h3>
+        <p>Payment links work with <strong>Privacy Cash</strong> and <strong>Cloak</strong> for SOL, USDC and USDT on Solana mainnet. Cloak requires at least 0.01 SOL or 1 USDC/USDT per payment. The payer pays network fees in SOL; Cloak token deposits also need about 0.006 SOL for a one-time lookup table.</p>
+        <h3>Recovery</h3>
+        <p>Your payment links are tied to your wallet, not to this browser. Signing in with the same wallet on any device finds your links and lets you collect them. The download button in <strong>Your payment links</strong> saves a backup of every invoice record, so a copy exists outside DarkSol. Deleting a link disables it and removes its record from DarkSol. If the link may already have been paid, choose <strong>Download and delete</strong>.</p>
       </section>
       <section id="red-team" aria-labelledby="red-team-title">
         <h2 id="red-team-title">Red team</h2>
-        <p>The red team tests privacy from an outside observer's perspective. It examines public deposits and withdrawals for possible links using amounts, timing, address reuse, and pool history.</p>
-        <p>Its findings show the evidence and its limits. A suspected link is an inference, not proof of ownership. Finding no link does not prove anonymity.</p>
+        <p>The red team tests privacy from an outside observer's perspective. Using only public Solana data, it takes a withdrawal from a privacy pool and does what a chain analyst would: work out which depositor wallet most likely paid for it, and how many others could have. You can run it yourself on the <strong>Trace</strong> page in the app.</p>
+        <figure class="diagram">
+          <a href="/docs/red-team-flow.svg"><img src="/docs/red-team-flow.svg" width="880" height="420" alt="Pipeline diagram. Always running: DarkSol indexes every Privacy Cash and Cloak pool transaction on Solana for SOL, USDC and USDT (step 1), replays each pool from its first note (step 2), and verifies the replay against on-chain proof roots and the live pool account (step 3). For each trace: you paste a withdrawal signature or Solscan link; the verified pool history gives every note in the pool when its proof was made (step 4); linking rules are applied to the depositor wallets (step 5); and a report shows the verdict, likely sources, public clues and limits (step 6). It uses public data only, the same view an outside analyst has." /></a>
+          <figcaption>Pool history is collected and checked continuously; each trace runs against it.</figcaption>
+        </figure>
+        <ol class="architecture">
+          <li><strong>Index</strong><span>DarkSol records every deposit, withdrawal and note in the Privacy Cash and Cloak pools for SOL, USDC and USDT.</span></li>
+          <li><strong>Replay and verify</strong><span>Each pool is rebuilt from its first note and checked against the proofs on-chain and the live pool account, so the history a trace relies on matches the chain.</span></li>
+          <li><strong>Trace</strong><span>Paste a withdrawal's signature or Solscan link. The trace lists every note that could have paid for it, then applies the linking rules below to the wallets that deposited them. Paste a deposit instead to see the withdrawals linked to its wallet. A withdrawal from the last few minutes appears after the next indexing cycle.</span></li>
+        </ol>
+        <h3>Reading a report</h3>
+        <dl class="concepts">
+          <div><dt>Verdict</dt><dd><strong>Linked to one wallet</strong> or <strong>Probably linked</strong> when a rule singles out a depositor; <strong>Hidden among N wallets</strong> when several could have paid; <strong>No single wallet could have paid for it</strong> when no depositor had enough left in the pool.</dd></div>
+          <div><dt>Most likely sources</dt><dd>Depositor wallets with enough in the pool to cover the withdrawal, best fit first: an exact balance, then a deposit of exactly this amount, then the most recent depositors.</dd></div>
+          <div><dt>Public clues</dt><dd>What an analyst would compare: the nearest deposit of the same amount, how many deposits match the amount, how common the amount is, and how busy the pool was in the minute before. None of these is proof, and they are never combined into a score.</dd></div>
+          <div><dt>Limits</dt><dd>What the report cannot tell, such as the hidden amount inside each note, or where money held in the pool first came from.</dd></div>
+          <div><dt>Evidence</dt><dd>How the pool history was checked. <strong>Complete evidence</strong> means every possible source is known; <strong>Evidence still being collected</strong> means the figures are bounds, not exact values.</dd></div>
+        </dl>
+        <h3>Linking rules</h3>
+        <table>
+          <caption>Patterns that link a withdrawal to one wallet</caption>
+          <thead><tr><th scope="col">Rule</th><th scope="col">What the observer sees</th></tr></thead>
+          <tbody>
+            <tr><td>Own signature</td><td>The withdrawal was signed by the depositor's own wallet.</td></tr>
+            <tr><td>Paid back to itself</td><td>The money went back to the wallet that deposited it.</td></tr>
+            <tr><td>Only wallet with enough</td><td>Only one wallet had enough left in the pool to pay for it.</td></tr>
+            <tr><td>Emptied the wallet</td><td>It took exactly what one wallet had left in the pool.</td></tr>
+            <tr><td>Same amount</td><td>It took exactly what one wallet deposited, and no other deposit has that amount.</td></tr>
+            <tr><td>Pair emptied the wallet</td><td>Together with an earlier withdrawal, it emptied one wallet exactly.</td></tr>
+            <tr><td>Proof right after deposit</td><td>Its proof was made right after one wallet deposited exactly this amount.</td></tr>
+          </tbody>
+        </table>
+        <p class="note">Route scoring for <a href="#private-transfers">private transfers</a> weighs related signals, such as how common your amount is and how much similar-size activity a pool has.</p>
+        <h3>What a trace cannot tell</h3>
+        <p>Amounts inside notes are hidden, so possible sources can't be filtered by size, and the count is of notes, not people. Notes that were already spent can't be identified, so they stay among the possible sources. Only the last hop is analysed: where money held in the pool first came from is not followed, and the recipient's other activity is not checked yet.</p>
+        <p>A suspected link is an inference, not proof of ownership. Finding no link does not prove anonymity.</p>
+        <a class="text-link" href="https://darksol.app/trace">Trace a withdrawal <span aria-hidden="true">↗</span></a>
       </section>
       <section id="core-concepts" aria-labelledby="concepts-title">
         <h2 id="concepts-title">Core concepts</h2>
@@ -88,10 +181,26 @@
           <li><strong>Privacy protocols</strong><span>Hold shielded funds and verify deposits and withdrawals on-chain.</span></li>
           <li><strong>Data &amp; planning</strong><span>Indexers collect public activity. Stored data powers pool comparisons, privacy estimates, and red-team analysis.</span></li>
         </ol>
-        <p>The payment-link service stores invoices and payment status. Payment-note spending keys are derived in your browser from your wallet signature.</p>
+        <p>The payment-link service stores invoices and payment status. Payment-note spending keys are derived in your browser from your wallet signature. See <a href="#payment-links">Payment links</a> for the full flow.</p>
       </section>
       <footer class="page-footer"><span>DarkSol documentation</span><a href="#introduction">Back to top <span aria-hidden="true">↑</span></a></footer>
     </main>
   </div>
+  <script>
+    // Highlights the contents link of the section being read: the last one whose
+    // top has passed the sticky header, or the final one at the page's end.
+    const links = [...document.querySelectorAll('.contents a')]
+    const targets = links.map((link) => document.querySelector(link.hash))
+    function highlight() {
+      const atEnd = innerHeight + scrollY >= document.documentElement.scrollHeight - 4
+      let current = 0
+      targets.forEach((target, index) => { if (target.getBoundingClientRect().top <= 140) current = index })
+      if (atEnd) current = targets.length - 1
+      links.forEach((link, index) => index === current ? link.setAttribute('aria-current', 'location') : link.removeAttribute('aria-current'))
+    }
+    addEventListener('scroll', highlight, { passive: true })
+    addEventListener('resize', highlight)
+    highlight()
+  </script>
 </body>
 </html>

@@ -34,6 +34,7 @@ main:focus { outline: none; }
 .nav-label:not(:first-child) { margin-top: 30px; }
 .contents a { display: block; margin-bottom: 3px; padding: 7px 12px; border-left: 1px solid var(--line); color: var(--muted); text-decoration: none; }
 .contents a:hover, .contents a:focus-visible { color: var(--accent); border-left-color: var(--accent); background: #12110d; }
+.contents a[aria-current] { color: #ededed; border-left-color: var(--accent); }
 main, section { scroll-margin-top: 108px; }
 .eyebrow { margin: 0 0 18px; color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .12em; }
 h1, h2 { color: #ededed; font-weight: 550; letter-spacing: -.035em; line-height: 1.25; }
@@ -61,6 +62,14 @@ dd { margin: 0; color: var(--muted); }
 .architecture li::marker { color: var(--accent); font-size: 12px; }
 .architecture strong, .architecture span { display: block; }
 .architecture span { color: var(--muted); }
+.architecture span strong { display: inline; }
+h3 { margin: 30px 0 10px; color: #dedede; font-size: 16px; font-weight: 550; letter-spacing: -.02em; }
+code { padding: 1px 5px; border-radius: 4px; background: #161616; color: #dedede; font-size: 13px; }
+.diagram { margin: 24px 0 28px; }
+.diagram a { display: block; }
+.diagram img { display: block; width: 100%; height: auto; }
+.diagram figcaption { margin-top: 10px; color: var(--muted); font-size: 12px; }
+#payment-links td { font-variant-numeric: normal; }
 .page-footer { display: flex; justify-content: space-between; gap: 20px; padding: 26px 0 40px; margin-top: 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .page-footer a { text-decoration: none; }
 @media (max-width: 900px) {
