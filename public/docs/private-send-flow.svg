@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 510" role="img" aria-labelledby="title desc" font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <title id="title">How a DarkSol private send works</title>
+  <desc id="desc">The sender enters the transfer. DarkSol compares routes using only the amount and tokens and returns the best one. The sender's wallet approves a deposit into the privacy pool, and the funds then leave the pool to the recipient.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8z" fill="#a3a3a3"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8z" fill="#ffc53d"/>
+    </marker>
+  </defs>
+  <style>
+    .title { fill: #ededed; font-size: 13px; font-weight: 600; }
+    .sub { fill: #a3a3a3; font-size: 11px; }
+    .step { fill: #ededed; font-size: 13px; font-weight: 550; }
+    .num { fill: #ffc53d; font-weight: 700; }
+    .detail { fill: #a3a3a3; font-size: 11.5px; }
+    .phase { fill: #ffc53d; font-size: 10px; font-weight: 600; letter-spacing: .12em; }
+    .halo { paint-order: stroke; stroke: #0b0b0b; stroke-width: 6px; stroke-linejoin: round; }
+    .life { stroke: #333; stroke-width: 1; stroke-dasharray: 3 5; }
+    .flow { stroke: #a3a3a3; stroke-width: 1.4; fill: none; }
+    .flow-accent { stroke: #ffc53d; stroke-width: 1.4; fill: none; }
+  </style>
+
+  <rect width="880" height="510" rx="10" fill="#0b0b0b"/>
+  <rect x=".5" y=".5" width="879" height="509" rx="10" fill="none" stroke="#242424"/>
+
+  <!-- Lifelines -->
+  <line class="life" x1="110" y1="72" x2="110" y2="416"/>
+  <line class="life" x1="330" y1="72" x2="330" y2="416"/>
+  <line class="life" x1="550" y1="72" x2="550" y2="416"/>
+  <line class="life" x1="770" y1="72" x2="770" y2="416"/>
+
+  <!-- Participants -->
+  <g text-anchor="middle">
+    <rect x="20" y="16" width="180" height="56" rx="6" fill="#12110d" stroke="#ffc53d"/>
+    <text class="title" x="110" y="40">Sender</text>
+    <text class="sub" x="110" y="58">browser + wallet</text>
+
+    <rect x="240" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="330" y="40">DarkSol planner</text>
+    <text class="sub" x="330" y="58">route comparison</text>
+
+    <rect x="460" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="550" y="40">Privacy pool</text>
+    <text class="sub" x="550" y="58">Privacy Cash · Cloak · Umbra</text>
+
+    <rect x="680" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="770" y="40">Recipient</text>
+    <text class="sub" x="770" y="58">any Solana address</text>
+  </g>
+
+  <!-- Phases -->
+  <line x1="16" y1="280" x2="864" y2="280" stroke="#242424"/>
+  <g text-anchor="end">
+    <text class="phase" x="864" y="98">CHOOSE</text>
+    <text class="phase" x="864" y="298">SEND</text>
+  </g>
+
+  <g text-anchor="middle">
+    <!-- 1 Enter transfer (local) -->
+    <rect x="20" y="96" width="180" height="46" rx="6" fill="#12110d" stroke="#ffc53d" stroke-dasharray="4 3"/>
+    <text class="step" x="110" y="115"><tspan class="num">1 </tspan>Enter transfer</text>
+    <text class="detail" x="110" y="133">token · amount · recipients</text>
+
+    <!-- 2 Compare routes -->
+    <line class="flow" x1="110" y1="184" x2="330" y2="184" marker-end="url(#arrow)"/>
+    <text class="step halo" x="220" y="175"><tspan class="num">2 </tspan>Compare routes</text>
+    <text class="detail halo" x="220" y="201">amount + tokens, no addresses</text>
+
+    <!-- 3 Best route -->
+    <line class="flow" x1="330" y1="248" x2="110" y2="248" marker-end="url(#arrow)"/>
+    <text class="step halo" x="220" y="239"><tspan class="num">3 </tspan>Best route</text>
+    <text class="detail halo" x="220" y="265">privacy estimate · est. fee</text>
+
+    <!-- 4 Deposit -->
+    <line class="flow-accent" x1="110" y1="320" x2="550" y2="320" marker-end="url(#arrow-accent)"/>
+    <text class="step halo" x="330" y="311"><tspan class="num">4 </tspan>Deposit</text>
+    <text class="detail halo" x="330" y="337">approved in your wallet</text>
+
+    <!-- 5 Deliver -->
+    <line class="flow-accent" x1="550" y1="384" x2="770" y2="384" marker-end="url(#arrow-accent)"/>
+    <text class="step halo" x="660" y="375"><tspan class="num">5 </tspan>Deliver</text>
+    <text class="detail halo" x="660" y="401">now, or within 10–30 min</text>
+  </g>
+
+  <!-- Key -->
+  <rect x="20" y="440" width="840" height="50" rx="6" fill="#12110d" stroke="#2d2716"/>
+  <rect x="38" y="459" width="12" height="12" rx="2" fill="none" stroke="#ffc53d" stroke-dasharray="3 2"/>
+  <text x="62" y="469" class="detail"><tspan fill="#ededed" font-weight="550">Route planning never receives</tspan> your wallet address or your recipients' addresses.</text>
+</svg>

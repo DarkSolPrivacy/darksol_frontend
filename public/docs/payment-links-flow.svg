@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 690" role="img" aria-labelledby="title desc" font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <title id="title">How a DarkSol payment link works</title>
+  <desc id="desc">The merchant creates a private note in the browser and publishes only the invoice terms. The payer opens the link and deposits straight into the privacy pool. The DarkSol service verifies the finalized deposit and marks the invoice paid. The merchant later collects through the pool's relayer to any address.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8z" fill="#a3a3a3"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8z" fill="#ffc53d"/>
+    </marker>
+  </defs>
+  <style>
+    .title { fill: #ededed; font-size: 13px; font-weight: 600; }
+    .sub { fill: #a3a3a3; font-size: 11px; }
+    .step { fill: #ededed; font-size: 13px; font-weight: 550; }
+    .num { fill: #ffc53d; font-weight: 700; }
+    .detail { fill: #a3a3a3; font-size: 11.5px; }
+    .phase { fill: #ffc53d; font-size: 10px; font-weight: 600; letter-spacing: .12em; }
+    .halo { paint-order: stroke; stroke: #0b0b0b; stroke-width: 6px; stroke-linejoin: round; }
+    .life { stroke: #333; stroke-width: 1; stroke-dasharray: 3 5; }
+    .flow { stroke: #a3a3a3; stroke-width: 1.4; fill: none; }
+    .flow-accent { stroke: #ffc53d; stroke-width: 1.4; fill: none; }
+  </style>
+
+  <rect width="880" height="690" rx="10" fill="#0b0b0b"/>
+  <rect x=".5" y=".5" width="879" height="689" rx="10" fill="none" stroke="#242424"/>
+
+  <!-- Lifelines -->
+  <line class="life" x1="110" y1="72" x2="110" y2="600"/>
+  <line class="life" x1="330" y1="72" x2="330" y2="600"/>
+  <line class="life" x1="550" y1="72" x2="550" y2="600"/>
+  <line class="life" x1="770" y1="72" x2="770" y2="600"/>
+
+  <!-- Participants -->
+  <g text-anchor="middle">
+    <rect x="20" y="16" width="180" height="56" rx="6" fill="#12110d" stroke="#ffc53d"/>
+    <text class="title" x="110" y="40">Merchant</text>
+    <text class="sub" x="110" y="58">browser + wallet</text>
+
+    <rect x="240" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="330" y="40">DarkSol service</text>
+    <text class="sub" x="330" y="58">invoices + payment status</text>
+
+    <rect x="460" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="550" y="40">Payer</text>
+    <text class="sub" x="550" y="58">browser + wallet</text>
+
+    <rect x="680" y="16" width="180" height="56" rx="6" fill="#141414" stroke="#383838"/>
+    <text class="title" x="770" y="40">Privacy pool</text>
+    <text class="sub" x="770" y="58">Privacy Cash · Cloak</text>
+  </g>
+
+  <!-- Phases -->
+  <line x1="16" y1="280" x2="864" y2="280" stroke="#242424"/>
+  <line x1="16" y1="536" x2="864" y2="536" stroke="#242424"/>
+  <g text-anchor="end">
+    <text class="phase" x="864" y="98">CREATE</text>
+    <text class="phase" x="864" y="298">PAY</text>
+    <text class="phase" x="864" y="554">COLLECT</text>
+  </g>
+
+  <g text-anchor="middle">
+    <!-- 1 Create note (local) -->
+    <rect x="20" y="96" width="180" height="46" rx="6" fill="#12110d" stroke="#ffc53d" stroke-dasharray="4 3"/>
+    <text class="step" x="110" y="115"><tspan class="num">1 </tspan>Create note</text>
+    <text class="detail" x="110" y="133">sign · build private note</text>
+
+    <!-- 2 Publish invoice -->
+    <line class="flow" x1="110" y1="184" x2="330" y2="184" marker-end="url(#arrow)"/>
+    <text class="step halo" x="220" y="175"><tspan class="num">2 </tspan>Publish invoice</text>
+    <text class="detail halo" x="220" y="201">terms + note commitment</text>
+
+    <!-- 3 Share link -->
+    <line class="flow" x1="110" y1="248" x2="550" y2="248" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+    <text class="step halo" x="330" y="239"><tspan class="num">3 </tspan>Share link</text>
+    <text class="detail halo" x="330" y="265">darksol.app/pay/&lt;id&gt;</text>
+
+    <!-- 4 Open checkout -->
+    <line class="flow" x1="550" y1="320" x2="330" y2="320" marker-end="url(#arrow)"/>
+    <text class="step halo" x="440" y="311"><tspan class="num">4 </tspan>Open checkout</text>
+    <text class="detail halo" x="440" y="337">terms re-checked before signing</text>
+
+    <!-- 5 Deposit -->
+    <line class="flow-accent" x1="550" y1="384" x2="770" y2="384" marker-end="url(#arrow-accent)"/>
+    <text class="step halo" x="660" y="375"><tspan class="num">5 </tspan>Deposit</text>
+    <text class="detail halo" x="660" y="401">into the merchant's note</text>
+
+    <!-- 6 Report deposit -->
+    <line class="flow" x1="550" y1="448" x2="330" y2="448" marker-end="url(#arrow)"/>
+    <text class="step halo" x="440" y="439"><tspan class="num">6 </tspan>Report deposit</text>
+    <text class="detail halo" x="440" y="465">public transaction ID</text>
+
+    <!-- 7 Verify -->
+    <line class="flow" x1="330" y1="508" x2="770" y2="508" marker-end="url(#arrow)"/>
+    <text class="step halo" x="550" y="499"><tspan class="num">7 </tspan>Verify &amp; mark paid</text>
+    <text class="detail halo" x="550" y="525">deposit finalized on-chain</text>
+
+    <!-- 8 Collect -->
+    <line class="flow-accent" x1="770" y1="576" x2="110" y2="576" marker-end="url(#arrow-accent)"/>
+    <text class="step halo" x="440" y="567"><tspan class="num">8 </tspan>Collect</text>
+    <text class="detail halo" x="440" y="593">relayer withdraws to the merchant's chosen address</text>
+  </g>
+
+  <!-- Key -->
+  <rect x="20" y="620" width="840" height="50" rx="6" fill="#12110d" stroke="#2d2716"/>
+  <rect x="38" y="639" width="12" height="12" rx="2" fill="none" stroke="#ffc53d" stroke-dasharray="3 2"/>
+  <text x="62" y="649" class="detail"><tspan fill="#ededed" font-weight="550">Never sent to DarkSol:</tspan> the merchant's wallet address, wallet signatures, or note spending keys.</text>
+</svg>
