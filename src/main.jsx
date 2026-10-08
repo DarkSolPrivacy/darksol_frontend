@@ -1614,7 +1614,8 @@ function App() {
   if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
   if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={path} paymentId={path.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
   return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
-    : view === 'trace' ? <TracePage key={path} signature={decodeURIComponent(path.split('/')[2] || '')} onTrace={(signature) => navigate(`/trace/${signature}`)} />
+    // Not decoded: a hash is plain base58, and a malformed escape would throw. TracePage parses it before any request.
+    : view === 'trace' ? <TracePage key={path} signature={path.split('/')[2] || ''} onTrace={(signature) => navigate(`/trace/${signature}`)} />
     : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
 }
 

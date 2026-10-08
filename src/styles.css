@@ -1531,11 +1531,11 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 
 /* ==========================================================================
    Trace a withdrawal
-   One column of panels; amber marks the key figure and same-amount deposits.
+   One column of panels. The verdict and the public clues come first; amber
+   marks what gives a withdrawal away, above all a same-amount deposit.
    ========================================================================== */
 .app > main > .tracePage { width: min(100%, 880px); margin: 0 auto; padding-bottom: 36px; }
 .traceHeader { padding: 44px 0 22px; text-align: center; }
-.traceHeader p { max-width: 560px; margin: 10px auto 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
 
 .traceSearch { width: min(100%, 640px); margin: 0 auto 28px; }
 .traceSearchRow { display: flex; gap: 8px; }
@@ -1551,64 +1551,80 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
   outline: none;
   transition: border-color .15s;
 }
-.traceSearchRow input::placeholder { color: var(--text-tertiary); }
+.traceSearchRow input::placeholder { color: var(--text-tertiary); font-family: var(--font-ui); }
 .traceSearchRow input:focus { border-color: var(--border-active); }
 .traceSearchRow input[aria-invalid=true] { border-color: var(--negative-line); }
 .traceSearchRow .paymentPrimary { width: auto; flex: none; padding: 0 20px; }
-.traceExample { margin-top: 10px; padding: 0; border: 0; background: none; color: var(--text-tertiary); font-size: 12px; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; }
-.traceExample:hover { color: var(--text-primary); }
+.traceExamples { min-height: 30px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; color: var(--text-tertiary); font-size: 12px; }
+.traceExamples > span { margin-right: 2px; }
+.traceExamples button { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px 0 5px; border: 1px solid var(--border-subtle); border-radius: 13px; background: var(--bg-surface); color: var(--text-secondary); font: 12px var(--font-mono); transition: border-color .15s, color .15s; }
+.traceExamples button:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.traceExamples .traceLogo { width: 16px; height: 16px; border-radius: 4px; }
 .traceLoading { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-secondary); }
 .traceLoading svg { width: 14px; height: 14px; }
 
-.traceSummary { padding: 18px 20px 0; }
-.traceSummaryHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.traceStatus { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
-.traceStatus i { width: 6px; height: 6px; border-radius: 50%; }
-.traceStatus.ready i { background: var(--positive); }
-.traceStatus.pending i { background: var(--accent-muted); }
-.traceStatus.muted { color: var(--text-secondary); }
-.traceStatus.muted i { box-shadow: inset 0 0 0 1px var(--text-tertiary); }
-.traceTarget { display: flex; align-items: center; gap: 2px; color: var(--text-secondary); }
-.traceTarget code { margin-right: 6px; font-size: 12px; }
-.traceTarget > span { margin-right: 12px; font-size: 12px; }
-.traceIconButton { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-tertiary); transition: color .15s, background-color .15s; }
-.traceIconButton:hover { background: var(--bg-hover); color: var(--text-primary); }
-.traceIconButton svg { width: 14px; height: 14px; }
-.traceStatusText { max-width: 640px; margin: 8px 0 0; color: var(--text-secondary); line-height: 1.6; }
-/* Without the figures row the panel's last line needs its own bottom space. */
-.traceSummary > .traceStatusText:last-child, .traceSummary > .traceVerdict:last-child { padding-bottom: 18px; }
-/* The observer's conclusion: a linked withdrawal is a privacy failure, a hidden one is not. */
-.traceVerdict { margin-top: 16px; }
-.traceVerdict h2 { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 500; letter-spacing: -.01em; }
-.traceVerdict h2 i { width: 6px; height: 6px; flex: none; border-radius: 50%; }
-.traceVerdict.linked h2 i { background: var(--negative); }
-.traceVerdict.likely h2 i { background: var(--accent-muted); }
-.traceVerdict.hidden h2 i { background: var(--positive); }
-.traceVerdict.pending h2 i { box-shadow: inset 0 0 0 1px var(--text-tertiary); }
+.traceLogo { width: 22px; height: 22px; flex: none; border-radius: 6px; object-fit: contain; }
+.traceSummary { padding: 18px 20px 20px; }
+.traceMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text-secondary); }
+.traceMeta strong { color: var(--text-primary); font: 500 13px var(--font-mono); }
+.traceMeta time { color: var(--text-tertiary); font-size: 12px; }
+.traceMeta time::before { content: "·"; margin-right: 10px; }
+.traceStatusText { max-width: 640px; margin: 14px 0 0; color: var(--text-secondary); line-height: 1.6; }
+.traceSummary > .traceStatusText:first-child { margin-top: 0; }
+
+.traceVerdict { margin-top: 14px; }
+.traceMeta:empty + .traceVerdict { margin-top: 0; }
+.traceVerdict h2 { font-size: 22px; font-weight: 500; letter-spacing: -.015em; }
+.traceVerdict.linked h2 { color: var(--negative); }
+.traceVerdict.likely h2 { color: var(--accent); }
+.traceVerdict.pending h2 { color: var(--text-secondary); }
 .traceVerdict p { max-width: 640px; margin: 6px 0 0; color: var(--text-secondary); line-height: 1.6; }
 .traceVerdictWallet { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.traceVerdictWallet a { display: inline-flex; align-items: center; gap: 5px; color: var(--text-primary); text-decoration: none; }
-.traceVerdictWallet a code { font-size: 12px; }
-.traceVerdictWallet a svg { width: 12px; height: 12px; color: var(--text-tertiary); }
 .traceVerdictWallet > span { color: var(--text-tertiary); }
-.traceBlocking { margin: 12px 0 0; padding: 0 0 6px; list-style: none; }
-.traceBlocking li { padding: 8px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); line-height: 1.6; }
-.traceBlocking strong, .traceLimits strong { color: var(--text-primary); font-weight: 500; }
-.traceFigures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 18px -20px 0; border-top: 1px solid var(--border-subtle); }
-.traceFigures .metric.key strong { color: var(--accent); }
+.traceSummary a, .traceTable a { width: fit-content; display: inline-flex; align-items: center; gap: 5px; color: var(--text-primary); text-decoration: none; }
+.traceSummary a code, .traceTable a code { font-size: 12px; white-space: nowrap; }
+.traceSummary a svg, .traceTable a svg { width: 12px; height: 12px; flex: none; color: var(--text-tertiary); }
+.traceSummary a:hover svg, .traceTable a:hover svg { color: var(--text-primary); }
+.traceBlocking { margin: 12px 0 0; padding: 0; list-style: none; }
+.traceBlocking li { padding: 8px 0; border-top: 1px solid var(--border-subtle); color: var(--text-secondary); line-height: 1.6; }
+
+/* Public clues: the same-amount deposit as a pair, then the counts. */
+.traceCluesBlock { margin: 18px -20px 0; padding: 16px 20px 0; border-top: 1px solid var(--border-subtle); }
+.traceCluesBlock h3 { margin-bottom: 12px; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+.traceLead { padding: 14px 16px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--accent-tint); }
+.traceLeadFlow { display: grid; grid-template-columns: auto minmax(90px, 1fr) auto; align-items: center; gap: 16px; }
+.traceLeadNode { min-width: 0; display: grid; gap: 4px; }
+.traceLeadNode.end { justify-items: end; text-align: right; }
+.traceLeadNode small, .traceLeadGap small { color: var(--text-tertiary); font-size: 11px; }
+.traceLeadNode > span { color: var(--text-secondary); font-size: 12px; }
+.traceLeadNode > span a { display: inline-flex; }
+.traceLeadGap { display: grid; justify-items: center; gap: 5px; text-align: center; }
+.traceLeadGap strong { color: var(--accent); font: 500 14px var(--font-mono); }
+.traceLeadGap small { color: var(--text-secondary); font: 12px var(--font-mono); }
+.traceLeadGap i { position: relative; width: 100%; height: 1px; background: var(--accent-line); }
+.traceLeadGap i::after { content: ""; position: absolute; top: -3px; right: 0; border: 3.5px solid transparent; border-right: 0; border-left: 6px solid var(--accent); }
+.traceLeadFacts { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--accent-line); list-style: none; color: var(--text-primary); font-size: 12px; }
+.traceLeadFacts li { display: inline-flex; align-items: center; gap: 6px; }
+.traceLeadFacts svg { width: 13px; height: 13px; color: var(--accent); }
+.traceClues { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 0; }
+.traceLead + .traceClues { margin-top: 10px; }
+.traceClues > div { min-width: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-input); cursor: help; }
+.traceClues dt { color: var(--text-tertiary); font-size: 11px; line-height: 1.4; }
+.traceClues dd { margin: 6px 0 0; font: 500 18px var(--font-mono); }
+.traceClues .flag dd { color: var(--accent); }
 
 .traceSection { margin-top: 16px; }
 .panel.traceSection { padding: 18px 20px 20px; }
-.traceSectionHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
-.traceSectionHead p { max-width: 560px; margin: 4px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
-.traceLegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 2px 0 0; padding: 0; list-style: none; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
+.traceSectionHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+.traceSectionHead > span { color: var(--text-tertiary); font: 12px var(--font-mono); }
+.traceLegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
 .traceLegend li { display: inline-flex; align-items: center; gap: 6px; }
 .traceDot { display: inline-block; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; }
 .traceDot.deposit { background: var(--text-secondary); }
 .traceDot.change { box-shadow: inset 0 0 0 1.5px var(--text-tertiary); }
 .traceDot.match { background: var(--accent); box-shadow: none; }
 
-/* The newest notes on a log time axis that ends at the withdrawal. */
+/* Log time axis: the newest transactions before the withdrawal (right end). */
 .traceStrip { position: relative; height: 52px; margin: 22px 6px 4px; }
 .traceStripAxis { position: absolute; top: 18px; right: 0; left: 0; height: 1px; background: var(--border-default); }
 .traceStripTick { position: absolute; top: 12px; width: 1px; height: 13px; background: var(--border-subtle); }
@@ -1620,65 +1636,56 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .traceStrip > .traceDot.match { z-index: 1; }
 
 .traceTable { margin-top: 14px; }
-.traceRow { min-height: 40px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .9fr); align-items: center; gap: 12px; padding: 0 6px; border-top: 1px solid var(--border-subtle); }
+.traceRow { min-height: 40px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, .7fr); align-items: center; gap: 12px; padding: 0 8px; border-top: 1px solid var(--border-subtle); }
+.traceTable.activity .traceRow { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, .8fr); }
+.traceTable.activity .traceRow:first-child { border-top: 0; }
 .traceRow.head { min-height: 32px; border-top: 0; color: var(--text-tertiary); font-size: 11px; }
 .traceRow.match { background: var(--accent-tint); box-shadow: inset 2px 0 var(--accent); }
-.traceRow > :nth-child(n+3) { text-align: right; }
+.traceRow > :last-child { text-align: right; }
 .traceRow code { color: var(--text-secondary); font-size: 12px; }
-.traceRow a { width: fit-content; display: inline-flex; align-items: center; gap: 5px; color: var(--text-primary); text-decoration: none; }
-.traceRow a:hover code { color: var(--text-primary); }
-.traceRow a svg { width: 12px; height: 12px; color: var(--text-tertiary); }
+.traceWhy { color: var(--text-secondary); font-size: 12px; }
+.traceRow.match .traceWhy { color: var(--text-primary); }
 .traceKind { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .traceKind em { color: var(--accent); font-size: 12px; font-style: normal; }
-.traceKind em.muted { color: var(--text-tertiary); }
-.traceKind a code { white-space: nowrap; }
-.traceRule { color: var(--text-secondary); font-size: 12px; }
 .traceMore { margin-top: 14px; }
 .traceMore svg { width: 14px; height: 14px; }
 .traceInlineError { margin: 14px 0 0; }
 
-.traceCallout { margin: 16px 0 4px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-input); box-shadow: inset 2px 0 var(--accent-muted); color: var(--text-primary); line-height: 1.6; }
-.traceLeads { margin: 10px 0 0; }
-.traceLeads > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 16px; padding: 14px 0; border-top: 1px solid var(--border-subtle); }
-.traceLeads dt { padding-top: 2px; color: var(--text-secondary); }
-.traceLeads dd { margin: 0; }
-.traceLeads strong { display: block; font: 500 15px var(--font-mono); }
-.traceLeads dd > p, .traceLeads details p { margin: 6px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
-.traceLeads details { margin-top: 6px; }
-.traceLeads summary { width: fit-content; color: var(--text-tertiary); font-size: 12px; list-style: none; cursor: pointer; text-decoration: underline; text-decoration-color: var(--border-default); text-underline-offset: 3px; }
-.traceLeads summary::-webkit-details-marker { display: none; }
-.traceLeads summary:hover { color: var(--text-secondary); }
+.traceDetails { margin-top: 20px; padding: 0 4px; }
+.traceDetails summary { width: fit-content; color: var(--text-tertiary); font-size: 12px; cursor: pointer; }
+.traceDetails summary:hover { color: var(--text-secondary); }
+.traceDetails dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 14px 0 0; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
+.traceDetails dt { color: var(--text-tertiary); font-size: 11px; }
+.traceDetails dd { margin: 5px 0 0; font: 500 13px var(--font-mono); overflow-wrap: anywhere; }
+.traceDetails dl small { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+.traceDetails h3 { margin-top: 22px; font-size: 13px; }
+.traceDetails ul { margin: 10px 0 0; padding: 0; list-style: none; }
+.traceDetails li { padding: 9px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
+.traceDetails li strong { color: var(--text-primary); font-weight: 500; }
 
-.traceLimits, .traceEvidence { margin-top: 28px; padding: 0 4px; }
-.traceLimits h2, .traceEvidence h2 { font-size: 14px; }
-.traceLimits ul { margin: 10px 0 0; padding: 0; list-style: none; }
-.traceLimits li { padding: 9px 0; border-top: 1px solid var(--border-subtle); color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
-.traceEvidence dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; margin: 12px 0 0; padding-top: 14px; border-top: 1px solid var(--border-subtle); }
-.traceEvidence dt { color: var(--text-tertiary); font-size: 11px; }
-.traceEvidence dd { margin: 5px 0 0; font: 500 13px var(--font-mono); overflow-wrap: anywhere; }
-.traceEvidence small { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
-
-@media (max-width: 900px) {
-  .traceEvidence dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 @media (max-width: 760px) {
   .traceHeader { padding: 28px 0 18px; }
-  .traceSummaryHead { flex-wrap: wrap; }
-  .traceFigures { grid-template-columns: 1fr; }
-  .traceFigures .metric + .metric { border-top: 1px solid var(--border-subtle); border-left: 0; }
-  .traceSectionHead { flex-direction: column; gap: 10px; }
-  .traceLeads > div { grid-template-columns: 1fr; gap: 6px; }
-  .traceEvidence dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .traceClues { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .traceDetails dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
-  /* Type over transaction on the left, time on the right; no note indexes. */
-  .traceRow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind time" "tx time"; gap: 4px 12px; padding: 8px 6px; }
-  .traceRow > :nth-child(1) { grid-area: kind; }
-  .traceRow > :nth-child(2) { grid-area: tx; padding-left: 15px; }
-  .traceRow > :nth-child(3) { display: none; }
-  .traceRow > :nth-child(4) { grid-area: time; }
-  .traceRow.head { grid-template-areas: "kind time"; padding: 0 6px; }
-  .traceRow.head > :nth-child(2) { display: none; }
+  .traceSummary, .panel.traceSection { padding-right: 16px; padding-left: 16px; }
+  .traceCluesBlock { margin-right: -16px; margin-left: -16px; padding-right: 16px; padding-left: 16px; }
+  .traceVerdict h2 { font-size: 19px; }
+  /* The pair stacks: deposit, then the gap, then the withdrawal. */
+  .traceLeadFlow { grid-template-columns: 1fr; gap: 10px; }
+  .traceLeadNode.end { justify-items: start; text-align: left; }
+  .traceLeadGap { justify-items: start; grid-template-columns: auto auto; gap: 10px; }
+  .traceLeadGap i { display: none; }
+  /* Deposit and wallet stacked on the left, reason and time on the right. */
+  .traceRow, .traceTable.activity .traceRow { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "a c" "b d"; gap: 4px 12px; padding: 8px; }
+  .traceRow > :nth-child(1) { grid-area: a; }
+  .traceRow > :nth-child(2) { grid-area: b; }
+  .traceRow > :nth-child(3) { grid-area: c; text-align: right; }
+  .traceRow > :nth-child(4) { grid-area: d; }
+  .traceTable.activity .traceRow { grid-template-areas: "a c" "b c"; }
+  .traceRow.head { display: none; }
+  .traceRow > span:empty { display: none; }
 }
 @media (max-width: 430px) {
   .traceSearchRow { flex-direction: column; }

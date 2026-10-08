@@ -134,15 +134,14 @@
         <ol class="architecture">
           <li><strong>Index</strong><span>DarkSol records every deposit, withdrawal and note in the Privacy Cash and Cloak pools for SOL, USDC and USDT.</span></li>
           <li><strong>Replay and verify</strong><span>Each pool is rebuilt from its first note and checked against the proofs on-chain and the live pool account, so the history a trace relies on matches the chain.</span></li>
-          <li><strong>Trace</strong><span>Paste a withdrawal's signature or Solscan link. The trace lists every note that could have paid for it, then applies the linking rules below to the wallets that deposited them. Paste a deposit instead to see the withdrawals linked to its wallet. A withdrawal from the last few minutes appears after the next indexing cycle.</span></li>
+          <li><strong>Trace</strong><span>Paste a withdrawal's tx hash or Solscan link. The trace lists every note that could have paid for it, then applies the linking rules below to the wallets that deposited them. Paste a deposit instead to see the withdrawals linked to its wallet. A withdrawal from the last few minutes appears after the next indexing cycle.</span></li>
         </ol>
         <h3>Reading a report</h3>
         <dl class="concepts">
-          <div><dt>Verdict</dt><dd><strong>Linked to one wallet</strong> or <strong>Probably linked</strong> when a rule singles out a depositor; <strong>Hidden among N wallets</strong> when several could have paid; <strong>No single wallet could have paid for it</strong> when no depositor had enough left in the pool.</dd></div>
-          <div><dt>Most likely sources</dt><dd>Depositor wallets with enough in the pool to cover the withdrawal, best fit first: an exact balance, then a deposit of exactly this amount, then the most recent depositors.</dd></div>
-          <div><dt>Public clues</dt><dd>What an analyst would compare: the nearest deposit of the same amount, how many deposits match the amount, how common the amount is, and how busy the pool was in the minute before. None of these is proof, and they are never combined into a score.</dd></div>
-          <div><dt>Limits</dt><dd>What the report cannot tell, such as the hidden amount inside each note, or where money held in the pool first came from.</dd></div>
-          <div><dt>Evidence</dt><dd>How the pool history was checked. <strong>Complete evidence</strong> means every possible source is known; <strong>Evidence still being collected</strong> means the figures are bounds, not exact values.</dd></div>
+          <div><dt>Verdict</dt><dd><strong>Linked to one wallet</strong> or <strong>Probably linked</strong> when a rule singles out a depositor; <strong>Likely paid by a deposit N s earlier</strong> when no rule does, but a deposit of the same amount landed within a minute before; <strong>Hidden among N wallets</strong> when several could have paid; <strong>No single wallet could have paid for it</strong> when no depositor had enough left in the pool.</dd></div>
+          <div><dt>Public clues</dt><dd>Shown first: the deposit of the same amount right before the withdrawal, whether anything else happened in that minute and whether the proof was made right after it, then how many deposits match the amount, how busy the pool was in the minute before, and how common the amount is. Amber marks what makes a withdrawal easier to trace. None of these is proof, and they are never combined into a score.</dd></div>
+          <div><dt>Most likely sources</dt><dd>The deposits most likely to have paid, best first: the linked wallet's, the same-amount deposit right before the withdrawal, the other same-amount deposits, then depositor wallets with enough in the pool.</dd></div>
+          <div><dt>How this was checked</dt><dd>Collapsed under the report: how the pool history was verified, and what the report cannot tell, such as the hidden amount inside each note, or where money held in the pool first came from. While evidence is still being collected, the figures are bounds, not exact values.</dd></div>
         </dl>
         <h3>Linking rules</h3>
         <table>
