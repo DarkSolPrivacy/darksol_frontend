@@ -137,13 +137,22 @@ export function PoolSort({ sort, onSort }) {
 }
 
 // `amountValid` shows each pool's fee on the amount; without one, its rates.
-export function PoolPicker({ pools, value, onChange, asset, amountValid, sort, summary, disabled, labelledBy }) {
+// `children` adds rows after the ranked pools.
+export function PoolPicker({ pools, value, onChange, asset, amountValid, sort, summary, disabled, labelledBy, children }) {
   return <fieldset className="paymentPoolPicker" aria-labelledby={labelledBy}><div>{pools.map((item) => <label className={item.reason ? 'unavailable' : value === item.id ? 'selected' : ''} key={item.id}>
     <input type="radio" name="paymentPool" disabled={disabled || Boolean(item.reason)} value={item.id} checked={value === item.id} onChange={() => onChange(item.id)} />
     <img src={LOGOS[item.id].src} alt="" /><span>{item.name}<small>{item.reason || (sort === 'fees'
       ? amountValid && Number.isFinite(item.fee) ? `${format(item.fee, 9)} ${asset} est. fee` : `${format(item.fees.variableRate * 100)}% + ${format(item.fees.fixedAmount)} ${item.fees.fixedToken}`
       : summary.loading ? 'Loading volume…' : item.volume === null ? 'Volume unavailable' : `$${format(item.volume, 0)} volume / 24h`)}</small></span>
-  </label>)}</div></fieldset>
+  </label>)}{children}</div></fieldset>
+}
+
+// A preview of an upcoming pool. It is not in POOLS, so it is never ranked or selectable.
+function SoonPool({ name, logo, note, tooltip }) {
+  return <label className="unavailable soon" data-tooltip={tooltip}>
+    <input type="radio" name="paymentPool" disabled aria-label={`${name}, ${note}. ${tooltip}`} />
+    <img src={logo} alt="" /><span>{name}<small>{note}</small></span>
+  </label>
 }
 
 export const poolHint = (sort, summary, volumeAvailable, feeHint) => sort === 'fees' ? feeHint
@@ -585,7 +594,9 @@ export default function PaymentLinks({ summary, walletSession }) {
         <span className="paymentFieldLabel" id="paymentPoolLabel">Receive through</span>
         <PoolSort sort={sort} onSort={setSort} />
       </div>
-      <PoolPicker pools={pools} value={pool} onChange={setPool} asset={asset} amountValid={amountResult.valid} sort={sort} summary={summary} disabled={busy} labelledBy="paymentPoolLabel" />
+      <PoolPicker pools={pools} value={pool} onChange={setPool} asset={asset} amountValid={amountResult.valid} sort={sort} summary={summary} disabled={busy} labelledBy="paymentPoolLabel">
+        <SoonPool name="Helius Rings" logo="/logos/helius.svg" note="0% fees" tooltip="Soon · only on devnet for now" />
+      </PoolPicker>
       <p className="paymentPoolHint" role="status">{poolHint(sort, summary, volumeAvailable, 'Estimated withdrawal fees. Network and deposit costs are additional.')}</p>
       {error && <p className="paymentError" role="alert">{error}</p>}
       <div className="paymentActions">

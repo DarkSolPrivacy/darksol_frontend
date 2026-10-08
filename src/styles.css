@@ -308,7 +308,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
 }
 
 /* Tooltips on icon actions */
-:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon)[data-tooltip]::after {
+:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon)[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
@@ -328,7 +328,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
   transform: translate(-50%, 3px);
   transition: opacity .12s, transform .12s;
 }
-:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon)[data-tooltip]:is(:hover, :focus-visible)::after { opacity: 1; transform: translate(-50%, 0); }
+:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon)[data-tooltip]:is(:hover, :focus-visible)::after { opacity: 1; transform: translate(-50%, 0); }
 /* An open menu already says what the control does. */
 :is(.shieldControl, .delayControl)[aria-expanded=true][data-tooltip]:is(:hover, :focus-visible)::after { opacity: 0; }
 
