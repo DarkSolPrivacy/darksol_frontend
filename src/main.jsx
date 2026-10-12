@@ -7,6 +7,7 @@ import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rank
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
+import PoolPrivacy from './pool-privacy.jsx'
 import { recordPageView } from './page-views.js'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
@@ -1380,6 +1381,8 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
       <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent-muted)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 1.75 : 1.4} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
 
+    <PoolPrivacy protocol={protocol} range={range} />
+
     <div className="sectionTitle activityTitle"><h2>Behavior inside this window</h2><span>{analytics.flowMethod}</span></div>
     <section className="activityMetrics"><Metric label="Transactions" value={compact(activity.txCount, 0)} /><Metric label="Unique amounts" value={compact(activity.uniqueAmounts, 0)} /><Metric label="1h recent volume" value={formatMetricMoney(activity.recentVolume?.oneHourUsd)} /><Metric label="24h recent volume" value={formatMetricMoney(activity.recentVolume?.twentyFourHoursUsd)} /></section>
     <div className="analyticsRow">
@@ -1388,7 +1391,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     </div>
 
     <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!analytics.recent.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{analytics.recent.slice(0, 7).map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{compact(flow.amount, flow.asset === 'SOL' ? 4 : 2)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div></section>
-    <footer>SQLite analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
+    <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
   </div>
 }
 
