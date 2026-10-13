@@ -1339,6 +1339,8 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .recent .panelHead { padding-bottom: 12px; }
 .recent .panelHead .ghost { height: 30px; font-size: 12px; }
 .recent .empty { height: 220px; }
+.loadMore { display: flex; justify-content: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); }
+.loadMore button:disabled { opacity: .6; cursor: progress; }
 .table { font-size: 12px; }
 .tr { min-height: 42px; display: grid; grid-template-columns: 90px 110px 1fr 1.2fr 1.2fr; align-items: center; padding: 0 18px; border-top: 1px solid var(--border-subtle); }
 .tr.th { min-height: 32px; color: var(--text-tertiary); font-size: 11px; font-weight: 500; }

@@ -133,6 +133,13 @@ const money = (number) => Intl.NumberFormat('en-US', { style: 'currency', curren
 // A token amount at the precision it is paid in: SOL to 5 places, stablecoins to cents unless dust.
 const tokenDigits = (value, asset) => asset === 'SOL' ? 5 : Math.abs(value) < 0.01 ? 4 : 2
 const tokenFigure = (value, asset) => `${compact(value, tokenDigits(value, asset))} ${asset}`
+// Dust (Umbra sees 1-lamport deposits) at its significant digits rather than rounded to 0.
+const flowAmount = (value, asset) => {
+  const size = Math.abs(value || 0)
+  return size > 0 && size < (asset === 'SOL' ? 0.0001 : 0.01)
+    ? Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 }).format(value)
+    : compact(value, tokenDigits(value, asset))
+}
 const short = (value) => value?.length > 12 ? `${value.slice(0, 4)}…${value.slice(-4)}` : value || 'unknown'
 const finite = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null
 const pickNumber = (...values) => values.map(finite).find((value) => value !== null) ?? null
@@ -1328,6 +1335,36 @@ function LiquidityUniverse() {
   </section>
 }
 
+const RECENT_SHOWN = 7
+const MORE_PAGE = 20
+
+// The newest flows from the analytics response, then older pages from
+// /api/activity on demand, each continuing after the last row shown. Rows are
+// merged by id, so a refresh that brings new flows in at the top never repeats one.
+function RecentActivity({ analytics, loading, protocol }) {
+  const [older, setOlder] = useState([])
+  const [more, setMore] = useState('idle') // idle | loading | end | error
+  const seen = new Set()
+  const rows = [...analytics.recent.slice(0, RECENT_SHOWN), ...older].filter(({ id }) => !seen.has(id) && seen.add(id))
+  async function loadMore() {
+    const last = rows.at(-1)
+    if (!last) return
+    setMore('loading')
+    try {
+      const response = await fetch(`/api/activity?protocol=${protocol}&before=${last.timestamp}&beforeId=${encodeURIComponent(last.id)}&limit=${MORE_PAGE}`)
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.detail || 'Activity request failed')
+      // Keep every row on screen, not just the older pages: a refresh can push
+      // a head row past RECENT_SHOWN, and it must not drop out of the list.
+      setOlder([...rows, ...result.flows])
+      setMore(result.flows.length < MORE_PAGE ? 'end' : 'idle')
+    } catch { setMore('error') }
+  }
+  return <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!rows.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{rows.map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{flowAmount(flow.amount, flow.asset)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div>
+    {rows.length >= RECENT_SHOWN && more !== 'end' && <div className="loadMore"><button type="button" className="ghost" onClick={loadMore} disabled={more === 'loading'}>{more === 'loading' ? 'Loading…' : more === 'error' ? 'Could not load, try again' : 'Load more'}</button></div>}
+  </section>
+}
+
 function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLaunchApp }) {
   const poolSizes = usePoolSummary()
   const [range, setRange] = useState('30D')
@@ -1355,9 +1392,6 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const data = useMemo(() => analytics.buckets.map((bucket) => ({ ...bucket, name: bucketLabel(bucket.timestamp, range) })), [analytics.buckets, range])
   const state = analytics.poolState || EMPTY.poolState
   const activity = analytics.activity || EMPTY.activity
-  const meta = PROTOCOLS[protocol]
-  const isBackfilling = analytics.coverage && !analytics.coverage.complete
-  const indexState = loading ? 'Loading' : error ? 'Error' : isBackfilling ? 'Partial' : 'Ready'
   // Muted amber marks one bar per histogram: the most common flow size, and the
   // hour it is now, so the current point in the daily cycle is readable.
   const amountBuckets = activity.amountDistribution || []
@@ -1369,7 +1403,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <header className="analyticsHeader"><h1>Analytics database</h1><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Launch app <ArrowUpRight /></a></div></header>
     <LiquidityUniverse />
     <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}</span></button>)}</div>
-    <section className={`notice ${error ? 'error' : ''}`}>{error && <CircleAlert />}<b className={`indexState ${indexState.toLowerCase()}`}>{indexState}</b><span>{error || `Reading ${meta.name} data from the analytics database`}</span><em>{analytics.indexedAt ? `Indexed ${new Date(analytics.indexedAt * 1000).toLocaleString()}` : 'Run the backend indexer to update'}</em></section>
+    {error && <section className="notice error"><CircleAlert /><b className="indexState error">Error</b><span>{error}</span></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
     <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
@@ -1390,7 +1424,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
       <section className="panel distribution"><div className="panelHead"><div><h2>Time distribution</h2><p>Transactions by UTC hour, current hour marked</p></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={hourBuckets}><XAxis dataKey="hour" tick={{ fill:'#6E6E6E', fontSize:10 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" radius={[2,2,0,0]}>{hourBuckets.map((bucket) => <Cell key={bucket.hour} fill={bucket.hour === utcHour ? 'var(--accent-muted)' : '#4A4A4A'} />)}</Bar></BarChart></ResponsiveContainer></div></section>
     </div>
 
-    <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!analytics.recent.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{analytics.recent.slice(0, 7).map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{compact(flow.amount, flow.asset === 'SOL' ? 4 : 2)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div></section>
+    <RecentActivity key={`${protocol}:${range}`} analytics={analytics} loading={loading} protocol={protocol} />
     <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
   </div>
 }
