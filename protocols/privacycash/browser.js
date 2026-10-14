@@ -1,11 +1,45 @@
 import { Connection, PublicKey } from '@solana/web3.js'
-import { MINTS as REGISTRY_MINTS } from '../addresses.js'
+import { ENDPOINTS, MINTS as REGISTRY_MINTS } from '../addresses.js'
+import { isNoAnswer } from '../shared/network.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
 // Re-exported so bridge.js and the older call sites keep one source.
 export const MINTS = Object.freeze({ USDC: REGISTRY_MINTS.USDC, USDT: REGISTRY_MINTS.USDT })
 const SIGN_IN_MESSAGE = new TextEncoder().encode('Privacy Money account sign in')
 const CIRCUIT_BASE_PATH = '/circuit2/transaction2'
+const RELAYER = new URL(ENDPOINTS.privacycashConfig).origin
+const SUBMITS = { deposit: 'your deposit', withdraw: 'the withdrawal', swap: 'the swap', bridge: 'the bridge transfer' }
+
+// What a relayer request that got no answer means for the payer: a submission
+// may still have landed, a confirmation poll means it was accepted, and a read
+// sent nothing.
+export function relayerFailure(url, method = 'GET') {
+  const submit = method === 'POST' && /^\/(deposit|withdraw|swap|bridge)(?:\/spl)?$/.exec(url.pathname)?.[1]
+  if (submit) return `The connection to the Privacy Cash relayer dropped while it submitted ${SUBMITS[submit]}. It may still have gone through: check your balances before trying again.`
+  if (url.pathname.startsWith('/utxos/check/')) return 'Privacy Cash accepted the transaction, but the connection dropped while confirming it. It most likely went through: check your balances before trying again.'
+  const step = url.pathname.startsWith('/utxos') ? 'reading your shielded notes' : url.pathname.startsWith('/merkle') ? 'reading the pool state' : url.pathname === '/config' ? 'reading its fees' : 'contacting it'
+  return `Could not reach the Privacy Cash relayer (${url.host}) while ${step}, so nothing was sent at that step.`
+}
+
+// The SDK calls the relayer with bare fetches, so a dropped connection reaches
+// the page as the browser's "Failed to fetch". Installed once when this adapter
+// loads, under captureWithdrawal's own swap of fetch, which restores it.
+export function labelRelayerFailures(target = globalThis) {
+  const fetch = target.fetch
+  if (typeof fetch !== 'function' || fetch.labelsRelayer) return
+  const labelled = async (input, init) => {
+    try { return await fetch(input, init) } catch (error) {
+      if (!isNoAnswer(error)) throw error
+      let url
+      try { url = new URL(String(input?.url ?? input), target.location?.href) } catch { throw error }
+      if (url.origin !== RELAYER) throw error
+      throw new Error(relayerFailure(url, String(init?.method ?? input?.method ?? 'GET').toUpperCase()), { cause: error })
+    }
+  }
+  labelled.labelsRelayer = true
+  target.fetch = labelled
+}
+labelRelayerFailures()
 
 function signatureBytes(value) {
   const signature = value?.signature ?? value

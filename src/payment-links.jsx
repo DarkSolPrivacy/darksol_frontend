@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpDown, Check, ChevronDown, Copy, Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
+import { explainFailure } from '../protocols/shared/network.js'
 import { parseAmount, sanitizeAmount, sanitizeSolanaAddress, validateSolanaAddress } from './transfer-validation.js'
 import { Connection } from '@solana/web3.js'
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts, removePaymentDraft } from './payment-notes.js'
@@ -333,7 +334,7 @@ export default function PaymentLinks({ summary, walletSession }) {
     setError(''); setListError('')
     if (!wallet) {
       try { await connectWallet() }
-      catch (cause) { fail(cause instanceof Error ? cause.message : 'Could not connect wallet') }
+      catch (cause) { fail(cause instanceof Error ? explainFailure(cause.message) : 'Could not connect wallet') }
       return
     }
     const controller = new AbortController()
@@ -342,7 +343,7 @@ export default function PaymentLinks({ summary, walletSession }) {
     try {
       await action(controller.signal)
     } catch (cause) {
-      if (!controller.signal.aborted) fail(cause instanceof Error ? cause.message : 'Could not complete payment request')
+      if (!controller.signal.aborted) fail(cause instanceof Error ? explainFailure(cause.message) : 'Could not complete payment request')
     } finally {
       if (operation.current === controller) {
         operation.current = null
