@@ -18,6 +18,7 @@ import {
   LOGOS as PROTOCOL_LOGOS, PROTOCOLS, PROVIDER_CAPABILITIES, listProtocols, resolveProtocolId,
 } from '../protocols/registry.js'
 import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
+import { explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { DELAY_MINUTES, cancelScheduled, loadScheduled, saveScheduled, scheduleWithdrawal, scheduledStatus } from './scheduled-send.js'
 
@@ -574,7 +575,7 @@ function PrivacyHome({ walletSession }) {
       if (!response.ok) throw new Error(result.detail || result.error || 'Privacy plan failed')
       if (requestId === requestSequence.current) { setComparison(result); setError(''); setDirty(false) }
     } catch (requestError) {
-      if (requestError.name !== 'AbortError' && requestId === requestSequence.current) setError(requestError.message)
+      if (requestError.name !== 'AbortError' && requestId === requestSequence.current) setError(explainFailure(requestError.message))
     } finally {
       if (requestId === requestSequence.current) setLoading(false)
     }
@@ -662,7 +663,7 @@ function PrivacyHome({ walletSession }) {
   async function connectWallet() {
     setSendError('')
     try { await connectSession() }
-    catch (error) { setSendError(error instanceof Error ? error.message : String(error)) }
+    catch (error) { setSendError(explainFailure(error instanceof Error ? error.message : String(error))) }
   }
 
   // A recipient holding too little SOL to move what it receives is offered SOL
@@ -777,7 +778,7 @@ function PrivacyHome({ walletSession }) {
     } catch (transferError) {
       if (transferError?.receipt) setReceipt(transferError.receipt)
       const message = transferError instanceof Error ? transferError.message : String(transferError)
-      setSendError(/403|access forbidden/i.test(message) ? 'Solana RPC access was denied. Check the server RPC configuration.' : message); setSendStatus('')
+      setSendError(explainFailure(message)); setSendStatus('')
     } finally { setSending(false) }
   }
 
@@ -791,7 +792,7 @@ function PrivacyHome({ walletSession }) {
       const result = await sendScheduledNow({ provider: wallet.provider, job: scheduled, onStatus: setSendStatus })
       setScheduled((job) => ({ ...job, status: 'sent', signature: result.tx || undefined }))
     } catch (deliveryError) {
-      setSendError(deliveryError instanceof Error ? deliveryError.message : String(deliveryError))
+      setSendError(explainFailure(deliveryError instanceof Error ? deliveryError.message : String(deliveryError)))
     } finally { setSending(false); setSendStatus('') }
   }
 

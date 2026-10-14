@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   FALLBACK_EXAMPLES, LINK_RULES, amountLead, amountMatches, candidateReason, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount, formatCount,
-  formatSpan, groupCandidates, parseSignature, pickExamples, poolName, reasonText, REASON_TITLES, signatureOfEvent, slotSpan, sourceRows,
+  formatSpan, groupCandidates, historyBehind, parseSignature, pickExamples, poolName, reasonText, REASON_TITLES, signatureOfEvent, slotSpan, sourceRows,
   traceVerdict,
 } from '../src/traceability.js'
 
@@ -99,6 +99,30 @@ test('the verdict prefers a rule, then the same-amount lead, over a large anonym
   assert.equal(traceVerdict({ linkage: { status: 'not_computed' } }).tone, 'pending')
   assert.equal(traceVerdict(report(null)).tone, 'likely', 'the lead holds without a linker')
   assert.equal(traceVerdict({ observations: [] }), null)
+})
+
+// The USDC withdrawal 635gCxWR on 2026-10-14: its 97,500 leaves sat past a 2-leaf hole at 97,492.
+test('a withdrawal the stored history has not reached is fresh or waiting, not missing', () => {
+  const landed = 1_791_975_000
+  const behind = (blockTime) => ({
+    status: 'incomplete', target: { protocol: 'privacycash', blockTime: blockTime === null ? null : String(blockTime) },
+    coverage: { eventHistory: { requiredLeaves: '97500', contiguousLeaves: '97492' }, rootReconstruction: { replayedLeaves: '97492' } },
+    linkage: { status: 'not_computed' },
+  })
+  assert.deepEqual(historyBehind(behind(landed), landed + 180), { transactions: 4, age: 180, fresh: true })
+  assert.deepEqual(traceVerdict(behind(landed), landed + 180),
+    { tone: 'pending', title: 'Fresh withdrawal, still being processed', text: 'It landed 3 min ago, and the pool history is still being replayed up to it. Check back in a few minutes.' })
+  assert.deepEqual([traceVerdict(behind(landed), landed + 3600).title, traceVerdict(behind(landed), landed + 3600).text],
+    ['Not traced yet', 'The stored pool history stops about 4 transactions before this withdrawal. It can be traced once that history is filled in.'])
+  assert.equal(historyBehind(behind(null)).fresh, false, 'no block time (an older backend) never claims fresh')
+  const replayOnly = behind(landed)
+  replayOnly.coverage.eventHistory.contiguousLeaves = '97500'
+  assert.equal(historyBehind(replayOnly, landed).transactions, 4, 'the replay lagging alone counts too')
+  const reached = behind(landed)
+  reached.coverage = { eventHistory: { requiredLeaves: '97488', contiguousLeaves: '97492' }, rootReconstruction: { replayedLeaves: '97492' } }
+  assert.equal(historyBehind(reached), null)
+  assert.equal(traceVerdict(reached).title, 'Not linked yet')
+  assert.equal(historyBehind({ ...behind(landed), status: 'ready' }), null)
 })
 
 test('clue tiles flag what gives the withdrawal away', () => {

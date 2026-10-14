@@ -226,9 +226,10 @@ export function candidateReason(entry, linked) {
  * What an observer concludes about a withdrawal, or null for a deposit or a
  * report with nothing to conclude. A rule's link comes first; without one, a
  * same-amount deposit seconds before is what an observer would bet on, even
- * when its round amount keeps every rule from naming a wallet.
+ * when its round amount keeps every rule from naming a wallet. A withdrawal
+ * the stored history has not reached says whether it is fresh or waiting on it.
  */
-export function traceVerdict(report) {
+export function traceVerdict(report, now = Date.now() / 1000) {
   const linkage = report?.linkage ?? null
   if (linkage?.status === 'deposit') return null
   if (linkage?.status === 'linked') {
@@ -243,8 +244,36 @@ export function traceVerdict(report) {
   if (linkage?.status === 'unexplained') {
     return { tone: 'hidden', title: 'No single wallet could have paid for it', text: 'No depositor had enough left in the pool, so the money may come from deposits made for someone else.' }
   }
+  const behind = historyBehind(report, now)
+  if (behind) {
+    return behind.fresh
+      ? { tone: 'pending', title: 'Fresh withdrawal, still being processed', text: `It landed ${formatSpan(behind.age)} ago, and the pool history is still being replayed up to it. Check back in a few minutes.` }
+      : { tone: 'pending', title: 'Not traced yet', text: `The stored pool history stops about ${formatCount(behind.transactions)} transaction${behind.transactions === 1 ? '' : 's'} before this withdrawal. It can be traced once that history is filled in.` }
+  }
   if (linkage?.status === 'not_computed') return { tone: 'pending', title: 'Not linked yet', text: 'Linking has not reached this transaction. It appears after the next indexing cycle.' }
   return null
+}
+
+// A withdrawal this recent is still inside the normal indexing delay.
+const FRESH_SECONDS = 15 * 60
+// Reasons that only say the pool history has not reached the target yet; the
+// verdict says it once instead.
+export const BEHIND_REASONS = new Set(['REPLAY_BEHIND_TARGET', 'HISTORY_GAP', 'CANDIDATE_PROVENANCE_MISSING'])
+
+/**
+ * How far the stored pool history falls short of a target, or null when it
+ * reaches it. `transactions` counts two leaves per transaction; `fresh` is a
+ * target that landed within the normal indexing delay (`age` in seconds).
+ */
+export function historyBehind(report, now = Date.now() / 1000) {
+  const required = report?.coverage?.eventHistory?.requiredLeaves
+  if (report?.status !== 'incomplete' || required == null) return null
+  const reached = [report.coverage.eventHistory.contiguousLeaves, report.coverage.rootReconstruction?.replayedLeaves]
+    .filter((value) => value != null).map(BigInt)
+  const missing = BigInt(required) - reached.reduce((low, value) => value < low ? value : low, BigInt(required))
+  if (missing <= 0n) return null
+  const age = report.target?.blockTime == null ? null : Math.max(0, now - Number(report.target.blockTime))
+  return { transactions: Number((missing + 1n) / 2n), age, fresh: age !== null && age < FRESH_SECONDS }
 }
 
 /** The report's same-amount deposits (`related`) by signature: their slot and depositor wallet. */
