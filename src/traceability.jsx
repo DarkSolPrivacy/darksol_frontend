@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, ArrowUpRight, Check, LoaderCircle } from 'lucide-react'
 import { LOGOS } from '../protocols/registry.js'
 import {
-  CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountLead, amountMatches, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
-  formatCount, formatSpan, groupCandidates, observationsById, parseSignature, pickExamples, poolName, reasonText, shortSignature, slotSpan,
+  BEHIND_REASONS, CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountLead, amountMatches, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
+  formatCount, formatSpan, groupCandidates, historyBehind, observationsById, parseSignature, pickExamples, poolName, reasonText, shortSignature, slotSpan,
   sourceRows, traceVerdict,
 } from './traceability.js'
 
@@ -65,7 +65,7 @@ function Meta({ report, deposit }) {
   const asset = report.deployment?.asset ?? null
   const amounts = report.target.amounts ?? null
   const kind = deposit ? 'Deposit' : { withdraw: 'Withdrawal', swap: 'Swap' }[report.target.direction]
-  const blockTime = report.linkage?.blockTime
+  const blockTime = report.target.blockTime ?? report.linkage?.blockTime
   if (!kind && !LOGOS[report.target.protocol]) return null
   return <div className="traceMeta">
     <PoolLogo protocol={report.target.protocol} name={poolName(report)} />
@@ -288,7 +288,10 @@ function Report({ report, signature }) {
   // A deposit is refused as a withdrawal target, but its wallet's links are shown instead.
   const deposit = linkage?.status === 'deposit'
   // The status line already says a transaction is not indexed.
-  const blocking = report.reasons.filter(({ code }) => !DISCLOSURES.has(code) && code !== 'TARGET_NOT_INDEXED' && !(deposit && code === 'TARGET_NOT_WITHDRAWAL'))
+  // The verdict already says when the history has not reached it.
+  const behind = Boolean(historyBehind(report))
+  const blocking = report.reasons.filter(({ code }) => !DISCLOSURES.has(code) && code !== 'TARGET_NOT_INDEXED' && !(deposit && code === 'TARGET_NOT_WITHDRAWAL')
+    && !(behind && BEHIND_REASONS.has(code)))
   const verdict = traceVerdict(report)
   const lead = amountLead(report)
   const traced = Boolean(report.candidates)
