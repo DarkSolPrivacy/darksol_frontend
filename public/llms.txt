@@ -1,0 +1,45 @@
+# DarkSol
+
+> DarkSol is a private-transfer app for Solana mainnet. It compares the available privacy pools (Privacy Cash, Cloak and Umbra) using live pool activity, routes your SOL, USDC or USDT transfer through the one most likely to keep you private, and lets you test that privacy yourself with a public-data trace tool. Your wallet approves every transaction that moves funds; the chosen pool protocol holds the shielded funds, not DarkSol.
+
+DarkSol does not run its own pool. It is a routing and analysis layer on top of existing Solana privacy protocols. Its main differences from using a pool directly:
+
+- It picks the pool for you, based on measured anonymity rather than guesswork, and refuses to send when a transfer would not be private (for example, an amount larger than the pool).
+- It shows why a route scored the way it did: pool size compared with your amount, recent activity, similar-size flows, timing spread, and how unusual your amount is.
+- It attacks its own privacy claims: the Trace page runs the same analysis a chain analyst would on any withdrawal, using only public on-chain data.
+
+## Features
+
+- [Private transfer](https://darksol.app/): Send SOL, USDC or USDT through a privacy pool to one or more recipients. Optional swap to another token on delivery, bridging to Ethereum, BNB Chain, Base, Polygon or Bitcoin (via Privacy Cash, minimum about 0.05 SOL), and delayed delivery within 10, 20 or 30 minutes. Funds can also be kept shielded in the pool and spent later.
+- [Payment links](https://darksol.app/payment-links): Private invoices. The payer deposits straight into a privacy pool, and only the creator's wallet can collect the funds, to any address. The link does not reveal the creator's wallet address. Works with Privacy Cash and Cloak.
+- [Trace](https://darksol.app/trace): Paste a withdrawal's transaction hash or Solscan link and see which depositor wallets could have paid for it, whether a known linking pattern singles one out, and which public clues make it easier to trace.
+- [Analytics](https://darksol.app/analytics): Pool balances, recent flows, and pool-wide privacy statistics, such as how many withdrawals were linked to a wallet and by which rule.
+
+## How privacy is measured
+
+- The route privacy estimate is a score from 0 to 100. It is an estimate, not a guarantee.
+- The red team indexes every deposit, withdrawal and note in the Privacy Cash and Cloak pools, and rebuilds each pool from its first note, checked against on-chain proofs and the live pool account.
+- Linking rules it checks: withdrawal signed by the depositor's own wallet; money paid back to the depositing wallet; only one wallet had enough left in the pool; the withdrawal emptied one wallet exactly; a unique matching amount; a pair of withdrawals that together emptied one wallet; a proof made right after a same-amount deposit.
+- Stated limits: amounts inside notes are hidden; spent notes cannot be identified; only the last hop is analysed. A suspected link is an inference, not proof of ownership, and finding no link does not prove anonymity.
+
+## What DarkSol can and cannot see
+
+- Route planning receives only the token, the amount and how it is split between recipients. Wallet and recipient addresses are not sent for planning.
+- The payment-link service stores an anonymous merchant ID, invoice terms, note commitments, encrypted notes and payment status. It never receives the creator's wallet address, wallet signatures, note spending keys, or collection destinations. Spending keys are derived in the browser from a wallet signature.
+- For delayed delivery, DarkSol's server holds the prepared withdrawal until it is sent. The recipient and amount are fixed inside it, so it can only be delivered or dropped, never redirected.
+- Deposits and withdrawals are public Solana transactions, as with any privacy pool.
+
+## Fees
+
+Each pool charges its own withdrawal fee, shown as the estimated fee before you send. The sender's wallet also pays the Solana network fee for the deposit. On Privacy Cash and Cloak, the pool's relayer submits the withdrawal and pays its network fee.
+
+## Docs
+
+- [Documentation](https://darksol.app/docs/): Full explanation of private transfers, payment links, the red team, core concepts and architecture.
+- [Private transfers](https://darksol.app/docs/#private-transfers)
+- [Payment links](https://darksol.app/docs/#payment-links)
+- [Red team](https://darksol.app/docs/#red-team)
+
+## Optional
+
+- [X / Twitter](https://x.com/DarkSolapp): Announcements.
