@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { outsideSummary, privacyTiles, ruleRows, share } from '../src/pool-privacy.js'
+import { comparisonCard, outsideSummary, privacyTiles, ruleRows, share, tracedShare } from '../src/pool-privacy.js'
 
 // A day of /api/pool-privacy (backend docs/POOL_PRIVACY.md).
 const STATS = {
@@ -23,15 +23,25 @@ test('a share is a percentage with sensible precision, and a dash over nothing',
   assert.equal(share(3, 0), '—')
 })
 
-test('the headline tiles read the 1:1, linked, lone and anonymity-set counts', () => {
+test('the headline tiles read the strongest-candidate, same-amount, lone and anonymity-set counts', () => {
   assert.deepEqual(privacyTiles(STATS).map(({ label, value, note }) => [label, value, note]), [
-    ['1:1 withdrawals', '10%', '61 of 590 · 22 fractional'],
-    ['Linked to a wallet', '13%', '70 strong · 5 likely'],
-    ['Alone in their minute', '8.1%', '48 withdrawals'],
-    ['Median anonymity set', '1,240', 'wallets that could have paid'],
+    ['Strongest candidate found', '12%', '70 of 580'],
+    ['Same amount just before', '10%', '61 of 590'],
+    ['Only deposit that minute', '8.1%', '48 of 590'],
+    ['Wallets that could have paid', '1,240', 'for a typical withdrawal'],
   ])
-  const unlinked = privacyTiles({ ...STATS, linker: { ...STATS.linker, checked: 0, strong: 0, likely: 0, candidates: { median: null, buckets: {} } } })
-  assert.deepEqual(unlinked.slice(1).map(({ value, note }) => [value, note]), [['—', 'Not linked yet'], ['8.1%', '48 withdrawals'], ['—', 'wallets that could have paid']])
+  const unchecked = privacyTiles({ ...STATS, linker: { ...STATS.linker, checked: 0, strong: 0, likely: 0, candidates: { median: null, buckets: {} } } })
+  assert.deepEqual([0, 3].map((index) => [unchecked[index].value, unchecked[index].note]), [['—', 'Not checked yet'], ['—', 'for a typical withdrawal']])
+})
+
+test('the comparison card leads with the share that has a strongest candidate', () => {
+  assert.equal(tracedShare(STATS), '12%')
+  assert.deepEqual([tracedShare(null), tracedShare({ linker: { checked: 0, strong: 0 } })], [null, null])
+  const card = comparisonCard(STATS)
+  assert.deepEqual({ ...card, percent: Math.round(card.percent) }, { traced: '12%', percent: 12, exposure: 'medium', crowd: '1,240', sameAmount: '10%', withdrawals: '590' })
+  assert.equal(comparisonCard({ ...STATS, linker: { ...STATS.linker, strong: 5 } }).exposure, 'low')
+  assert.equal(comparisonCard({ ...STATS, linker: { ...STATS.linker, strong: 300 } }).exposure, 'high')
+  assert.equal(comparisonCard(undefined), null)
 })
 
 test('rules are listed largest first, empty ones dropped, the unexplained last', () => {
@@ -43,7 +53,7 @@ test('rules are listed largest first, empty ones dropped, the unexplained last',
 test('the outside scan reads as a share of checked recipients, with only the non-empty parts', () => {
   const summary = outsideSummary(STATS.outside24h)
   assert.equal(summary.value, '5.6%')
-  assert.equal(summary.note, '23 of 410 checked recipients met a deposit wallet')
+  assert.equal(summary.note, '23 of 410 recipients paid or were paid by a deposit wallet')
   assert.deepEqual(summary.parts.map(({ key }) => key), ['linked', 'clean', 'busy', 'self', 'shared', 'pending'])
   const empty = outsideSummary({ withdrawals: 3, checked: 0, linked: 0, shared: 0, clean: 0, busy: 0, self: 0, pending: 3 })
   assert.deepEqual([empty.value, empty.note, empty.parts.map(({ key }) => key)], ['—', 'No recipient checked yet', ['pending']])

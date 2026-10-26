@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rankPools, shieldToSelf, uncollectedTotals } from './payment-links.jsx'
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
-import PoolPrivacy from './pool-privacy.jsx'
+import PoolPrivacy, { PoolComparison, useMonthlyPrivacy } from './pool-privacy.jsx'
+import { PRIVACY_POOLS, tracedShare } from './pool-privacy.js'
 import { recordPageView } from './page-views.js'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
@@ -31,6 +32,8 @@ const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipie
 const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
 const sourceName = (source) => source === 'links' ? 'Payment links' : PROTOCOLS[source]?.name || source
+// A pool as people know it ("Privacy Cash", "Cloak"), not its manifest id.
+const poolLabel = (id) => POOLS.find((pool) => pool.id === id)?.name ?? PROTOCOLS[id]?.name ?? id
 // The last shielded reading per wallet address, shared by the wallet panel and
 // the send form, so either shows it at once while a fresh read runs underneath.
 const shieldedCache = new Map()
@@ -388,43 +391,84 @@ function PlanCard({ estimate, asset, strategy, targetLabel, targetScore, selecte
   </article>
 }
 
-function RouteDetails({ estimate, alternatives, asset, amount, targetLabel, open, onToggle }) {
-  const metrics = estimate.poolMetrics || {}
+// The best route in one line under the form: pool, privacy, fee and timing.
+function RouteSummary({ estimate, asset, delayMinutes, stale }) {
   const fee = feeDisplay(estimate.fee || estimate.estimatedFee, asset)
-  const targetWait = estimate.recommendedWait ?? estimate.estimatedTimeToTarget
-  const rivals = alternatives.filter((item) => item.available && finite(item.score) !== null)
-  const runnerUp = rivals.reduce((best, item) => !best || item.score > best.score ? item : best, null)
-  const margin = runnerUp && finite(estimate.score) !== null ? estimate.score - runnerUp.score : null
+  return <div className={`routeSummary${stale ? ' stale' : ''}`} aria-label="Best route">
+    <span className="routeSummaryPool"><ProtocolLogo protocol={estimate.protocol} name={poolLabel(estimate.protocol)} /><b>{poolLabel(estimate.protocol)}</b></span>
+    <span className={`routeSummaryPrivacy ${bandClass(estimate.band)}`}><ShieldCheck />{bandLabel(estimate.band)} privacy</span>
+    {fee.primary !== 'Unavailable' && <span><BadgePercent />{fee.primary} fee</span>}
+    <span><Clock3 />{delayMinutes ? `Arrives within ${delayMinutes} min` : 'Sends right away'}</span>
+  </div>
+}
+
+// The number in a planner message ("9,145 notes make up the set…"), for the
+// explanations whose figure the estimate does not carry on its own.
+const messageNumber = (entry) => finite(String(explanationText(entry) ?? '').match(/[\d,]+(?:\.\d+)?/)?.[0]?.replaceAll(',', ''))
+
+/**
+ * The planner's explanations as short plain sentences, from the estimate's own
+ * figures where it has them. Timing comes from the delay chosen here, which the
+ * planner is not told about. One the page has no wording for keeps the planner's text.
+ */
+function plainReasons(estimate, delayMinutes) {
+  const reasons = []
+  for (const entry of estimate.explanations) {
+    const metric = entry?.metric
+    const negative = entry?.impact === 'negative'
+    const similar = finite(estimate.similarFlowCount)
+    const times = finite(estimate.poolShare) ? 1 / estimate.poolShare : null
+    if (metric === 'no cover') reasons.push({ tone: 'negative', text: 'The pool holds less than you are sending, so the withdrawal can be matched to your deposit' })
+    else if (metric === 'anonymity set') {
+      const notes = messageNumber(entry)
+      if (notes !== null) reasons.push({ tone: negative ? 'negative' : 'positive', text: negative ? `Only ${compact(notes, 0)} notes in the pool to hide among` : `Hidden among ${compact(notes, 0)} notes in the pool` })
+    } else if (metric === 'pool depth' && times !== null) {
+      reasons.push(times >= 10 ? { tone: negative ? 'negative' : 'positive', text: `The pool is ${compact(times, 0)}× bigger than your transfer` }
+        : { tone: 'negative', text: `Your transfer is ${formatPercent(estimate.poolShare)} of the pool, so it stands out` })
+    } else if (metric === 'relevant cover') {
+      // Pool depth already says the pool dwarfs the transfer; only a lack of traffic adds something.
+      if (negative) reasons.push({ tone: 'negative', text: 'Little recent traffic in the pool to blend into' })
+    } else if (metric === 'similar-size flows' && similar !== null) {
+      reasons.push(similar === 0 ? { tone: 'negative', text: 'No recent transfers of this size, so yours stands out' }
+        : { tone: negative ? 'negative' : 'positive', text: `${compact(similar, 0)} recent transfers of a similar size hide yours` })
+    } else if (metric === 'time separation') {
+      reasons.push(delayMinutes ? { tone: 'positive', text: `Arrives up to ${delayMinutes} min after your deposit, so timing is harder to match` }
+        : { tone: 'negative', text: 'Sent right away, so its timing can point back to your deposit', delay: true })
+    } else if (metric !== 'swap activity' && explanationText(entry)) reasons.push({ tone: negative ? 'negative' : 'neutral', text: explanationText(entry) })
+  }
+  return reasons
+}
+
+function RouteDetails({ estimate, alternatives, asset, amount, delayMinutes, onDelay, open, onToggle }) {
   const planAmount = finite(amount)
-  const leadReason = !runnerUp
-    ? 'Only pool able to route this transfer right now'
-    : margin > 0 ? `${compact(margin, 1)} points ahead of ${runnerUp.protocolName} (${scoreText(runnerUp.score)})`
-    : `Level with ${runnerUp.protocolName} on score, ahead on pool depth`
+  const reasons = plainReasons(estimate, delayMinutes)
+  // Every pool scored for this transfer, the chosen one first.
+  const pools = [estimate, ...alternatives]
   return <section className={`routeDetails ${open ? 'open' : ''}`}>
     <button type="button" className="routeDetailsToggle" aria-expanded={open} onClick={onToggle}>Details <ChevronDown /></button>
     {open && <div className="routeDetailsBody panel">
       <div className="routeDetailsHead">
-        <h3>{estimate.protocolName} ranks first{planAmount === null ? '' : ` for ${compact(planAmount, 6)} ${asset}`}</h3>
-        <div className={`privacy ${bandClass(estimate.band)}`}><span>Estimated privacy</span><strong>{bandLabel(estimate.band)}</strong><em>{scoreText(estimate.score)}</em></div>
+        <h3>Why {poolLabel(estimate.protocol)}{planAmount === null ? '' : ` for ${compact(planAmount, 6)} ${asset}`}</h3>
+        <div className={`privacy ${bandClass(estimate.band)}`}><strong>{bandLabel(estimate.band)}</strong><em>{scoreText(estimate.score)}</em></div>
       </div>
-      <ul className="routeReasons">
-        <li className={margin > 0 || !runnerUp ? 'positive' : 'neutral'}><i>{margin > 0 || !runnerUp ? '+' : '='}</i><span>{leadReason}</span></li>
-        {estimate.explanations.map((entry, index) => { const text = explanationText(entry); const tone = explanationTone(entry, text); return <li className={tone} key={index}><i>{tone === 'negative' || tone === 'risk' ? '−' : '+'}</i><span>{text}</span></li> })}
-      </ul>
-      <dl className="routeFacts">
-        <div><dt>Pool TVL</dt><dd>{formatMetricMoney(metrics.tvl)}</dd></div>
-        <div><dt>Your pool share</dt><dd>{formatPercent(estimate.poolShare)}</dd></div>
-        <div><dt>Similar-size flows</dt><dd>{finite(estimate.similarFlowCount) === null ? 'Unavailable' : compact(estimate.similarFlowCount, 0)}</dd></div>
-        <div><dt>{targetLabel} wait</dt><dd>{formatDuration(targetWait)}</dd></div>
-        <div><dt>Estimated fee</dt><dd>{fee.primary}</dd></div>
-      </dl>
+      <div className="routeCompare" aria-label="Privacy score per pool">
+        {pools.map((item) => <div className={item === estimate ? 'chosen' : ''} key={item.protocol}>
+          <ProtocolLogo protocol={item.protocol} name={poolLabel(item.protocol)} /><span>{poolLabel(item.protocol)}</span>
+          {item.available && finite(item.score) !== null
+            ? <><i className={bandClass(item.band)}><b style={{ width: `${Math.max(2, Math.min(100, item.score))}%` }} /></i><strong>{Math.round(item.score)}</strong></>
+            : <small>{item.unavailableReason || 'Not available for this transfer'}</small>}
+        </div>)}
+      </div>
+      {reasons.length > 0 && <ul className="routeReasons">
+        {reasons.map((reason) => <li className={reason.tone} key={reason.text}>{reason.tone === 'negative' ? <CircleAlert /> : <Check />}<span>{reason.text}</span>
+          {reason.delay && onDelay && <button type="button" className="ghost" onClick={onDelay}><Clock3 />Add delay</button>}</li>)}
+      </ul>}
       {estimate.settlement && <details className="settlement">
         <summary>Where the fees go <ChevronDown /></summary>
         <div className="settlementOutput"><span>Recipient receives</span><b>≈ {tokenFigure(estimate.settlement.output.amount, estimate.settlement.output.asset)}{finite(estimate.settlement.output.usd) !== null && <small>{money(estimate.settlement.output.usd)}</small>}</b></div>
         {estimate.settlement.extra && <div className="settlementOutput"><span>Plus SOL for fees</span><b>≈ {tokenFigure(estimate.settlement.extra.amount, 'SOL')}{finite(estimate.settlement.extra.usd) !== null && <small>{money(estimate.settlement.extra.usd)}</small>}</b></div>}
         {estimate.settlement.fees.map((item, index) => <div key={index}><span>{item.label}</span><em>{item.to}{item.fromWallet ? ' · from wallet SOL' : ''}</em><b>{tokenFigure(item.amount, item.asset)}{finite(item.usd) !== null && <small>{item.usd > 0 && item.usd < 0.005 ? '<$0.01' : money(item.usd)}</small>}</b></div>)}
       </details>}
-      {alternatives.length > 0 && <div className="routeAlternatives"><p>Compared against</p>{alternatives.map((item) => <div key={item.protocol}><ProtocolLogo protocol={item.protocol} name={item.protocolName} /><span>{item.protocolName}</span>{item.available ? <b>{scoreText(item.score)} <small>{bandLabel(item.band)}</small></b> : <small className="routeUnavailable">{item.unavailableReason || 'Unavailable for this transfer'}</small>}</div>)}</div>}
       <p className="estimateDisclaimer">This is an estimate, not a guarantee of anonymity.</p>
     </div>}
   </section>
@@ -840,6 +884,16 @@ function PrivacyHome({ walletSession }) {
   const scheduledBlocks = Boolean(scheduled) && scheduled.status !== 'sent' && scheduled.protocol === recommended?.protocol
     && (scheduled.asset === asset || (isSwap && scheduled.asset === destinationAsset))
   const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : payingShielded ? 'Send from shielded' : shieldOnly ? 'Shield' : 'Send'
+  // The button names what happens and through which pool: "Send 100 USDC via Privacy Cash".
+  const plainSend = !isSwap && !isBridge && (activeShield === 'off' || keeping) && sentAmount
+  const actionLabel = !recommended ? actionVerb
+    : plainSend ? `Send ${sentAmount} ${asset} via ${poolLabel(recommended.protocol)}` : `${actionVerb} via ${poolLabel(recommended.protocol)}`
+  // Only a plain send to one recipient can be delayed; Details offers it when the timing is the weak point.
+  const canDelay = !isSwap && !isBridge && receiverCount === 1 && !payingShielded && !shieldOnly
+  function openDelay() {
+    setShieldMenuOpen(false); setDelayMenuOpen(true)
+    document.querySelector('.delayControl')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
   const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : shieldOnly ? 'Shielding...' : 'Sending...'
   // A payment from the shielded balance has no deposit signature, only withdrawals.
   const submitted = Boolean(receipt?.depositSignature || receipt?.withdrawals?.length)
@@ -861,7 +915,7 @@ function PrivacyHome({ walletSession }) {
   ]
 
   return <div className="homePage">
-    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1></header>
+    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1><TracedLine /></header>
     <section className="sendCard panel">
       <div className={`amountRow${payingShielded ? ' fromShielded' : ''}`}>
         <span className="amountUsd">{usdText(amount, prices[asset])}</span>
@@ -935,15 +989,16 @@ function PrivacyHome({ walletSession }) {
       {shieldedSplit && shieldedSplit.withdrawals > receiverCount && <div className="keepSummary">
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
+      {recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       <div className="sendAction">
-        <div className="bestRoute">{recommended ? <ProtocolLogo protocol={recommended.protocol} name={recommended.protocolName} /> : <span className="routePlaceholder" />}</div>
         <div className="actionArea">{revealFirst
           ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
-          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : payingShielded && shieldedReading ? 'Reading shielded balance…' : loading ? 'Finding route...' : submitted ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionVerb} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
+          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : payingShielded && shieldedReading ? 'Reading shielded balance…' : loading ? 'Finding route...' : submitted ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
       </div>
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
-    {recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} targetLabel={selectedTarget.label} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
+    {recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}
+      onDelay={canDelay ? openDelay : null} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : receipt?.shielded ? `${receipt.shielded} ${receipt.viaLinks ? 'shielded · collect it from Payment links' : 'is now in your private balance'}` : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded`
         : !receipt?.depositSignature && receipt?.withdrawals?.length > 1 ? `Transfer complete · sent in ${receipt.withdrawals.length} private withdrawals` : 'Transfer complete')}{!sendError && receipt?.gas && ` · ${receipt.gasText} for fees sent`}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
     {receipt?.gasError && <section className="notice error"><CircleAlert /><span>The SOL for fees was not sent: {receipt.gasError}</span></section>}
@@ -952,7 +1007,20 @@ function PrivacyHome({ walletSession }) {
       {scheduled.status === 'pending' ? <button type="button" onClick={cancelDelivery}>Cancel</button> : scheduled.status !== 'sent' && <button type="button" onClick={deliverNow} disabled={sending}>Send now</button>}
       {scheduled.status !== 'pending' && <button type="button" aria-label="Dismiss" onClick={() => setScheduled(null)} disabled={sending}><X /></button>}</section>}
     <GasDialog offer={gasOffer} />
+    <ul className="trustStrip" aria-label="How DarkSol handles your funds">
+      <li><Wallet />You sign every step</li>
+      <li><ShieldCheck />We never hold your funds</li>
+      <li><BadgePercent />No DarkSol fee</li>
+    </ul>
   </div>
+}
+
+// Why routing matters, with the live share of Privacy Cash withdrawals that
+// have a strongest candidate (GET /api/pool-privacy, last 30 days).
+function TracedLine() {
+  const traced = tracedShare(useMonthlyPrivacy().privacycash)
+  return <p className="homeLead">{traced && <><b>{traced}</b> of Privacy Cash withdrawals point to the wallet that paid for them. </>}
+    DarkSol picks the pool and timing that keep yours hidden.</p>
 }
 
 const GAS_DEFAULT = '0.005'
@@ -1325,12 +1393,12 @@ function LiquidityUniverse() {
   const inflow = included.reduce((sum, pool) => sum + pool.inflow, 0); const outflow = included.reduce((sum, pool) => sum + pool.outflow, 0)
   const inflowEvents = included.reduce((sum, pool) => sum + pool.inflowEvents, 0); const outflowEvents = included.reduce((sum, pool) => sum + pool.outflowEvents, 0)
   const togglePool = (id) => setSelectedPools((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
-  const poolButton = (id) => { const pool = summary.pools.find((item) => item.protocol === id); const active = selectedPools.includes(id); return <button type="button" className={active ? 'selected' : ''} aria-pressed={active} onClick={() => togglePool(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}<small>{summary.loading ? 'Loading…' : money(pool?.tvl || 0)}</small></span><i /></button> }
+  const poolButton = (id) => { const pool = summary.pools.find((item) => item.protocol === id); const active = selectedPools.includes(id); return <button type="button" className={active ? 'selected' : ''} aria-pressed={active} onClick={() => togglePool(id)} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}<small>{summary.loading ? 'Loading…' : money(pool?.tvl || 0)}</small></span><i /></button> }
   return <section className="liquidityUniverse" aria-label="Privacy pool liquidity and capital flow">
-    <div className="universeCopy"><p className="eyebrow">Live private liquidity</p><h2>Funds enter publicly, and leave without a trace</h2><p>A deposit into a privacy pool is visible on-chain. What leaves it later is not linkable back to it.</p><div className="universeLegend"><span className="in"><i /> Inflow {money(inflow)}</span><span className="out"><i /> Withdrawals {money(outflow)}</span></div><div className="normalization">Pool area is scaled against all protocols <b>{money(totalTvl)}</b></div></div>
+    <div className="universeCopy"><p className="eyebrow">Live private liquidity</p><h2>Every deposit is public. The crowd hides the withdrawal.</h2><p>Anyone can see money go into a privacy pool. What keeps a withdrawal private is how many others it could have come from.</p><div className="universeLegend"><span className="in"><i /> Inflow {money(inflow)}</span><span className="out"><i /> Withdrawals {money(outflow)}</span></div><div className="normalization">Pool area is scaled against all protocols <b>{money(totalTvl)}</b></div></div>
     <div className="liquidityVisual">
       <LiquidityFlow selectedTvl={selectedTvl} totalTvl={totalTvl} inflowEvents={inflowEvents} outflowEvents={outflowEvents} />
-      <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => pool.name).join(' + ') : 'No pools selected'}</small></div>
+      <div className="tvlReadout"><span>TVL</span><strong>{summary.loading ? 'Loading…' : money(selectedTvl)}</strong><small>{included.length ? included.map((pool) => poolLabel(pool.protocol)).join(' + ') : 'No pools selected'}</small></div>
     </div>
     <div className="poolSelector"><div className="poolGroup"><small>Solana native</small><div>{sortByTvl(SOLANA_POOL_IDS, summary.pools).map(poolButton)}</div></div><div className="poolGroup others"><small>Other chains</small><div>{sortByTvl(OTHER_POOL_IDS, summary.pools).map(poolButton)}</div></div></div>
   </section>
@@ -1370,6 +1438,10 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const poolSizes = usePoolSummary()
   const [range, setRange] = useState('30D')
   const [token, setToken] = useState('USDC')
+  // Privacy leads; the flow charts are for whoever wants the raw activity.
+  const traced = PRIVACY_POOLS.includes(protocol)
+  const [tab, setTab] = useState('privacy')
+  const view = traced ? tab : 'activity'
   const [analytics, setAnalytics] = useState(EMPTY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -1401,22 +1473,29 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const utcHour = new Date().getUTCHours()
 
   return <div className="protocolPage">
-    <header className="analyticsHeader"><h1>Analytics database</h1><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Launch app <ArrowUpRight /></a></div></header>
-    <LiquidityUniverse />
-    <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={PROTOCOLS[id].name} /><span>{PROTOCOLS[id].name}</span></button>)}</div>
+    <header className="analyticsHeader"><div><h1>Pool privacy</h1><p>How often each pool’s withdrawals point to one wallet, last 30 days</p></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Send privately <ArrowUpRight /></a></div></header>
+    <PoolComparison selected={protocol} onSelect={onSelectProtocol} />
+    <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}</span></button>)}</div>
+    <div className="analyticsToolbar">
+      <div className="viewTabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" aria-selected={view === 'privacy'} disabled={!traced} onClick={() => setTab('privacy')}>Privacy{!traced && <em>Soon</em>}</button>
+        <button type="button" role="tab" aria-selected={view === 'activity'} onClick={() => setTab('activity')}>Activity</button>
+      </div>
+      <div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>
+    </div>
     {error && <section className="notice error"><CircleAlert /><b className="indexState error">Error</b><span>{error}</span></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
+    {view === 'privacy' ? <PoolPrivacy protocol={protocol} range={range} /> : <>
+    <LiquidityUniverse />
     <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
     <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} balance`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
 
     <section className="panel chartPanel">
-      <div className="panelHead"><div><h2>External flow</h2><p>{token} pool movements</p></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div><div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div></div>
+      <div className="panelHead"><div><h2>External flow</h2><p>{token} pool movements</p></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div></div></div>
       <div className="flowSummary">{FLOW_TYPES.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[range]}</small></div>
       <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent-muted)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 1.75 : 1.4} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
-
-    <PoolPrivacy protocol={protocol} range={range} />
 
     <div className="sectionTitle activityTitle"><h2>Behavior inside this window</h2><span>{analytics.flowMethod}</span></div>
     <section className="activityMetrics"><Metric label="Transactions" value={compact(activity.txCount, 0)} /><Metric label="Unique amounts" value={compact(activity.uniqueAmounts, 0)} /><Metric label="1h recent volume" value={formatMetricMoney(activity.recentVolume?.oneHourUsd)} /><Metric label="24h recent volume" value={formatMetricMoney(activity.recentVolume?.twentyFourHoursUsd)} /></section>
@@ -1426,6 +1505,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     </div>
 
     <RecentActivity key={`${protocol}:${range}`} analytics={analytics} loading={loading} protocol={protocol} />
+    </>}
     <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
   </div>
 }
@@ -1618,12 +1698,12 @@ function App() {
       document.querySelector('meta[name="description"]')?.setAttribute('content', 'Pay a private DarkSol invoice on Solana.')
       return
     }
-    document.title = isAnalytics ? 'Analytics – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : view === 'trace' ? 'Trace a withdrawal – DarkSol' : 'DarkSol'
+    document.title = isAnalytics ? 'Pool privacy – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : view === 'trace' ? 'Trace a withdrawal – DarkSol' : 'DarkSol – Send privately on Solana'
     const description = isAnalytics
-      ? 'On-chain privacy analytics for Solana and Arbitrum private routing protocols.'
+      ? 'How often Privacy Cash and Cloak withdrawals point to one wallet, and the live flows of each private routing pool.'
       : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.'
-      : view === 'trace' ? 'See which wallet most likely funded a Privacy Cash or Cloak withdrawal, and how many others could have.'
-      : 'DarkSol private routing and on-chain privacy analytics.'
+      : view === 'trace' ? 'See which wallets could have funded a Privacy Cash or Cloak withdrawal: the strongest, probable and possible candidates.'
+      : 'DarkSol compares Solana privacy pools and sends through the one that keeps you hidden. 3 in 10 Privacy Cash and Cloak withdrawals point to the wallet that paid for them. Check yours.'
     document.querySelector('meta[name="description"]')?.setAttribute('content', description)
     document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : view === 'trace' ? '/trace' : '/'}`)
   }, [view])

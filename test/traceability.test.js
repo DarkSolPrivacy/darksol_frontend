@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  FALLBACK_EXAMPLES, LINK_RULES, amountLead, amountMatches, candidateReason, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount, formatCount,
-  formatSpan, groupCandidates, historyBehind, parseSignature, pickExamples, poolName, reasonText, REASON_TITLES, signatureOfEvent, slotSpan, sourceRows,
+  FALLBACK_EXAMPLES, LINK_RULES, POSSIBLE_MAX, amountLead, amountMatches, candidateClues, candidateTiers, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
+  formatCount, formatSpan, groupCandidates, historyBehind, parseSignature, pickExamples, poolName, reasonText, REASON_TITLES, signatureOfEvent, slotSpan,
   traceVerdict,
 } from '../src/traceability.js'
 
@@ -87,17 +87,23 @@ test('a same-amount deposit within a minute is the lead, with what makes it stan
   assert.equal(amountLead({ observations: [observation('nearest_amount_match_slots', null)] }), null)
 })
 
-test('the verdict prefers a rule, then the same-amount lead, over a large anonymity set', () => {
+test('the verdict names the strongest candidate, then counts the probable ones, over a large anonymity set', () => {
   assert.equal(traceVerdict({ linkage: { status: 'deposit', wallet: 'w', withdrawals: [] } }), null)
-  assert.deepEqual(traceVerdict({ ...report(), linkage: { status: 'linked', tier: 'strong', rule: 'exact_deposit' } }),
-    { tone: 'linked', title: 'Linked to one wallet', text: LINK_RULES.exact_deposit })
-  assert.equal(traceVerdict({ linkage: { status: 'linked', tier: 'likely', rule: 'root_pinned' } }).title, 'Probably linked to one wallet')
+  assert.deepEqual(traceVerdict({ ...report(), linkage: { status: 'linked', tier: 'strong', rule: 'exact_deposit', wallet: 'W0' } }),
+    { tone: 'strongest', title: 'One strongest candidate', text: LINK_RULES.exact_deposit })
+  const likely = traceVerdict({ linkage: { status: 'linked', tier: 'likely', rule: 'root_pinned', wallet: 'W0' } })
+  assert.deepEqual(likely, { tone: 'probable', title: 'One probable candidate', text: `${LINK_RULES.root_pinned} Likely, but not proven.` })
   // The misleading case: ranked among 28,610 wallets, but a 1 SOL deposit landed 37 s before.
-  assert.deepEqual([traceVerdict(report(ranked)).tone, traceVerdict(report(ranked)).title], ['likely', 'Likely paid by a deposit 37 s earlier'])
-  assert.deepEqual([traceVerdict({ linkage: ranked }).tone, traceVerdict({ linkage: ranked }).title], ['hidden', 'Hidden among 28,610 wallets'])
+  const misleading = traceVerdict(report(ranked))
+  assert.deepEqual([misleading.tone, misleading.title], ['probable', '4 probable candidates'])
+  assert.match(misleading.text, /^A deposit of the same amount landed 37 s before it\./)
+  // Two wallets holding exactly the amount: neither is named, both are probable.
+  assert.equal(traceVerdict({ linkage: ranked }).title, '2 probable candidates')
+  const plain = { status: 'ranked', candidates: 28610, top: [{ wallet: 'W3', lastDeposit: { signature: 'old3', slot: '1' } }] }
+  assert.deepEqual([traceVerdict({ linkage: plain }).tone, traceVerdict({ linkage: plain }).title], ['hidden', 'Hidden among 28,610 wallets'])
   assert.equal(traceVerdict({ linkage: { status: 'unexplained', candidates: 0 } }).title, 'No single wallet could have paid for it')
   assert.equal(traceVerdict({ linkage: { status: 'not_computed' } }).tone, 'pending')
-  assert.equal(traceVerdict(report(null)).tone, 'likely', 'the lead holds without a linker')
+  assert.equal(traceVerdict(report(null)).tone, 'probable', 'the lead holds without a linker')
   assert.equal(traceVerdict({ observations: [] }), null)
 })
 
@@ -121,7 +127,7 @@ test('a withdrawal the stored history has not reached is fresh or waiting, not m
   const reached = behind(landed)
   reached.coverage = { eventHistory: { requiredLeaves: '97488', contiguousLeaves: '97492' }, rootReconstruction: { replayedLeaves: '97492' } }
   assert.equal(historyBehind(reached), null)
-  assert.equal(traceVerdict(reached).title, 'Not linked yet')
+  assert.equal(traceVerdict(reached).title, 'No candidates yet')
   assert.equal(historyBehind({ ...behind(landed), status: 'ready' }), null)
 })
 
@@ -136,36 +142,46 @@ test('clue tiles flag what gives the withdrawal away', () => {
   assert.deepEqual(clueTiles({ observations: rare }).map(({ id, flag }) => [id, flag]), [['matching', true], ['size', true]])
 })
 
-test('most likely sources put the deposit seconds before ahead of the ranked wallets', () => {
-  const rows = sourceRows(report(ranked))
-  assert.deepEqual(rows.map(({ signature, wallet, reasons, highlight }) => [signature, wallet, reasons, highlight]), [
+test('candidates sort into strongest, probable and possible, the deposit seconds before first', () => {
+  const tiers = candidateTiers(report(ranked))
+  assert.deepEqual(tiers.probable.map(({ signature, wallet, clues, lead }) => [signature, wallet, clues, lead]), [
     [DEP, null, ['Same-amount deposit'], true],
     ['older', null, ['Same-amount deposit'], false],
-    ['old1', 'W1', ['Exact balance'], false],
+    ['old1', 'W1', ['Exact balance', 'Same-amount deposit'], false],
     ['old2', 'W2', ['Exact balance'], false],
   ])
-  assert.equal(formatSpan(rows[0].seconds), '37 s')
-  assert.equal(rows[1].seconds, null, 'a match outside the loaded page has no known time')
-  // Linked: the wallet's last deposit is the same-amount one, so they are one row.
-  const linked = sourceRows(report({ status: 'linked', wallet: 'W0', top: [{ wallet: 'W0', match: true, lastDeposit: { signature: DEP, slot: '452901459' } }, ...ranked.top] }))
-  assert.deepEqual(linked[0], { signature: DEP, wallet: 'W0', reasons: ['Linked', 'Same-amount deposit'], seconds: 36.800000000000004, highlight: true })
-  assert.equal(linked.length, 4)
+  assert.deepEqual([tiers.strongest, tiers.possible, tiers.unlisted], [[], [], 0])
+  assert.equal(formatSpan(tiers.probable[0].seconds), '37 s')
+  assert.equal(tiers.probable[1].seconds, null, 'a match outside the loaded page has no known time')
+  // Strongest: the wallet's last deposit is the same-amount one, so they are one row.
+  const named = candidateTiers(report({ status: 'linked', tier: 'strong', rule: 'exact_balance', wallet: 'W0',
+    top: [{ wallet: 'W0', match: true, lastDeposit: { signature: DEP, slot: '452901459' } }, ...ranked.top] }))
+  assert.deepEqual(named.strongest, [{ wallet: 'W0', signature: DEP, seconds: 36.800000000000004, clues: ['Same-amount deposit'], rule: 'exact_balance', lead: true }])
+  assert.deepEqual(named.probable.map(({ signature }) => signature), ['older', 'old1', 'old2'])
+  // A backend that names a wallet without listing it still shows it.
+  assert.equal(candidateTiers({ linkage: { status: 'linked', tier: 'strong', rule: 'same_address', wallet: 'W9', top: [] } }).strongest[0].wallet, 'W9')
+  // Seven wallets with a clue narrow nothing down: only the timed lead stays probable.
+  const crowd = { status: 'ranked', candidates: 900, top: Array.from({ length: 7 }, (_, i) => ({ wallet: `C${i}`, exact: true, lastDeposit: { signature: `c${i}`, slot: '1' } })) }
+  const crowded = candidateTiers(report(crowd))
+  assert.deepEqual([crowded.probable.map(({ signature }) => signature), crowded.possible.length], [[DEP], 8])
+  // Possible stops at POSSIBLE_MAX and counts the rest.
+  const many = { status: 'ranked', candidates: 9000, top: Array.from({ length: 40 }, (_, i) => ({ wallet: `P${i}`, lastDeposit: { signature: `p${i}`, slot: '1' } })) }
+  const capped = candidateTiers({ linkage: many })
+  assert.deepEqual([capped.probable.length, capped.possible.length, capped.unlisted], [0, POSSIBLE_MAX, 10])
   // The report's related deposits give every match its time and depositor.
   const related = { ...report(ranked), related: [
     { relation: 'swap_state', signature: 'swap', slot: '1' },
     { relation: 'same_amount_deposit', signature: DEP, slot: '452901459', wallet: 'D0' },
     { relation: 'same_amount_deposit', signature: 'older', slot: '452900051', wallet: 'D1' },
   ] }
-  assert.deepEqual(sourceRows(related).slice(0, 2).map(({ wallet, seconds }) => [wallet, formatSpan(seconds)]), [['D0', '37 s'], ['D1', '10 min']])
+  assert.deepEqual(candidateTiers(related).probable.slice(0, 2).map(({ wallet, seconds }) => [wallet, formatSpan(seconds)]), [['D0', '37 s'], ['D1', '10 min']])
   assert.deepEqual([depositorOf(related, 'older'), depositorOf(related, 'old2'), depositorOf(related, 'swap'), depositorOf(report(), DEP)], ['D1', 'W2', null, null])
 })
 
-test('candidate reasons and amounts in the pool asset', () => {
-  assert.equal(candidateReason({ exact: true, match: true }, true), 'Linked')
-  assert.equal(candidateReason({ exact: true, match: true }, false), 'Exact balance')
-  assert.equal(candidateReason({ match: true }), 'Same-amount deposit')
-  assert.equal(candidateReason({ pair: true }), 'Completes a pair')
-  assert.equal(candidateReason({}), 'Can cover it')
+test('candidate clues and amounts in the pool asset', () => {
+  assert.deepEqual(candidateClues({ exact: true, match: true }), ['Exact balance', 'Same-amount deposit'])
+  assert.deepEqual(candidateClues({ pair: true, pinned: true }), ['Completes a pair', 'Deposit before proof'])
+  assert.deepEqual(candidateClues({ budget: '5' }), [])
   assert.deepEqual(['350200000', '1966421000', '5000000000', null].map((units) => formatAmount(units)), ['0.3502 SOL', '1.9664 SOL', '5 SOL', '–'])
   const usdc = { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 }
   assert.deepEqual(['12340000', '7513337', '450000'].map((units) => formatAmount(units, usdc)), ['12.34 USDC', '7.51 USDC', '0.45 USDC'])

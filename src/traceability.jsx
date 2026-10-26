@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, ArrowUpRight, Check, LoaderCircle } from 'lucide-react'
 import { LOGOS } from '../protocols/registry.js'
 import {
-  BEHIND_REASONS, CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountLead, amountMatches, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
-  formatCount, formatSpan, groupCandidates, historyBehind, observationsById, parseSignature, pickExamples, poolName, reasonText, shortSignature, slotSpan,
-  sourceRows, traceVerdict,
+  BEHIND_REASONS, CREATED_BY, DISCLOSURES, LIMIT_TEXT, REASON_TITLES, STATUS, amountLead, amountMatches, candidateTiers, clueTiles, depositorOf, exampleAmount, exampleLag,
+  formatAmount, formatCount, formatSpan, groupCandidates, historyBehind, observationsById, parseSignature, pickExamples, poolName, reasonText, shortSignature, slotSpan,
+  traceVerdict,
 } from './traceability.js'
 
 const PAGE = 40
@@ -75,11 +75,12 @@ function Meta({ report, deposit }) {
 }
 
 function Verdict({ verdict, linkage, lead }) {
-  const own = linkage?.status === 'linked' ? linkage.top?.find((entry) => entry.wallet === linkage.wallet)?.lastDeposit : null
+  const strongest = verdict.tone === 'strongest'
+  const own = strongest ? linkage.top?.find((entry) => entry.wallet === linkage.wallet)?.lastDeposit : null
   return <div className={`traceVerdict ${verdict.tone}`}>
     <h2>{verdict.title}</h2>
     <p>{verdict.text}</p>
-    {linkage?.status === 'linked' && <p className="traceVerdictWallet">
+    {strongest && <p className="traceVerdictWallet">
       Wallet <Address address={linkage.wallet} />
       {/* Its deposit is shown below when it is the same-amount one. */}
       {own && own.signature !== lead?.signature && <><span aria-hidden="true">·</span> last deposit <Transaction signature={own.signature} /></>}
@@ -91,8 +92,10 @@ function Verdict({ verdict, linkage, lead }) {
 // The same-amount deposit right before the withdrawal, as a deposit → withdrawal pair.
 function Lead({ lead, report }) {
   const amounts = report.target.amounts ?? null
-  // Its depositor, when the report names one; the verdict already names a linked wallet.
-  const wallet = report.linkage?.status === 'linked' ? null : depositorOf(report, lead.signature)
+  // Its depositor, when the report names one and the verdict has not already named it.
+  const named = report.linkage?.status === 'linked' && report.linkage.tier === 'strong' ? report.linkage.wallet : null
+  const depositor = depositorOf(report, lead.signature)
+  const wallet = depositor === named ? null : depositor
   return <div className="traceLead">
     <div className="traceLeadFlow">
       <div className="traceLeadNode">
@@ -128,42 +131,63 @@ function Clues({ report }) {
   </dl>
 }
 
-// Deposits and wallets, best first; the closest same-amount deposit and the linked wallet stand out.
-function Sources({ report }) {
+// The clue a rule already states, so a row does not say it twice.
+const RULE_CLUE = { exact_balance: 'Exact balance', exact_deposit: 'Same-amount deposit', pair_sum: 'Completes a pair', root_pinned: 'Deposit before proof' }
+
+const TIERS = [
+  { id: 'strongest', name: 'Strongest', hint: 'Clearly the one' },
+  { id: 'probable', name: 'Probable', hint: 'Clues fit, not certain' },
+  { id: 'possible', name: 'Possible', hint: 'Could have paid' },
+]
+
+// The candidate wallets in their tiers, strongest first; the possible ones fold after a few rows.
+function Candidates({ report }) {
   const [all, setAll] = useState(false)
-  const rows = useMemo(() => sourceRows(report), [report])
-  if (!rows.length) return null
+  const tiers = useMemo(() => candidateTiers(report), [report])
   const linkage = report.linkage ?? null
-  const shown = all ? rows : rows.slice(0, ROWS)
+  const listed = TIERS.filter(({ id }) => tiers[id].length)
+  if (!listed.length) return null
+  // Cloak's candidates are wallets that deposited enough, not ones known to hold it (backend candidatesMeaning).
+  const enough = linkage?.candidatesMeaning ? 'Deposited enough' : 'Had enough in the pool'
+  const why = (row) => [LINK_RULE_NAMES[row.rule], ...row.clues.filter((clue) => clue !== RULE_CLUE[row.rule])].filter(Boolean).join(' · ') || enough
   return <section className="panel traceSection">
     <div className="traceSectionHead">
-      <h2>Most likely sources</h2>
+      <h2>Candidates</h2>
       {linkage?.candidates != null && <span>{formatCount(linkage.candidates)} {linkage.candidatesMeaning ? 'wallets deposited enough' : 'wallets could have paid'}</span>}
     </div>
-    <div className="traceTable sources" role="table" aria-label="Most likely sources">
-      <div className="traceRow head" role="row"><span role="columnheader">Deposit</span><span role="columnheader">Wallet</span><span role="columnheader">Why</span><span role="columnheader">Before</span></div>
-      {shown.map((row) => <div className={`traceRow${row.highlight ? ' match' : ''}`} role="row" key={row.signature ?? row.wallet}>
-        <span role="cell">{row.signature ? <Transaction signature={row.signature} /> : '–'}</span>
-        <span role="cell">{row.wallet && <Address address={row.wallet} />}</span>
-        <span role="cell" className="traceWhy">{row.reasons.join(' · ')}</span>
-        <code role="cell">{row.seconds === null ? '' : formatSpan(row.seconds)}</code>
-      </div>)}
+    <ul className="traceTierCounts" aria-label="Candidates per tier">
+      {TIERS.map(({ id, name }) => <li className={id} key={id}><i aria-hidden="true" /><b>{tiers[id].length}{id === 'possible' && tiers.unlisted ? '+' : ''}</b>{name}</li>)}
+    </ul>
+    <div className="traceTable candidates" role="table" aria-label="Candidate wallets">
+      <div className="traceRow head" role="row"><span role="columnheader">Wallet</span><span role="columnheader">Deposit</span><span role="columnheader">Clue</span><span role="columnheader">Before</span></div>
+      {listed.map(({ id, name, hint }) => {
+        const rows = id === 'possible' && !all ? tiers[id].slice(0, ROWS) : tiers[id]
+        return <div className={`traceTier ${id}`} role="rowgroup" key={id}>
+          <div className="traceTierHead" role="row"><span role="columnheader"><i aria-hidden="true" />{name}<small>{hint}</small></span></div>
+          {rows.map((row) => <div className={`traceRow${row.lead ? ' match' : ''}`} role="row" key={row.wallet ?? row.signature}>
+            <span role="cell">{row.wallet ? <Address address={row.wallet} /> : '–'}</span>
+            <span role="cell">{row.signature && <Transaction signature={row.signature} />}</span>
+            <span role="cell" className="traceWhy">{why(row)}</span>
+            <code role="cell">{row.seconds === null ? '' : formatSpan(row.seconds)}</code>
+          </div>)}
+        </div>
+      })}
     </div>
-    {rows.length > shown.length && <button className="ghost traceMore" type="button" onClick={() => setAll(true)}>Show all {rows.length}</button>}
+    {!all && tiers.possible.length > ROWS && <button className="ghost traceMore" type="button" onClick={() => setAll(true)}>Show all {tiers.possible.length} possible</button>}
   </section>
 }
 
-// A deposit: the withdrawals the linker attributes to its wallet from then on.
+// A deposit: the withdrawals the linker names its wallet for from then on.
 function DepositLinks({ linkage, asset, slot }) {
   const rows = linkage.withdrawals ?? []
   if (!rows.length) return null
   return <section className="panel traceSection">
-    <div className="traceSectionHead"><h2>Withdrawals linked to this wallet</h2></div>
-    <div className="traceTable" role="table" aria-label="Withdrawals linked to this wallet">
-      <div className="traceRow head" role="row"><span role="columnheader">Withdrawal</span><span role="columnheader">Linked by</span><span role="columnheader">Amount</span><span role="columnheader">After</span></div>
+    <div className="traceSectionHead"><h2>Withdrawals this wallet is the candidate for</h2></div>
+    <div className="traceTable" role="table" aria-label="Withdrawals this wallet is the candidate for">
+      <div className="traceRow head" role="row"><span role="columnheader">Withdrawal</span><span role="columnheader">Clue</span><span role="columnheader">Amount</span><span role="columnheader">After</span></div>
       {rows.map((row) => <div className="traceRow" role="row" key={row.signature}>
         <span role="cell"><Transaction signature={row.signature} /></span>
-        <span role="cell" className="traceWhy">{LINK_RULE_NAMES[row.rule] ?? row.rule}{row.tier === 'likely' ? ' (likely)' : ''}</span>
+        <span role="cell" className="traceWhy">{LINK_RULE_NAMES[row.rule] ?? row.rule} · {row.tier === 'strong' ? 'Strongest' : 'Probable'}</span>
         <code role="cell">{formatAmount(row.gross, asset)}</code>
         <code role="cell">{formatSpan(slotSpan(row.slot, slot))}</code>
       </div>)}
@@ -301,7 +325,7 @@ function Report({ report, signature }) {
       <Meta report={report} deposit={deposit} />
       {verdict ? <Verdict verdict={verdict} linkage={linkage} lead={lead} />
         : deposit ? <div className="traceVerdict">
-          <h2>{withdrawals ? `${withdrawals} withdrawal${withdrawals === 1 ? '' : 's'} linked to its wallet` : 'No withdrawal linked to its wallet yet'}</h2>
+          <h2>{withdrawals ? `Its wallet is the candidate for ${withdrawals} withdrawal${withdrawals === 1 ? '' : 's'}` : 'No withdrawal points to its wallet yet'}</h2>
           {linkage.wallet && <p className="traceVerdictWallet">Wallet <Address address={linkage.wallet} /></p>}
         </div>
           : STATUS[report.status] && <p className="traceStatusText">{STATUS[report.status]}</p>}
@@ -314,7 +338,7 @@ function Report({ report, signature }) {
     </section>
     {deposit && <DepositLinks linkage={linkage} asset={report.deployment?.asset ?? null} slot={report.target.slot} />}
     {traced && <>
-      <Sources report={report} />
+      <Candidates report={report} />
       <Activity report={report} signature={signature} />
       <Details report={report} />
     </>}

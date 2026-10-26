@@ -13,7 +13,7 @@ DarkSol does not run its own pool. It is a routing and analysis layer on top of 
 - [Private transfer](https://darksol.app/): Send SOL, USDC or USDT through a privacy pool to one or more recipients. Optional swap to another token on delivery, bridging to Ethereum, BNB Chain, Base, Polygon or Bitcoin (via Privacy Cash, minimum about 0.05 SOL), and delayed delivery within 10, 20 or 30 minutes. Funds can also be kept shielded in the pool and spent later.
 - [Payment links](https://darksol.app/payment-links): Private invoices. The payer deposits straight into a privacy pool, and only the creator's wallet can collect the funds, to any address. The link does not reveal the creator's wallet address. Works with Privacy Cash and Cloak.
 - [Trace](https://darksol.app/trace): Paste a withdrawal's transaction hash or Solscan link and see which depositor wallets could have paid for it, whether a known linking pattern singles one out, and which public clues make it easier to trace.
-- [Analytics](https://darksol.app/analytics): Pool balances, recent flows, and pool-wide privacy statistics, such as how many withdrawals were linked to a wallet and by which rule.
+- [Analytics](https://darksol.app/analytics): How often each pool's withdrawals point to one wallet (a strongest candidate) and by which rule, plus pool balances and recent flows.
 
 ## How privacy is measured
 

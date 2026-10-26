@@ -212,35 +212,99 @@ export const LINK_RULES = {
   root_pinned: 'Its proof was made right after this wallet deposited exactly this amount.',
 }
 
-/** Why a candidate wallet ranks where it does, in a few words. */
-export function candidateReason(entry, linked) {
-  if (linked) return 'Linked'
-  if (entry.exact) return 'Exact balance'
-  if (entry.match) return 'Same-amount deposit'
-  if (entry.pair) return 'Completes a pair'
-  if (entry.pinned) return 'Deposit before proof'
-  return 'Can cover it'
+// The linker's fields (backend docs/FORENSIC_LINKER.md) that single a wallet out, in a few words.
+const CLUES = [['exact', 'Exact balance'], ['match', 'Same-amount deposit'], ['pair', 'Completes a pair'], ['pinned', 'Deposit before proof']]
+
+/** What singles a ranked wallet out, in a few words each; empty when it only had enough in the pool. */
+export const candidateClues = (entry) => CLUES.filter(([field]) => entry[field]).map(([, clue]) => clue)
+
+// More wallets with a clue than this, and the clue no longer narrows anything
+// down: only the ones timing backs (the lead, a likely link) stay probable.
+export const PROBABLE_MAX = 6
+// Possible candidates listed at most.
+export const POSSIBLE_MAX = 30
+
+/**
+ * The wallets that could have paid for a withdrawal, in three tiers, best first,
+ * one row per wallet (or per deposit whose wallet is unknown):
+ * - strongest: the one wallet a strong linker rule names;
+ * - probable: wallets with a clue that fits (a same-amount deposit, an exact
+ *   balance, a pair, a deposit right before the proof, a likely link);
+ * - possible: the rest that could have paid, at most POSSIBLE_MAX, with
+ *   `unlisted` counting the ones left out.
+ * `rule` is the linker's rule for the wallet it names, `seconds` how long
+ * before the withdrawal the deposit landed where known, and `lead` marks the
+ * same-amount deposit about a minute before.
+ */
+export function candidateTiers(report) {
+  const linkage = report?.linkage ?? null
+  const lead = amountLead(report)
+  const target = report?.target?.slot ?? null
+  const named = linkage?.status === 'linked' ? linkage.wallet : null
+  const strong = named && linkage.tier === 'strong' ? named : null
+  const slots = new Map((report?.candidates?.items ?? []).map((item) => [item.signature, item.slot]))
+  const matched = sameAmountDeposits(report)
+  // A deposit's wallet, where the report names it, so a deposit and its wallet share a row.
+  const owners = new Map([...matched].map(([signature, row]) => [signature, row.wallet]))
+  for (const entry of linkage?.top ?? []) if (entry.lastDeposit?.signature) owners.set(entry.lastDeposit.signature, entry.wallet)
+  const rows = new Map()
+  const add = (row, order) => {
+    const key = row.wallet ?? row.signature
+    const known = rows.get(key)
+    if (!known) return rows.set(key, { ...row, order })
+    for (const clue of row.clues) if (!known.clues.includes(clue)) known.clues.push(clue)
+    known.order = Math.min(known.order, order)
+    known.signature ??= row.signature
+    known.seconds ??= row.seconds
+    known.rule ??= row.rule
+    known.lead ||= row.lead
+  }
+  ;(linkage?.top ?? []).forEach((entry, index) => {
+    const own = entry.wallet === named
+    add({ wallet: entry.wallet, signature: entry.lastDeposit?.signature ?? null, seconds: slotSpan(target, entry.lastDeposit?.slot),
+      clues: candidateClues(entry), rule: own ? linkage.rule : null, lead: false }, own ? 0 : 3000 + index)
+  })
+  ;[...amountMatches(report?.observations)].forEach((signature, index) => {
+    const closest = signature === lead?.signature
+    add({ wallet: owners.get(signature) ?? null, signature, clues: ['Same-amount deposit'], rule: null, lead: closest,
+      seconds: closest ? lead.seconds : slotSpan(target, matched.get(signature)?.slot ?? slots.get(signature)) }, closest ? 1 : 2000 + index)
+  })
+  // An older backend may name a wallet without listing it.
+  if (named && !rows.has(named)) add({ wallet: named, signature: null, seconds: null, clues: [], rule: linkage.rule, lead: false }, 0)
+  const all = [...rows.values()].sort((a, b) => a.order - b.order).map(({ order, ...row }) => row)
+  const strongest = all.filter((row) => strong && row.wallet === strong)
+  const rest = all.filter((row) => !strongest.includes(row))
+  const clued = rest.filter((row) => row.clues.length || row.rule)
+  const probable = clued.length <= PROBABLE_MAX ? clued : clued.filter((row) => row.lead || row.rule)
+  const others = rest.filter((row) => !probable.includes(row))
+  return { strongest, probable, possible: others.slice(0, POSSIBLE_MAX), unlisted: Math.max(0, others.length - POSSIBLE_MAX) }
 }
 
 /**
  * What an observer concludes about a withdrawal, or null for a deposit or a
- * report with nothing to conclude. A rule's link comes first; without one, a
- * same-amount deposit seconds before is what an observer would bet on, even
- * when its round amount keeps every rule from naming a wallet. A withdrawal
- * the stored history has not reached says whether it is fresh or waiting on it.
+ * report with nothing to conclude: the strongest candidate when a strong rule
+ * names one wallet, else how many probable candidates there are (a same-amount
+ * deposit seconds before is the first an observer would bet on, even when its
+ * round amount keeps every rule from naming it), else the crowd it hides in. A
+ * withdrawal the stored history has not reached says whether it is fresh or
+ * waiting on it.
  */
 export function traceVerdict(report, now = Date.now() / 1000) {
   const linkage = report?.linkage ?? null
   if (linkage?.status === 'deposit') return null
-  if (linkage?.status === 'linked') {
-    const strong = linkage.tier === 'strong'
-    return { tone: strong ? 'linked' : 'likely', title: strong ? 'Linked to one wallet' : 'Probably linked to one wallet', text: LINK_RULES[linkage.rule] ?? 'A linking rule named one wallet.' }
+  const { strongest, probable } = candidateTiers(report)
+  if (strongest.length) return { tone: 'strongest', title: 'One strongest candidate', text: LINK_RULES[linkage.rule] ?? 'A rule names this one wallet.' }
+  if (probable.length) {
+    const lead = probable.find((row) => row.lead)
+    const likely = probable.find((row) => row.rule)
+    return {
+      tone: 'probable', title: probable.length === 1 ? 'One probable candidate' : `${probable.length} probable candidates`,
+      text: lead ? `A deposit of the same amount landed ${formatSpan(lead.seconds)} before it. Not proven, but it is the first match an observer checks.`
+        : likely ? `${LINK_RULES[likely.rule] ?? 'A rule points to one wallet.'} Likely, but not proven.`
+        : 'Each one has a clue that fits this withdrawal, but none is certain.',
+    }
   }
-  const lead = amountLead(report)
-  if (lead) {
-    return { tone: 'likely', title: `Likely paid by a deposit ${formatSpan(lead.seconds)} earlier`, text: 'Not proven, but it is the first match an observer checks.' }
-  }
-  if (linkage?.status === 'ranked') return { tone: 'hidden', title: `Hidden among ${formatCount(linkage.candidates)} wallets`, text: 'No rule singles out one wallet.' }
+  if (linkage?.status === 'ranked') return { tone: 'hidden', title: `Hidden among ${formatCount(linkage.candidates)} wallets`, text: 'No clue points to any one wallet.' }
   if (linkage?.status === 'unexplained') {
     return { tone: 'hidden', title: 'No single wallet could have paid for it', text: 'No depositor had enough left in the pool, so the money may come from deposits made for someone else.' }
   }
@@ -250,7 +314,7 @@ export function traceVerdict(report, now = Date.now() / 1000) {
       ? { tone: 'pending', title: 'Fresh withdrawal, still being processed', text: `It landed ${formatSpan(behind.age)} ago, and the pool history is still being replayed up to it. Check back in a few minutes.` }
       : { tone: 'pending', title: 'Not traced yet', text: `The stored pool history stops about ${formatCount(behind.transactions)} transaction${behind.transactions === 1 ? '' : 's'} before this withdrawal. It can be traced once that history is filled in.` }
   }
-  if (linkage?.status === 'not_computed') return { tone: 'pending', title: 'Not linked yet', text: 'Linking has not reached this transaction. It appears after the next indexing cycle.' }
+  if (linkage?.status === 'not_computed') return { tone: 'pending', title: 'No candidates yet', text: 'Candidates for this transaction have not been worked out yet. They appear after the next indexing cycle.' }
   return null
 }
 
@@ -283,46 +347,6 @@ export const sameAmountDeposits = (report) => new Map((report?.related ?? [])
 /** The wallet that made a deposit, when the report names it. */
 export const depositorOf = (report, signature) => sameAmountDeposits(report).get(signature)?.wallet
   ?? report?.linkage?.top?.find((entry) => entry.lastDeposit?.signature === signature)?.wallet ?? null
-
-/**
- * The deposits and wallets most likely to have paid for a withdrawal, one row
- * per deposit, best first: the linked wallet, the same-amount deposit seconds
- * before, the other same-amount deposits, then the linker's ranked wallets.
- * `seconds` is how long before the withdrawal the deposit landed, where known.
- */
-export function sourceRows(report) {
-  const linkage = report?.linkage ?? null
-  const lead = amountLead(report)
-  const target = report?.target?.slot ?? null
-  const linked = linkage?.status === 'linked' ? linkage.wallet : null
-  const slots = new Map((report?.candidates?.items ?? []).map((item) => [item.signature, item.slot]))
-  const matched = sameAmountDeposits(report)
-  const rows = new Map()
-  const add = (key, row) => {
-    const known = rows.get(key)
-    if (!known) return rows.set(key, { ...row, reasons: new Set(row.reasons) })
-    for (const reason of row.reasons) known.reasons.add(reason)
-    known.rank = Math.min(known.rank, row.rank)
-    known.wallet ??= row.wallet
-    known.seconds ??= row.seconds
-  }
-  ;(linkage?.top ?? []).forEach((entry, index) => {
-    const signature = entry.lastDeposit?.signature ?? null
-    const own = entry.wallet === linked
-    add(signature ?? entry.wallet, { signature, wallet: entry.wallet, reasons: [candidateReason(entry, own)], seconds: slotSpan(target, entry.lastDeposit?.slot), rank: own ? 0 : 3000 + index })
-  })
-  ;[...amountMatches(report?.observations)].forEach((signature, index) => {
-    const closest = signature === lead?.signature
-    const known = matched.get(signature)
-    add(signature, {
-      signature, wallet: known?.wallet ?? null, reasons: ['Same-amount deposit'],
-      seconds: closest ? lead.seconds : slotSpan(target, known?.slot ?? slots.get(signature)), rank: closest ? 1 : 2000 + index,
-    })
-  })
-  return [...rows.values()]
-    .sort((a, b) => a.rank - b.rank)
-    .map(({ rank, reasons, ...row }) => ({ ...row, reasons: [...reasons], highlight: rank <= 1 }))
-}
 
 /** The examples' amount, in the form a chip shows: "1.1284 SOL". */
 export const exampleAmount = (example) => formatAmount(example.gross, example.asset)
