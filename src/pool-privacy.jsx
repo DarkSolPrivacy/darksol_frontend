@@ -35,9 +35,9 @@ function usePoolPrivacy(protocol, range) {
   return stats
 }
 
-// Each traced pool's last 30 days, fetched once per page load and shared by the
-// home page line and the analytics comparison; the figures move slowly. A
-// failed request is dropped, so the next page that asks tries again.
+// Each traced pool's last 30 days for the comparison, fetched once per page
+// load; the figures move slowly. A failed request is dropped, so the next
+// visit to the page tries again.
 const monthly = new Map()
 function loadMonthly(protocol) {
   if (!monthly.has(protocol)) {
@@ -71,7 +71,7 @@ export function PoolComparison({ selected, onSelect }) {
       const card = comparisonCard(stats[id])
       const traced = PRIVACY_POOLS.includes(id)
       const logo = LOGOS[id]
-      return <button type="button" className={`compareCard${selected === id ? ' on' : ''}${card ? ` ${card.exposure}` : ''}`} key={id} onClick={() => onSelect(id)}>
+      return <button type="button" className={`compareCard${selected === id ? ' on' : ''}`} key={id} onClick={() => onSelect(id)}>
         <span className="compareName">{logo && <img src={logo.src} alt="" />}{nameOf(id)}</span>
         {card ? <>
           <span className="compareFigure"><strong>{card.traced}</strong><span>traced to one wallet</span></span>
