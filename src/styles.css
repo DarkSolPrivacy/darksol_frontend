@@ -193,6 +193,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
 .xLink { display: flex; width: fit-content; align-items: center; gap: 7px; margin-top: 12px; color: var(--text-tertiary); font-size: 12px; text-decoration: none; transition: color .15s; }
 .xLink:hover { color: var(--text-primary); }
 .xLink svg { width: 12px; height: 12px; }
+.xLink + .xLink { margin-top: 8px; }
 
 /* Collapsed rail */
 .sidebarClosed aside { width: var(--rail); }
@@ -356,7 +357,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
    ========================================================================== */
 .homePage { position: relative; }
 .homePage > header { min-height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px 0; text-align: center; }
-.homeLead { max-width: 470px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
+.homeLead { max-width: 600px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
 .homeLead b { color: var(--text-primary); font-weight: 500; }
 
 /* Three plain promises under the form, one icon each. */
