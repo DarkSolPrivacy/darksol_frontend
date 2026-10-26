@@ -16,11 +16,11 @@ export const RULE_NAMES = {
   root_pinned: 'Proof right after deposit',
 }
 
-// Clues the trace page does not read yet.
+// Clues the trace page does not read yet: a name, with what it means on hover.
 export const SOON_CLUES = [
-  { title: 'One funder behind several depositors', text: 'One wallet sent the SOL several deposit wallets started with, so their deposits are one person’s.' },
-  { title: 'Same mix of deposits and withdrawals', text: 'Three or more withdrawals that add up to exactly what one wallet deposited.' },
-  { title: 'Unusual fee setting', text: 'A fee or relayer most withdrawals do not use marks every withdrawal made with it.' },
+  { title: 'Shared funder', text: 'One wallet sent the SOL several deposit wallets started with, so their deposits are one person’s.' },
+  { title: 'Matching sets', text: 'Three or more withdrawals that add up to exactly what one wallet deposited.' },
+  { title: 'Unusual fees', text: 'A fee or relayer most withdrawals do not use marks every withdrawal made with it.' },
 ]
 
 const count = (value) => Number(value || 0).toLocaleString('en-US')
@@ -32,34 +32,55 @@ export function share(part, whole) {
   return `${percent > 0 && percent < 0.1 ? '<0.1' : percent.toLocaleString('en-US', { maximumFractionDigits: percent < 10 ? 1 : 0 })}%`
 }
 
-/** The headline figures, in the order the page shows them. */
+/**
+ * The checked withdrawals a strong rule names one wallet for (the trace page's
+ * strongest candidate) as "29%", or null before any are checked.
+ */
+export const tracedShare = (stats) => stats?.linker?.checked ? share(stats.linker.strong, stats.linker.checked) : null
+
+// How exposed a pool is, from the share with a strongest candidate.
+const exposure = (fraction) => fraction < 0.1 ? 'low' : fraction < 0.3 ? 'medium' : 'high'
+
+/** One pool's card in the comparison, from its 30-day stats, or null without any checked withdrawal. */
+export function comparisonCard(stats) {
+  const { withdrawals, oneToOne, linker } = stats ?? {}
+  if (!linker?.checked) return null
+  const fraction = linker.strong / linker.checked
+  return {
+    traced: tracedShare(stats), percent: 100 * fraction, exposure: exposure(fraction),
+    crowd: linker.candidates.median === null ? null : count(linker.candidates.median),
+    sameAmount: share(oneToOne.total, withdrawals),
+    withdrawals: count(withdrawals),
+  }
+}
+
+/** The headline figures, in the order the page shows them, each with what it means on hover. */
 export function privacyTiles(stats) {
   const { withdrawals, oneToOne, lone, linker } = stats
-  const linked = linker.strong + linker.likely
   return [
     {
-      label: '1:1 withdrawals',
+      label: 'Strongest candidate found',
+      value: share(linker.strong, linker.checked),
+      note: linker.checked ? `${count(linker.strong)} of ${count(linker.checked)}` : 'Not checked yet',
+      hint: 'Withdrawals where a rule points to one deposit wallet, out of those checked. The trace page lists that wallet as the strongest candidate.',
+    },
+    {
+      label: 'Same amount just before',
       value: share(oneToOne.total, withdrawals),
-      note: `${count(oneToOne.total)} of ${count(withdrawals)} · ${count(oneToOne.strong)} fractional`,
-      hint: `A deposit of the same amount at most ${oneToOne.withinSeconds / 60} minutes before. A fractional amount makes the match far stronger than a whole 1, 2 or 10.`,
+      note: `${count(oneToOne.total)} of ${count(withdrawals)}`,
+      hint: `A deposit of exactly the same amount at most ${oneToOne.withinSeconds / 60} minutes before. An odd amount like 1.2345 makes the match far stronger than a round 1 or 10.`,
     },
     {
-      label: 'Linked to a wallet',
-      value: share(linked, linker.checked),
-      note: linker.checked ? `${count(linker.strong)} strong · ${count(linker.likely)} likely` : 'Not linked yet',
-      hint: 'Withdrawals the linker ties to one deposit wallet, out of those it has checked.',
-    },
-    {
-      label: 'Alone in their minute',
+      label: 'Only deposit that minute',
       value: share(lone.total, withdrawals),
-      note: `${count(lone.total)} withdrawals`,
-      hint: `One deposit and no other withdrawal in the ${lone.withinSeconds} seconds before: easy to pair up.`,
+      note: `${count(lone.total)} of ${count(withdrawals)}`,
+      hint: `One deposit and no other withdrawal in the ${lone.withinSeconds} seconds before, so the two are easy to pair up.`,
     },
     {
-      label: 'Median anonymity set',
+      label: 'Wallets that could have paid',
       value: linker.candidates.median === null ? '—' : count(linker.candidates.median),
-      note: 'wallets that could have paid',
-      hint: 'How many deposit wallets could have paid for a typical withdrawal.',
+      note: 'for a typical withdrawal',
+      hint: 'How many deposit wallets had enough in the pool to pay for a typical withdrawal. The more, the better it hides.',
     },
   ]
 }
@@ -80,7 +101,7 @@ export function outsideSummary(outside) {
   return {
     value: share(outside.linked, outside.checked),
     note: outside.checked
-      ? `${count(outside.linked)} of ${count(outside.checked)} checked recipients met a deposit wallet`
+      ? `${count(outside.linked)} of ${count(outside.checked)} recipients paid or were paid by a deposit wallet`
       : 'No recipient checked yet',
     parts: [
       { key: 'linked', label: 'Paid by or to a deposit wallet', count: outside.linked },
