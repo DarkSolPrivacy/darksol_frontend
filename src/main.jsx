@@ -7,8 +7,8 @@ import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rank
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
-import PoolPrivacy, { PoolComparison, useMonthlyPrivacy } from './pool-privacy.jsx'
-import { PRIVACY_POOLS, tracedShare } from './pool-privacy.js'
+import PoolPrivacy, { PoolComparison } from './pool-privacy.jsx'
+import { PRIVACY_POOLS } from './pool-privacy.js'
 import { recordPageView } from './page-views.js'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
@@ -915,7 +915,7 @@ function PrivacyHome({ walletSession }) {
   ]
 
   return <div className="homePage">
-    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1><TracedLine /></header>
+    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1><HomeLead /></header>
     <section className="sendCard panel">
       <div className={`amountRow${payingShielded ? ' fromShielded' : ''}`}>
         <span className="amountUsd">{usdText(amount, prices[asset])}</span>
@@ -1015,12 +1015,11 @@ function PrivacyHome({ walletSession }) {
   </div>
 }
 
-// Why routing matters, with the live share of Privacy Cash withdrawals that
-// have a strongest candidate (GET /api/pool-privacy, last 30 days).
-function TracedLine() {
-  const traced = tracedShare(useMonthlyPrivacy().privacycash)
-  return <p className="homeLead">{traced && <><b>{traced}</b> of Privacy Cash withdrawals point to the wallet that paid for them. </>}
-    DarkSol picks the pool and timing that keep yours hidden.</p>
+// Why routing matters. It names no pool and quotes no figure: what gives a
+// withdrawal away is how a pool is used, and that holds for every pool.
+function HomeLead() {
+  return <p className="homeLead">Privacy pools hide you <b>only when they are used well</b>: a withdrawal of the same amount right after a deposit is easy to match.
+    DarkSol picks the pool and timing that keep your transfer hidden.</p>
 }
 
 const GAS_DEFAULT = '0.005'
@@ -1473,7 +1472,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const utcHour = new Date().getUTCHours()
 
   return <div className="protocolPage">
-    <header className="analyticsHeader"><div><h1>Pool privacy</h1><p>How often each pool’s withdrawals point to one wallet, last 30 days</p></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Send privately <ArrowUpRight /></a></div></header>
+    <header className="analyticsHeader"><div><h1>Pool privacy</h1><p>How often withdrawals pointed to one wallet in the last 30 days. Most of it comes down to how people use a pool.</p></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Send privately <ArrowUpRight /></a></div></header>
     <PoolComparison selected={protocol} onSelect={onSelectProtocol} />
     <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}</span></button>)}</div>
     <div className="analyticsToolbar">
@@ -1700,10 +1699,10 @@ function App() {
     }
     document.title = isAnalytics ? 'Pool privacy – DarkSol' : view === 'payments' ? 'Payment links – DarkSol' : view === 'trace' ? 'Trace a withdrawal – DarkSol' : 'DarkSol – Send privately on Solana'
     const description = isAnalytics
-      ? 'How often Privacy Cash and Cloak withdrawals point to one wallet, and the live flows of each private routing pool.'
+      ? 'How often withdrawals from Solana privacy pools point to one wallet, and the live flows of each pool.'
       : view === 'payments' ? 'Create private payment links and track your invoices with DarkSol.'
       : view === 'trace' ? 'See which wallets could have funded a Privacy Cash or Cloak withdrawal: the strongest, probable and possible candidates.'
-      : 'DarkSol compares Solana privacy pools and sends through the one that keeps you hidden. 3 in 10 Privacy Cash and Cloak withdrawals point to the wallet that paid for them. Check yours.'
+      : 'DarkSol compares Solana privacy pools and sends through the pool and timing that keep you hidden. Check whether any withdrawal can be traced, for free.'
     document.querySelector('meta[name="description"]')?.setAttribute('content', description)
     document.querySelector('link[rel="canonical"]')?.setAttribute('href', `https://darksol.app${isAnalytics ? '/analytics' : view === 'payments' ? '/payment-links' : view === 'trace' ? '/trace' : '/'}`)
   }, [view])

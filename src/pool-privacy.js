@@ -38,16 +38,15 @@ export function share(part, whole) {
  */
 export const tracedShare = (stats) => stats?.linker?.checked ? share(stats.linker.strong, stats.linker.checked) : null
 
-// How exposed a pool is, from the share with a strongest candidate.
-const exposure = (fraction) => fraction < 0.1 ? 'low' : fraction < 0.3 ? 'medium' : 'high'
-
-/** One pool's card in the comparison, from its 30-day stats, or null without any checked withdrawal. */
+/**
+ * One pool's card in the comparison, from its 30-day stats, or null without any
+ * checked withdrawal. No grade: the share says how the pool was used, not how good it is.
+ */
 export function comparisonCard(stats) {
   const { withdrawals, oneToOne, linker } = stats ?? {}
   if (!linker?.checked) return null
-  const fraction = linker.strong / linker.checked
   return {
-    traced: tracedShare(stats), percent: 100 * fraction, exposure: exposure(fraction),
+    traced: tracedShare(stats), percent: (100 * linker.strong) / linker.checked,
     crowd: linker.candidates.median === null ? null : count(linker.candidates.median),
     sameAmount: share(oneToOne.total, withdrawals),
     withdrawals: count(withdrawals),

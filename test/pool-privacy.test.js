@@ -38,9 +38,7 @@ test('the comparison card leads with the share that has a strongest candidate', 
   assert.equal(tracedShare(STATS), '12%')
   assert.deepEqual([tracedShare(null), tracedShare({ linker: { checked: 0, strong: 0 } })], [null, null])
   const card = comparisonCard(STATS)
-  assert.deepEqual({ ...card, percent: Math.round(card.percent) }, { traced: '12%', percent: 12, exposure: 'medium', crowd: '1,240', sameAmount: '10%', withdrawals: '590' })
-  assert.equal(comparisonCard({ ...STATS, linker: { ...STATS.linker, strong: 5 } }).exposure, 'low')
-  assert.equal(comparisonCard({ ...STATS, linker: { ...STATS.linker, strong: 300 } }).exposure, 'high')
+  assert.deepEqual({ ...card, percent: Math.round(card.percent) }, { traced: '12%', percent: 12, crowd: '1,240', sameAmount: '10%', withdrawals: '590' })
   assert.equal(comparisonCard(undefined), null)
 })
 

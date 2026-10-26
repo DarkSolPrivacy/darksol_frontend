@@ -357,7 +357,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .homePage { position: relative; }
 .homePage > header { min-height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px 0; text-align: center; }
 .homeLead { max-width: 470px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
-.homeLead b { color: var(--accent); font: 500 13px var(--font-mono); }
+.homeLead b { color: var(--text-primary); font-weight: 500; }
 
 /* Three plain promises under the form, one icon each. */
 .trustStrip { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; margin: 22px 0 0; padding: 0; list-style: none; color: var(--text-tertiary); font-size: 12px; }
@@ -1210,21 +1210,18 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .analyticsActions .launchApp { height: var(--control-md); padding: 0 14px; font-size: 13px; }
 .analyticsActions svg { width: 14px; height: 14px; }
 
-/* The pools side by side. One big share each, coloured by how exposed the pool is. */
+/* The pools side by side, one big share each, all in the same colour: a figure, not a grade. */
 .poolComparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 4px 0 28px; }
-.compareCard { --exposure: var(--text-tertiary); min-width: 0; display: grid; align-content: start; gap: 14px; padding: 18px 20px 20px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-secondary); text-align: left; transition: border-color .15s; }
+.compareCard { min-width: 0; display: grid; align-content: start; gap: 14px; padding: 18px 20px 20px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-secondary); text-align: left; transition: border-color .15s; }
 .compareCard:hover { border-color: var(--border-default); }
 .compareCard.on { border-color: var(--border-strong); }
-.compareCard.low { --exposure: var(--positive); }
-.compareCard.medium { --exposure: var(--accent); }
-.compareCard.high { --exposure: var(--negative); }
 .compareName { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 14px; font-weight: 500; }
 .compareName img { width: 22px; height: 22px; border-radius: 6px; }
 .compareFigure { display: grid; gap: 2px; }
-.compareFigure strong { color: var(--exposure); font: 500 40px/1 var(--font-mono); letter-spacing: -.03em; }
+.compareFigure strong { color: var(--text-primary); font: 500 40px/1 var(--font-mono); letter-spacing: -.03em; }
 .compareFigure span { color: var(--text-secondary); font-size: 12px; }
 .compareMeter { height: 6px; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, .06); }
-.compareMeter b { display: block; height: 100%; border-radius: 3px; background: var(--exposure); }
+.compareMeter b { display: block; height: 100%; border-radius: 3px; background: var(--accent-muted); }
 .compareFacts { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-subtle); font-size: 12px; }
 .compareFacts b { margin-right: 4px; color: var(--text-primary); font: 500 12px var(--font-mono); }
 .compareSoon { min-height: 120px; display: grid; place-items: center; border: 1px dashed var(--border-default); border-radius: var(--radius-sm); color: var(--text-tertiary); font-size: 12px; }
