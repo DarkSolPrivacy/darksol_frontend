@@ -1,6 +1,8 @@
 # Dependencies and generated output
 node_modules/
 dist/
+# Umbra v2's WebAssembly and prover worker, copied from the package by postinstall
+public/nimbus/
 coverage/
 *.log
 npm-debug.log*

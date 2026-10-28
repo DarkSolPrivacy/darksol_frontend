@@ -2,9 +2,12 @@ import { ENDPOINTS, EXPLORERS, PROGRAMS } from '../addresses.js'
 
 export default Object.freeze({
   id: 'umbra',
-  name: 'Umbra',
+  name: 'Umbra v1',
   aliases: Object.freeze(['umbra', 'umbraprivacy']),
   status: 'live',
+  // Still indexed and still sendable; the planner ranks it after current pools.
+  legacy: true,
+  supersededBy: 'umbrav2',
   chain: 'solana',
   chainId: null,
   network: 'Solana',

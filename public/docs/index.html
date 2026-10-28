@@ -65,8 +65,8 @@
         <ol class="architecture">
           <li><strong>Enter</strong><span>Open <strong>Private transfer</strong> in the app, choose a token (SOL, USDC or USDT) and an amount, and add one or more recipients. With several recipients, their amounts must add up to the total.</span></li>
           <li><strong>Compare</strong><span>As soon as the form is complete, DarkSol compares the supported pools and picks the route most likely to reach good privacy soonest, using fees to break close ties. Open <strong>Details</strong> to see the estimated privacy, pool size, similar-size activity, expected wait and estimated fee.</span></li>
-          <li><strong>Deposit</strong><span>Your wallet approves one deposit into the selected pool. Privacy Cash also asks you to sign a sign-in message once per browser; it moves no funds. Umbra asks for a one-time registration.</span></li>
-          <li><strong>Deliver</strong><span>The funds leave the pool to your recipient. On Privacy Cash and Cloak, the pool's relayer submits this withdrawal and pays its network fee, so there is nothing more to approve. When it lands, the app shows <strong>Transfer complete</strong> with a link to the transaction.</span></li>
+          <li><strong>Deposit</strong><span>Your wallet approves one deposit into the selected pool. Privacy Cash also asks you to sign a sign-in message once per browser; it moves no funds. Umbra v2 asks you to sign an unlock message once per tab, and both Umbra versions ask for a one-time registration.</span></li>
+          <li><strong>Deliver</strong><span>The funds leave the pool to your recipient. On Privacy Cash, Cloak and Umbra v2, the pool's relayer submits this withdrawal and pays its network fee, so there is nothing more to approve. When it lands, the app shows <strong>Transfer complete</strong> with a link to the transaction.</span></li>
         </ol>
         <h3>How routes are scored</h3>
         <p>The privacy estimate is a score from 0 to 100, based on how deep the pool is compared with your amount, how much recent activity there is, how many flows of a similar size it has seen, how spread out that activity is over time, and how unusual your amount is. A transfer larger than the pool, or a pool with too small a published anonymity set, is marked <strong>Not private</strong> and can't be sent. The score is an estimate, not a guarantee.</p>
@@ -79,7 +79,8 @@
           <tbody>
             <tr><td>Privacy Cash</td><td>SOL, USDC, USDT</td><td>Several recipients, delayed delivery, swaps, bridging</td></tr>
             <tr><td>Cloak</td><td>SOL, USDC, USDT</td><td>One recipient, swaps from SOL</td></tr>
-            <tr><td>Umbra</td><td>SOL, USDC, USDT</td><td>One recipient</td></tr>
+            <tr><td>Umbra v2</td><td>SOL, USDC, USDT</td><td>One recipient</td></tr>
+            <tr><td>Umbra v1 (legacy)</td><td>SOL, USDC, USDT</td><td>One recipient. Listed after the current pools.</td></tr>
           </tbody>
         </table>
         <p class="note">Each pool charges its own withdrawal fee, shown as <strong>Estimated fee</strong> in Details. Your wallet also pays the deposit's Solana network fee.</p>

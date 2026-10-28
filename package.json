@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/copy-privacycash-wasm.js",
+    "postinstall": "node scripts/copy-privacycash-wasm.js && nimbus-solana-web copy-assets public/nimbus",
     "dev": "node scripts/check-node-version.js && concurrently -k -n api,web -c green,cyan \"node --watch server/api.js\" \"vite\"",
     "dev:api": "node scripts/check-node-version.js && node --watch server/api.js",
     "wallets:create": "tsx scripts/private-sol.ts wallets:create",
@@ -32,6 +32,7 @@
     "@solana/web3.js": "^1.98.4",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.115.0",
+    "@umbra-privacy/nimbus-solana-web": "0.1.1",
     "@umbra-privacy/sdk": "5.0.0-rc.6",
     "@vercel/functions": "3.9.9",
     "@vitejs/plugin-react": "^6.1.1",

@@ -209,12 +209,21 @@ test('listProtocols answers the questions that were hardcoded arrays', () => {
   assert.ok(!ids({ chain: 'solana' }).includes('curvy'))
   // server/index.js selected its EVM lane with includes('curvy').
   assert.deepEqual(ids({ lane: 'evm' }), ['curvy'])
-  assert.deepEqual(ids({ lane: 'solana' }), ['cloakc', 'privacycash', 'umbra'])
+  assert.deepEqual(ids({ lane: 'solana' }), ['cloakc', 'privacycash', 'umbra', 'umbrav2'])
   // Only protocols whose capability actually executes. Umbra documents swaps
   // but ships no swap module, so it must not appear here.
   assert.deepEqual(ids({ capability: 'swap' }), ['cloakc', 'privacycash', 'curvy'])
   assert.deepEqual(ids({ capability: 'bridge' }), ['privacycash'])
-  assert.ok(ids({ capability: 'send' }).includes('umbra'))
+  for (const id of ['umbra', 'umbrav2']) assert.ok(ids({ capability: 'send' }).includes(id))
+})
+
+test('Umbra v1 is legacy and names Umbra v2 as its successor', () => {
+  assert.equal(PROTOCOLS.umbra.legacy, true)
+  assert.equal(PROTOCOLS.umbra.supersededBy, 'umbrav2')
+  assert.equal(PROVIDER_CAPABILITIES.umbra.legacy, true)
+  assert.equal(PROTOCOLS.umbrav2.legacy, false)
+  assert.equal(PROVIDER_CAPABILITIES.umbrav2.legacy, undefined)
+  assert.equal(resolveProtocolId('nimbus'), 'umbrav2')
 })
 
 test('extension commands are namespaced to their owner and carry their usage', () => {

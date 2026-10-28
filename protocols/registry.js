@@ -26,6 +26,8 @@ function decorate(manifest) {
     explorerAccount: `${manifest.explorer.account}${primary}`,
     explorerTransaction: manifest.explorer.transaction,
     feePolicy: Object.freeze({ label: manifest.fees.policyLabel, detail: manifest.fees.policyDetail }),
+    legacy: Boolean(manifest.legacy),
+    supersededBy: manifest.supersededBy ?? null,
   })
 }
 
@@ -99,6 +101,7 @@ export const PROVIDER_CAPABILITIES = Object.freeze(Object.fromEntries(manifests.
   if (manifest.chainId) capability.chainId = manifest.chainId
   if (manifest.assets && manifest.id === 'curvy') capability.supportedTokens = manifest.assets
   if (manifest.capabilityNote) capability.capabilityNote = manifest.capabilityNote
+  if (manifest.legacy) Object.assign(capability, { legacy: true, supersededBy: manifest.supersededBy })
   return [manifest.id, Object.freeze(capability)]
 })))
 
