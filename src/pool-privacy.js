@@ -3,7 +3,7 @@
 // docs/POOL_PRIVACY.md, GET /api/pool-privacy); everything here is wording.
 
 // The pools the backend counts: the ones the trace page can trace.
-export const PRIVACY_POOLS = ['privacycash', 'cloakc']
+export const PRIVACY_POOLS = ['privacycash', 'cloakc', 'umbrav2']
 
 // The linker's rules (backend docs/FORENSIC_LINKER.md) as short names.
 export const RULE_NAMES = {

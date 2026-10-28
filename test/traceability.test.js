@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  FALLBACK_EXAMPLES, LINK_RULES, POSSIBLE_MAX, amountLead, amountMatches, candidateClues, candidateTiers, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
+  FALLBACK_EXAMPLES, LIMIT_TEXT, LINK_RULES, POSSIBLE_MAX, amountLead, amountMatches, candidateClues, candidateTiers, clueTiles, depositorOf, exampleAmount, exampleLag, formatAmount,
   formatCount, formatSpan, groupCandidates, historyBehind, parseSignature, pickExamples, poolName, reasonText, REASON_TITLES, signatureOfEvent, slotSpan,
   traceVerdict,
 } from '../src/traceability.js'
@@ -186,6 +186,9 @@ test('candidate clues and amounts in the pool asset', () => {
   const usdc = { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 }
   assert.deepEqual(['12340000', '7513337', '450000'].map((units) => formatAmount(units, usdc)), ['12.34 USDC', '7.51 USDC', '0.45 USDC'])
   assert.equal(formatAmount('350200000', { symbol: 'SOL', decimals: 9 }), '0.3502 SOL')
+  // An Umbra v2 token outside SOL, USDC and USDT: raw units, never SOL.
+  assert.equal(formatAmount('1500000', { symbol: null, mint: '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo', decimals: null }), '1,500,000 units of 2b1k…4GXo')
+  assert.equal(formatAmount('1500000', { symbol: null, decimals: null }), '1,500,000 units')
 })
 
 test('examples are off-grid withdrawals, fresh from the API or from the fallback', () => {
@@ -210,4 +213,13 @@ test('the pool name comes from the report, and Cloak reports get their own wordi
   assert.equal(poolName({ target: { protocol: 'auto' }, deployment: { asset: null } }), null)
   assert.equal(reasonText(REASON_TITLES, 'cloakc', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), 'Program versions are verified by replay, not by a reproducible build.')
   assert.equal(reasonText(REASON_TITLES, 'privacycash', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), REASON_TITLES.DEPLOYMENT_BEHAVIOUR_VERIFIED)
+})
+
+test('Umbra v2 names its token, or none for a private transfer, and gets its own wording', () => {
+  assert.equal(poolName({ target: { protocol: 'umbrav2' }, deployment: { asset: { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 } } }), 'Umbra v2 USDC pool')
+  assert.equal(poolName({ target: { protocol: 'umbrav2', direction: 'transfer', amounts: null }, deployment: { asset: null } }), 'Umbra v2 pool')
+  assert.match(reasonText(LIMIT_TEXT, 'umbrav2', 'PROGRAM_SOURCE_UNAVAILABLE'), /^Umbra publishes/)
+  assert.match(reasonText(LIMIT_TEXT, 'umbrav2', 'SHIELDED_TRANSFERS'), /One pool holds every token/)
+  assert.match(reasonText(LIMIT_TEXT, 'umbrav2', 'DEPLOYMENT_BEHAVIOUR_VERIFIED'), /^No Umbra v2 program version/)
+  assert.equal(reasonText(REASON_TITLES, 'umbrav2', 'HIDDEN_VALUE'), REASON_TITLES.HIDDEN_VALUE)
 })

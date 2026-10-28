@@ -1,6 +1,6 @@
 // Pure helpers for the trace page (src/traceability.jsx). The report itself is
 // the backend's traceability/1 contract: GET /api/traceability/auto/:signature,
-// which answers for the Privacy Cash and Cloak SOL, USDC and USDT pools alike.
+// which answers for the Privacy Cash, Cloak and Umbra v2 SOL, USDC and USDT pools alike.
 import bs58 from 'bs58'
 
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/
@@ -124,7 +124,7 @@ export function clueTiles(report) {
 
 export const STATUS = {
   incomplete: 'Evidence is still being collected, so the figures below are bounds.',
-  not_indexed: 'No Privacy Cash or Cloak transaction with this hash is stored yet. A very recent one appears within minutes.',
+  not_indexed: 'No Privacy Cash, Cloak or Umbra v2 transaction with this hash is stored yet. A very recent one appears within minutes.',
   unsupported: 'This transaction cannot be traced.',
 }
 
@@ -133,7 +133,7 @@ export const REASON_TITLES = {
   TARGET_NOT_WITHDRAWAL: 'This is a deposit. Only withdrawals can be traced.',
   TARGET_FAILED: 'This transaction failed on chain, so it moved no funds.',
   TARGET_NOT_PROTOCOL_INSTRUCTION: 'This transaction does not withdraw from a traced pool.',
-  TREE_NOT_SUPPORTED: 'This pool is not traced. The Privacy Cash and Cloak SOL, USDC and USDT pools are.',
+  TREE_NOT_SUPPORTED: 'This pool is not traced. The Privacy Cash, Cloak and Umbra v2 SOL, USDC and USDT pools are.',
   LAYOUT_UNKNOWN: 'This transaction uses a program format the decoder does not know.',
   LAYOUT_EPOCH_MISMATCH: 'This transaction does not match the program version deployed at its slot.',
   ROOT_NOT_IN_WINDOW: 'The proof root of this withdrawal could not be matched to pool history.',
@@ -154,6 +154,7 @@ export const REASON_TITLES = {
   ENRICHMENT_NOT_PERFORMED: 'Wallet relationships are not analysed.',
   DEPLOYMENT_BEHAVIOUR_VERIFIED: 'Older program versions are verified by replay, not by a reproducible build.',
   'cloakc:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'Program versions are verified by replay, not by a reproducible build.',
+  'umbrav2:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'Program versions are verified by replay, not by a reproducible build.',
   PROGRAM_SOURCE_UNAVAILABLE: 'The program’s source code is not published.',
   SHIELDED_TRANSFERS: 'Money can move between users inside the pool.',
 }
@@ -170,6 +171,9 @@ export const LIMIT_TEXT = {
   'cloakc:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'No Cloak program version has a reproducible build. Each is checked by replaying every transaction it made.',
   PROGRAM_SOURCE_UNAVAILABLE: 'Cloak publishes neither its program nor its circuit. What its instructions do is read from the chain, and the order of its notes is checked by replaying the whole pool against the live account.',
   SHIELDED_TRANSFERS: 'Cloak has private transfers, so a note can hold money its owner never deposited. A wallet’s balance on this page is what it deposited, not what it holds.',
+  'umbrav2:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'No Umbra v2 program version has a reproducible build. Each is checked by replaying every transaction since the pool’s creation.',
+  'umbrav2:PROGRAM_SOURCE_UNAVAILABLE': 'Umbra publishes neither its program nor its circuit, and a single key, not a multisig, can upgrade the program. What its instructions do is read from the chain and Umbra’s SDK, and the whole pool is replayed against the live account.',
+  'umbrav2:SHIELDED_TRANSFERS': 'Umbra v2 has private transfers, so a note can hold money its owner never deposited. One pool holds every token, so the possible sources include notes of other tokens; wallet links only compare deposits of the same token.',
 }
 
 // Codes that never block a report: the limits every report states.
@@ -181,9 +185,13 @@ export const reasonText = (table, protocol, code) => table[`${protocol}:${code}`
 
 export const CREATED_BY = { deposit: 'Deposit', withdraw: 'Withdrawal change', transfer: 'Transfer', swap: 'Swap change', refund: 'Swap refund' }
 
-const POOLS = { privacycash: 'Privacy Cash', cloakc: 'Cloak' }
+const POOLS = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
 
-/** "Cloak USDC pool", from the report's protocol and asset, or null for a report on no pool. */
+/**
+ * "Cloak USDC pool", from the report's protocol and asset, or null for a report
+ * on no pool. Umbra v2's one pool holds every token: a private transfer names
+ * none, so it is "Umbra v2 pool".
+ */
 export function poolName(report) {
   const protocol = POOLS[report?.target?.protocol]
   const symbol = report?.deployment?.asset?.symbol
@@ -193,10 +201,13 @@ export function poolName(report) {
 /**
  * Base units (a decimal string) in the pool's asset: SOL has 9 decimals and
  * shows at most 4; USDC and USDT have 6 and show cents. A report without an
- * asset is SOL. "0.3502 SOL", "12.34 USDC".
+ * asset is SOL. An Umbra v2 token outside those three has no known decimals,
+ * so it shows raw units and its mint. "0.3502 SOL", "12.34 USDC",
+ * "1,500,000 units of 2b1k…uGXo".
  */
 export function formatAmount(units, asset = null) {
   if (units === null || units === undefined) return '–'
+  if (asset && asset.decimals == null) return `${formatCount(units)} units${asset.mint ? ` of ${asset.mint.slice(0, 4)}…${asset.mint.slice(-4)}` : ''}`
   const decimals = asset?.decimals ?? 9
   return `${(Number(units) / 10 ** decimals).toLocaleString('en-US', { maximumFractionDigits: decimals === 9 ? 4 : 2 })} ${asset?.symbol ?? 'SOL'}`
 }
