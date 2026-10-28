@@ -32,27 +32,6 @@ export function share(part, whole) {
   return `${percent > 0 && percent < 0.1 ? '<0.1' : percent.toLocaleString('en-US', { maximumFractionDigits: percent < 10 ? 1 : 0 })}%`
 }
 
-/**
- * The checked withdrawals a strong rule names one wallet for (the trace page's
- * strongest candidate) as "29%", or null before any are checked.
- */
-export const tracedShare = (stats) => stats?.linker?.checked ? share(stats.linker.strong, stats.linker.checked) : null
-
-/**
- * One pool's card in the comparison, from its 30-day stats, or null without any
- * checked withdrawal. No grade: the share says how the pool was used, not how good it is.
- */
-export function comparisonCard(stats) {
-  const { withdrawals, oneToOne, linker } = stats ?? {}
-  if (!linker?.checked) return null
-  return {
-    traced: tracedShare(stats), percent: (100 * linker.strong) / linker.checked,
-    crowd: linker.candidates.median === null ? null : count(linker.candidates.median),
-    sameAmount: share(oneToOne.total, withdrawals),
-    withdrawals: count(withdrawals),
-  }
-}
-
 /** The headline figures, in the order the page shows them, each with what it means on hover. */
 export function privacyTiles(stats) {
   const { withdrawals, oneToOne, lone, linker } = stats
