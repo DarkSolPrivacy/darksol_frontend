@@ -1211,22 +1211,6 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .analyticsActions .launchApp { height: var(--control-md); padding: 0 14px; font-size: 13px; }
 .analyticsActions svg { width: 14px; height: 14px; }
 
-/* The pools side by side, one big share each, all in the same colour: a figure, not a grade. */
-.poolComparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 4px 0 28px; }
-.compareCard { min-width: 0; display: grid; align-content: start; gap: 14px; padding: 18px 20px 20px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-secondary); text-align: left; transition: border-color .15s; }
-.compareCard:hover { border-color: var(--border-default); }
-.compareCard.on { border-color: var(--border-strong); }
-.compareName { display: flex; align-items: center; gap: 8px; color: var(--text-primary); font-size: 14px; font-weight: 500; }
-.compareName img { width: 22px; height: 22px; border-radius: 6px; }
-.compareFigure { display: grid; gap: 2px; }
-.compareFigure strong { color: var(--text-primary); font: 500 40px/1 var(--font-mono); letter-spacing: -.03em; }
-.compareFigure span { color: var(--text-secondary); font-size: 12px; }
-.compareMeter { height: 6px; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, .06); }
-.compareMeter b { display: block; height: 100%; border-radius: 3px; background: var(--accent-muted); }
-.compareFacts { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-subtle); font-size: 12px; }
-.compareFacts b { margin-right: 4px; color: var(--text-primary); font: 500 12px var(--font-mono); }
-.compareSoon { min-height: 120px; display: grid; place-items: center; border: 1px dashed var(--border-default); border-radius: var(--radius-sm); color: var(--text-tertiary); font-size: 12px; }
-
 /* Under the pool tabs: what to look at, and over which window. */
 .analyticsToolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: -4px 0 4px; }
 .viewTabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, .035); }
@@ -1398,11 +1382,6 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privacySoon { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 16px; color: var(--text-tertiary); font-size: 12px; }
 .privacySoon em { position: relative; padding: 3px 9px; border: 1px dashed var(--border-default); border-radius: 12px; color: var(--text-secondary); font-style: normal; cursor: help; }
 .privacySoon em:hover, .privacySoon em:focus { border-color: var(--accent-line); color: var(--text-primary); outline: none; }
-@media (max-width: 760px) {
-  .poolComparison { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .compareFigure strong { font-size: 34px; }
-  .compareSoon { min-height: 56px; }
-}
 
 .recent { min-height: 360px; }
 .recent .panelHead { padding-bottom: 12px; }

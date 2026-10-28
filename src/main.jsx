@@ -7,7 +7,7 @@ import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rank
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
-import PoolPrivacy, { PoolComparison } from './pool-privacy.jsx'
+import PoolPrivacy from './pool-privacy.jsx'
 import { PRIVACY_POOLS } from './pool-privacy.js'
 import { recordPageView } from './page-views.js'
 import { useWalletSession } from './wallet-session.js'
@@ -1473,7 +1473,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
 
   return <div className="protocolPage">
     <header className="analyticsHeader"><div><h1>Pool privacy</h1><p>How often withdrawals pointed to one wallet in the last 30 days. Most of it comes down to how people use a pool.</p></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Send privately <ArrowUpRight /></a></div></header>
-    <PoolComparison selected={protocol} onSelect={onSelectProtocol} />
+    <LiquidityUniverse />
     <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}</span></button>)}</div>
     <div className="analyticsToolbar">
       <div className="viewTabs" role="tablist" aria-label="View">
@@ -1486,7 +1486,6 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <EstimateAnalytics estimate={selectedEstimate} />
 
     {view === 'privacy' ? <PoolPrivacy protocol={protocol} range={range} /> : <>
-    <LiquidityUniverse />
     <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
     <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} balance`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
 

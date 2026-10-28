@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { comparisonCard, outsideSummary, privacyTiles, ruleRows, share, tracedShare } from '../src/pool-privacy.js'
+import { outsideSummary, privacyTiles, ruleRows, share } from '../src/pool-privacy.js'
 
 // A day of /api/pool-privacy (backend docs/POOL_PRIVACY.md).
 const STATS = {
@@ -32,14 +32,6 @@ test('the headline tiles read the strongest-candidate, same-amount, lone and ano
   ])
   const unchecked = privacyTiles({ ...STATS, linker: { ...STATS.linker, checked: 0, strong: 0, likely: 0, candidates: { median: null, buckets: {} } } })
   assert.deepEqual([0, 3].map((index) => [unchecked[index].value, unchecked[index].note]), [['—', 'Not checked yet'], ['—', 'for a typical withdrawal']])
-})
-
-test('the comparison card leads with the share that has a strongest candidate', () => {
-  assert.equal(tracedShare(STATS), '12%')
-  assert.deepEqual([tracedShare(null), tracedShare({ linker: { checked: 0, strong: 0 } })], [null, null])
-  const card = comparisonCard(STATS)
-  assert.deepEqual({ ...card, percent: Math.round(card.percent) }, { traced: '12%', percent: 12, crowd: '1,240', sameAmount: '10%', withdrawals: '590' })
-  assert.equal(comparisonCard(undefined), null)
 })
 
 test('rules are listed largest first, empty ones dropped, the unexplained last', () => {

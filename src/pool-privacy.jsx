@@ -1,13 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ArrowUpRight, CircleHelp } from 'lucide-react'
-import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
-import { PRIVACY_POOLS, SOON_CLUES, comparisonCard, outsideSummary, privacyTiles, ruleRows } from './pool-privacy.js'
+import { PRIVACY_POOLS, SOON_CLUES, outsideSummary, privacyTiles, ruleRows } from './pool-privacy.js'
 
 const RANGE_TEXT = { '1H': 'last hour', '6H': 'last 6 hours', '1D': 'last 24 hours', '30D': 'last 30 days', '90D': 'last 90 days' }
-// The pools the comparison shows: the traced ones, then those whose analysis is still to come.
-const COMPARED = [...PRIVACY_POOLS, 'umbrav2', 'umbra']
-const NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak' }
-const nameOf = (id) => NAMES[id] ?? PROTOCOLS[id]?.name ?? id
 
 /** A "?" that shows what a figure means on hover or tap, so the page itself stays short. */
 export function Hint({ text }) {
@@ -33,57 +28,6 @@ function usePoolPrivacy(protocol, range) {
     return () => { controller.abort(); clearInterval(timer) }
   }, [protocol, range])
   return stats
-}
-
-// Each traced pool's last 30 days for the comparison, fetched once per page
-// load; the figures move slowly. A failed request is dropped, so the next
-// visit to the page tries again.
-const monthly = new Map()
-function loadMonthly(protocol) {
-  if (!monthly.has(protocol)) {
-    monthly.set(protocol, fetch(`/api/pool-privacy?protocol=${protocol}&interval=30d`)
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
-      .catch(() => { monthly.delete(protocol); return null }))
-  }
-  return monthly.get(protocol)
-}
-
-/** { [protocol]: stats } for the traced pools, filling in as each answers. */
-export function useMonthlyPrivacy() {
-  const [stats, setStats] = useState({})
-  useEffect(() => {
-    let live = true
-    for (const protocol of PRIVACY_POOLS) loadMonthly(protocol).then((value) => { if (live) setStats((current) => ({ ...current, [protocol]: value })) })
-    return () => { live = false }
-  }, [])
-  return stats
-}
-
-/**
- * The pools side by side: how many withdrawals have a strongest candidate, how
- * big the crowd is, and how often a same-amount deposit came right before.
- * Picking a card opens that pool below.
- */
-export function PoolComparison({ selected, onSelect }) {
-  const stats = useMonthlyPrivacy()
-  return <section className="poolComparison" aria-label="Pool privacy compared">
-    {COMPARED.map((id) => {
-      const card = comparisonCard(stats[id])
-      const traced = PRIVACY_POOLS.includes(id)
-      const logo = LOGOS[id]
-      return <button type="button" className={`compareCard${selected === id ? ' on' : ''}`} key={id} onClick={() => onSelect(id)}>
-        <span className="compareName">{logo && <img src={logo.src} alt="" />}{nameOf(id)}</span>
-        {card ? <>
-          <span className="compareFigure"><strong>{card.traced}</strong><span>traced to one wallet</span></span>
-          <span className="compareMeter" aria-hidden="true"><b style={{ width: `${Math.max(2, Math.min(100, card.percent))}%` }} /></span>
-          <span className="compareFacts">
-            <span><b>{card.crowd ?? '—'}</b> wallets could have paid</span>
-            <span><b>{card.sameAmount}</b> same amount just before</span>
-          </span>
-        </> : <span className="compareSoon">{traced ? 'Loading…' : 'Tracing coming soon'}</span>}
-      </button>
-    })}
-  </section>
 }
 
 export default function PoolPrivacy({ protocol, range }) {
