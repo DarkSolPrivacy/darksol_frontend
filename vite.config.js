@@ -3,10 +3,14 @@ import react from '@vitejs/plugin-react'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 const api = process.env.DARKSOL_API_URL
+// Umbra v2's prover needs shared memory, which only a cross-origin isolated page
+// gets. vercel.json sends the same pair in production.
+const isolated = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' }
 
 export default defineConfig({
   plugins: [react(), nodePolyfills({ include: ['buffer', 'crypto', 'events', 'process', 'stream', 'util'] })],
   server: {
+    headers: isolated,
     proxy: {
       '/admin-stats': { target: api || 'https://api.darksol.app', changeOrigin: true },
       // Caddy answers 403 on /api/solana-rpc without the key only Vercel's

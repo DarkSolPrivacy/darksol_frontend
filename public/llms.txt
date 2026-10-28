@@ -1,6 +1,6 @@
 # DarkSol
 
-> DarkSol is a private-transfer app for Solana mainnet. It compares the available privacy pools (Privacy Cash, Cloak and Umbra) using live pool activity, routes your SOL, USDC or USDT transfer through the one most likely to keep you private, and lets you test that privacy yourself with a public-data trace tool. Your wallet approves every transaction that moves funds; the chosen pool protocol holds the shielded funds, not DarkSol.
+> DarkSol is a private-transfer app for Solana mainnet. It compares the available privacy pools (Privacy Cash, Cloak, Umbra v2 and the older Umbra v1) using live pool activity, routes your SOL, USDC or USDT transfer through the one most likely to keep you private, and lets you test that privacy yourself with a public-data trace tool. Your wallet approves every transaction that moves funds; the chosen pool protocol holds the shielded funds, not DarkSol.
 
 DarkSol does not run its own pool. It is a routing and analysis layer on top of existing Solana privacy protocols. Its main differences from using a pool directly:
 
@@ -31,7 +31,7 @@ DarkSol does not run its own pool. It is a routing and analysis layer on top of 
 
 ## Fees
 
-Each pool charges its own withdrawal fee, shown as the estimated fee before you send. The sender's wallet also pays the Solana network fee for the deposit. On Privacy Cash and Cloak, the pool's relayer submits the withdrawal and pays its network fee.
+Each pool charges its own withdrawal fee, shown as the estimated fee before you send. The sender's wallet also pays the Solana network fee for the deposit. On Privacy Cash, Cloak and Umbra v2, the pool's relayer submits the withdrawal and pays its network fee.
 
 ## Docs
 

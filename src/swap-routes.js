@@ -18,6 +18,7 @@ export function swapEligibility(protocol, inputAsset, outputAsset) {
     return { available: false, reason: 'The selected swap asset is not supported by this planner.' }
   }
   if (input === output) return { available: true, kind: 'transfer', capability }
+  if (capability.execution === 'unsupported') return { available: false, kind: 'swap', capability, reason: capability.note }
   const name = PROTOCOLS[protocol]?.name || protocol
   if (!capability.inputAssets.includes(input)) {
     const supported = capability.inputAssets.join(' or ')

@@ -5,7 +5,7 @@ import { PRIVACY_POOLS, SOON_CLUES, comparisonCard, outsideSummary, privacyTiles
 
 const RANGE_TEXT = { '1H': 'last hour', '6H': 'last 6 hours', '1D': 'last 24 hours', '30D': 'last 30 days', '90D': 'last 90 days' }
 // The pools the comparison shows: the traced ones, then those whose analysis is still to come.
-const COMPARED = [...PRIVACY_POOLS, 'umbra']
+const COMPARED = [...PRIVACY_POOLS, 'umbrav2', 'umbra']
 const NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak' }
 const nameOf = (id) => NAMES[id] ?? PROTOCOLS[id]?.name ?? id
 

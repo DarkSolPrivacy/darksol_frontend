@@ -18,6 +18,22 @@ export const PROGRAMS = Object.freeze({
   curvyPortal: '6cHtg7sPLL9NQQuuyepnkud6PskMWV5yxvU2vXfag4qX',
   umbra: 'UMBRAD2ishebJTcgCLkTkNUx1v3GyoAgpTRPeWoLykh',
   umbraDevnet: 'DSuKkyqGVGgo4QtPABfxKJKygUDACbUhirnuv63mEpAJ',
+  // Umbra v2 ("Nimbus"): a separate deployment from v1, live since 2026-10-13.
+  umbrav2: 'nimBUs55CbjkNfy8UvK48DqFTY7L2mdkmZMQC9mk6LK',
+  umbrav2UserRegistry: 'user69YjhU8d8noiQy9H3zsPnSiT38DK8qZfmrWSLjL',
+})
+
+// Umbra v2's custody and state accounts, each owned by or derived from
+// PROGRAMS.umbrav2. SOL sits as plain lamports in the lamport vault; every other
+// mint in an associated token account of the vault authority PDA.
+export const UMBRAV2 = Object.freeze({
+  lamportVault: 'BxDCkvgZYRcCAnpywVw5j14AhkXehYvsXoCRiaodUs8s',
+  vaultAuthority: '2sjnjABJHPEZS8oVdp8nztPBUVUAT7uJawc8eQTMHTfa',
+  usdcVault: 'E3jzAVzHRSPPxRSbA3ckaiawY7vQA86MS6CoF7zSHaUQ',
+  usdtVault: '6v7B6c9dPQ37iezwVYGVFREk8xMfJrjfJqwbsQruCxnT',
+  feePolicy: '4JXa6asEd1JeV8VND5BooKNz2j4zXJJVjLtRGhCLiJ4X',
+  // Pool 0's note commitment tree; its leaf count is the anonymity set.
+  commitmentTree: 'Hu3viswMnjETgnwoFk4K4k249SYkjFnMFsY91atoQdaZ',
 })
 
 export const CONTRACTS = Object.freeze({
@@ -50,6 +66,10 @@ export const ENDPOINTS = Object.freeze({
   umbraRelayer: 'https://relayer.api.umbraprivacy.com',
   umbraIndexerDevnet: 'https://utxo-indexer.api-devnet.umbraprivacy.com',
   umbraRelayerDevnet: 'https://relayer.api-devnet.umbraprivacy.com',
+  umbrav2Gateway: 'https://gateway.api-v2.umbraprivacy.com',
+  umbrav2IndexerCdn: 'https://indexer-cdn.api-v2.umbraprivacy.com',
+  umbrav2Data: 'https://data.api-v2.umbraprivacy.com',
+  umbrav2Context: 'https://context.api-v2.umbraprivacy.com',
   jupiterQuote: 'https://lite-api.jup.ag/swap/v1/quote',
   curvyApi: 'https://api.curvy.box',
   privacycashBridge: 'https://api3.privacycash.org/bridge',
