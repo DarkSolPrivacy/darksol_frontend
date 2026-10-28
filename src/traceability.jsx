@@ -25,7 +25,7 @@ function Transaction({ signature }) {
 // still keeps anything else from changing the API path.
 async function fetchReport(signature, cursor = null) {
   const query = new URLSearchParams({ limit: String(PAGE), ...(cursor && { cursor }) })
-  // auto: the backend picks the pool (Privacy Cash or Cloak) from the stored transaction.
+  // auto: the backend picks the pool (Privacy Cash, Cloak or Umbra v2) from the stored transaction.
   const response = await fetch(`/api/traceability/auto/${encodeURIComponent(signature)}?${query}`, { cache: 'no-store' })
   const body = await response.json().catch(() => null)
   if (response.status === 409) throw new Error('This transaction holds several pool instructions; tracing one of them is not supported here yet.')
@@ -60,11 +60,12 @@ function Examples({ onPick }) {
   </div>
 }
 
-// The pool's logo, what the transaction was and moved, and when.
+// The pool's logo, what the transaction was and moved, and when. A private
+// transfer moves no public amount.
 function Meta({ report, deposit }) {
   const asset = report.deployment?.asset ?? null
   const amounts = report.target.amounts ?? null
-  const kind = deposit ? 'Deposit' : { withdraw: 'Withdrawal', swap: 'Swap' }[report.target.direction]
+  const kind = deposit ? 'Deposit' : { withdraw: 'Withdrawal', swap: 'Swap', transfer: 'Private transfer' }[report.target.direction]
   const blockTime = report.target.blockTime ?? report.linkage?.blockTime
   if (!kind && !LOGOS[report.target.protocol]) return null
   return <div className="traceMeta">
