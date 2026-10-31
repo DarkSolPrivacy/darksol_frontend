@@ -615,6 +615,79 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .routeSummaryPrivacy:is(.low, .very-low, .not-private) { color: var(--negative); }
 .routeSummaryPrivacy:is(.low, .very-low, .not-private) svg { color: var(--negative); }
 
+/* The private options (src/private-options.jsx): a 5-step privacy meter per option.
+   Low privacy is grey, not red: the page shows what each choice buys. */
+.privOptions { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.privShielded { display: flex; align-items: center; gap: 10px; padding: 0 4px; color: var(--text-secondary); font-size: 13px; }
+.privShielded > span { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
+.privShielded svg { width: 15px; height: 15px; }
+.privShielded > b { font: 400 13px var(--font-mono); color: var(--text-primary); }
+.privShielded > b i, .privShielded > b small { color: var(--text-tertiary); font-style: normal; }
+.privShielded .up, .privTiles .up { color: var(--positive); }
+.privReveal { height: 28px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
+.privSettingsButton { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); }
+.privSettingsButton svg { width: 16px; height: 16px; }
+.privHero { display: flex; align-items: center; gap: 16px; padding: 6px 4px; }
+.privHero > div { display: flex; flex-direction: column; gap: 3px; }
+.privHero b { font-size: 16px; font-weight: 500; }
+.privHero span { color: var(--text-secondary); font-size: 12px; }
+.privMeter { display: inline-flex; align-items: flex-end; gap: 3px; flex: none; }
+.privMeter i { width: 6px; height: 14px; border-radius: 2px; background: var(--border-default); }
+.privMeter.large i { width: 12px; height: 30px; border-radius: 3px; }
+.privMeter.high i.on { background: var(--positive); }
+.privMeter.mid i.on { background: var(--accent); }
+.privMeter.low i.on { background: var(--text-secondary); }
+.privList { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); overflow: hidden; }
+.privOption { min-height: 48px; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
+.privOption.chosen { background: var(--bg-elevated); }
+.privOption.off { opacity: .5; cursor: default; }
+.privOption input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.privOptionLabel { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.privOptionLabel b { font-size: 14px; font-weight: 500; }
+.privOptionLabel em { padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font: 600 11px var(--font-ui); }
+.privOptionLabel small { margin-left: auto; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
+.privOthers { min-height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
+.privOthers svg { width: 14px; height: 14px; transition: transform .15s; }
+.privOthers[aria-expanded="true"] svg { transform: rotate(180deg); }
+.privTiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.privTiles div { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-input); }
+.privTiles small { color: var(--text-tertiary); font-size: 11px; }
+.privTiles b { font: 500 13px var(--font-mono); overflow-wrap: anywhere; }
+.privSettings { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 14px; }
+.privSettingsHead { display: flex; align-items: center; justify-content: space-between; }
+.privSettingsHead button { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--text-secondary); }
+.privSettingsLabel { color: var(--text-tertiary); font-size: 12px; }
+.privSegment { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 4px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
+.privSegment button { height: 36px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: 13px; }
+.privSegment button[aria-pressed="true"] { border-color: var(--border-strong); background: var(--bg-elevated); color: var(--text-primary); }
+.privChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.privChips span { padding: 5px 10px; border-radius: 14px; background: var(--bg-hover); font-size: 12px; }
+.privChips .good { color: var(--positive); }
+.privToggles { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0 12px; }
+.privToggles label { min-height: 44px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+.privToggles label:last-child { border-bottom: 0; }
+.privToggles label > span { margin-right: auto; }
+.privToggles small { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 12px; }
+.privToggles small.good { color: var(--positive); }
+.privToggles small.warn { color: var(--accent); }
+.privToggles small svg { width: 13px; height: 13px; }
+.privToggles input { width: 16px; height: 16px; margin: 0 0 0 auto; accent-color: var(--accent); }
+.privToggles small + input { margin-left: 0; }
+.privPending { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.privPendingItem { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.privPendingItem.ready { border-color: var(--accent-line); }
+.privPendingHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.privPendingHead b { font: 500 16px var(--font-mono); }
+.privPendingHead code { color: var(--text-secondary); font-size: 12px; }
+.privPendingReady { display: inline-flex; align-items: center; gap: 6px; color: var(--positive); font-size: 13px; }
+.privPendingReady svg { width: 14px; height: 14px; }
+.privProgress { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+.privProgress i { height: 5px; border-radius: 3px; background: var(--border-subtle); }
+.privProgress b { display: block; height: 5px; border-radius: 3px; background: var(--accent); }
+.privPendingActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.privPendingActions button { height: 40px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: transparent; color: var(--text-primary); font-size: 13px; }
+.privPendingActions button.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
 /* The action row closes the module. */
 .sendAction { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .actionArea { min-width: 0; flex: 1; display: flex; }

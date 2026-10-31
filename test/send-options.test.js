@@ -1,0 +1,98 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, meterLevel, poolFee, popularDeposit, sendOptions } from '../src/send-options.js'
+
+const USDC = (value) => BigInt(Math.round(value * 1e6))
+const prices = { USDC: 1, USDT: 1, SOL: 100 }
+const cell = (strategy, wait, bucket, sends, traced) => ({ strategy, wait, bucket, planned: sends, sends, traced })
+const buckets = ['1-10', '10-100', '100-1000', '1000-10000']
+// Shaped like the simulation's USDC results: an exact send is always traced;
+// keeping part shielded and waiting a day hides it well only in Privacy Cash.
+const quote = {
+  asset: 'USDC', buckets,
+  pools: {
+    privacycash: {
+      cells: ['1-10', '10-100'].flatMap((bucket) => [
+        cell('exact', 'now', bucket, 30, 30), cell('keep', '6h', bucket, 28, 14), cell('keep', '24h', bucket, 28, 1), cell('balance', 'now', bucket, 30, 0),
+      ]),
+      popular: [{ amount: '25000000', deposits: 40 }, { amount: '20000000', deposits: 30 }, { amount: '2000000', deposits: 12 }],
+    },
+    umbrav2: { cells: ['1-10', '10-100'].flatMap((bucket) => [cell('exact', 'now', bucket, 30, 30), cell('keep', '24h', bucket, 12, 9)]), popular: [] },
+    cloakc: { cells: ['1-10', '10-100'].flatMap((bucket) => [cell('exact', 'now', bucket, 30, 30)]), popular: [] },
+  },
+}
+const options = (amount, extra = {}) => sendOptions({ quote, asset: 'USDC', raw: USDC(amount), prices, ...extra })
+
+test('fees, meter steps, buckets and the copied deposit', () => {
+  // 0.35% + 0.006 SOL at $100.
+  assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), prices), 667_480n)
+  assert.equal(poolFee('cloakc', 'USDC', USDC(19.28), prices), 507_840n)
+  assert.equal(poolFee('umbrav2', 'USDC', USDC(19.28), prices), 96_400n)
+  assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), { USDC: 1 }), null)
+  assert.deepEqual([96, 48, 19, 0].map(meterLevel), [5, 2, 1, 0])
+  assert.equal(bucketFor(19.28, buckets), '10-100')
+  assert.equal(bucketFor(0.5, buckets), '1-10')
+  assert.equal(bucketFor(50_000, buckets), '1000-10000')
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(19.28)), USDC(25))
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(18)), USDC(25))
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(30)), null)
+})
+
+test('new money: deposit a common amount, keep the rest, send in a day; the plain send is the cheapest pool now', () => {
+  const result = options(19.28)
+  assert.equal(result.suggested.id, 'privacycash:keep:24h')
+  assert.equal(result.suggested.score, 96)
+  assert.equal(result.suggested.deposit, USDC(25))
+  assert.equal(result.suggested.kept, USDC(5.72))
+  assert.equal(result.asTyped.id, 'umbrav2:now:now')
+  assert.equal(result.asTyped.score, 0)
+  // Umbra v2's keep cell has too few sends, and Umbra v2 cannot keep change anyway.
+  assert.ok(!result.options.some((option) => option.id.startsWith('umbrav2:keep')))
+})
+
+test('priorities: time sends now in the cheapest pool, fees takes the cheapest option', () => {
+  const custom = (priority) => ({ ...DEFAULT_SETTINGS, mode: 'custom', priority })
+  assert.equal(options(19.28, { settings: custom('time') }).suggested.id, 'umbrav2:now:now')
+  assert.equal(options(19.28, { settings: custom('fees') }).suggested.id, 'umbrav2:now:now')
+  assert.equal(options(19.28, { settings: custom('privacy') }).suggested.id, 'privacycash:keep:24h')
+  assert.equal(options(19.28, { settings: { ...custom('privacy'), maxWait: '6h' } }).suggested.id, 'privacycash:keep:6h')
+  assert.equal(options(19.28, { settings: { ...custom('privacy'), pools: { privacycash: false } } }).suggested.id, 'umbrav2:now:now')
+  // Auto ignores the custom choices.
+  assert.equal(effectiveSettings({ mode: 'auto', priority: 'fees', maxWait: 'now' }).priority, 'auto')
+})
+
+test('a fee that is most of a small payment outweighs the wait', () => {
+  // $1.50: Privacy Cash's fee is half the payment, yet a day's wait still wins a step.
+  assert.equal(options(1.5).suggested.id, 'privacycash:keep:24h')
+  // $1: its fee is three quarters of the payment; every option is on the lowest step, so the cheapest wins.
+  assert.equal(options(1).suggested.id, 'umbrav2:now:now')
+})
+
+test('keep nothing in pools drops the keep options', () => {
+  const result = options(19.28, { settings: { ...DEFAULT_SETTINGS, keepNothing: true } })
+  assert.ok(!result.options.some((option) => option.kind === 'keep'))
+  assert.equal(result.suggested.id, 'umbrav2:now:now')
+})
+
+test('a shielded balance that covers the payment is the suggestion, with no new deposit', () => {
+  const result = options(19.28, { shielded: { privacycash: USDC(50) } })
+  assert.equal(result.suggested.id, 'privacycash:balance:now')
+  assert.equal(result.suggested.score, 100)
+  assert.equal(result.suggested.deposit, 0n)
+  assert.equal(result.suggested.balanceAfter, USDC(30.72))
+  // Too small a balance offers nothing from it.
+  assert.ok(!options(19.28, { shielded: { privacycash: USDC(10) } }).options.some((option) => option.kind === 'balance'))
+})
+
+test('options need enough measured sends and a pool that can run here', () => {
+  const thin = { ...quote, pools: { privacycash: { cells: [cell('exact', 'now', '10-100', MIN_SENDS - 1, 5)], popular: [] } } }
+  assert.equal(sendOptions({ quote: thin, asset: 'USDC', raw: USDC(19.28), prices }).suggested, null)
+  // Below Cloak's minimum deposit, Cloak is listed but not suggested.
+  const cloakOnly = { ...quote, pools: { cloakc: quote.pools.cloakc } }
+  const small = sendOptions({ quote: cloakOnly, asset: 'USDC', raw: USDC(0.5), prices })
+  assert.equal(small.suggested, null)
+  assert.equal(small.options[0].executable, false)
+  const blocked = options(19.28, { canRun: (protocol) => protocol !== 'umbrav2' })
+  assert.equal(blocked.asTyped.id, 'cloakc:now:now')
+  assert.equal(sendOptions({ quote, asset: 'USDC', raw: 0n, prices }), null)
+})
