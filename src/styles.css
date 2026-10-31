@@ -673,6 +673,8 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privToggles small svg { width: 13px; height: 13px; }
 .privToggles input { width: 16px; height: 16px; margin: 0 0 0 auto; accent-color: var(--accent); }
 .privToggles small + input { margin-left: 0; }
+.privHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; padding: 0 4px; color: var(--text-secondary); font-size: 12px; }
+.privHint button { height: 30px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
 .privPending { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .privPendingItem { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
 .privPendingItem.ready { border-color: var(--accent-line); }
