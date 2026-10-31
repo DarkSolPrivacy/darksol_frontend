@@ -74,6 +74,23 @@ function privacyOf(pool, strategy, wait, bucket) {
 }
 
 /**
+ * The measured privacy of a send set up by hand, sent now in `protocol`: keep
+ * part shielded (`deposit` is what the user deposits), pay from the shielded
+ * balance, or pay several recipients from one deposit (split). A kept deposit
+ * hides only when others deposit that amount too; any other reads as an exact
+ * one. Null without a measurement.
+ * @param {{ quote: object, protocol: string, asset: string, raw: bigint, prices: Record<string, number>, kind: 'keep'|'balance'|'split', deposit?: bigint|null }} input
+ */
+export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, deposit = null }) {
+  const pool = quote?.pools?.[protocol]
+  if (!pool || !(raw > 0n) || !(prices[asset] > 0)) return null
+  const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
+  const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
+  const privacy = privacyOf(pool, kind === 'keep' && !common ? 'exact' : kind, 'now', bucket)
+  return privacy && { ...privacy, level: meterLevel(privacy.score) }
+}
+
+/**
  * Every option for sending `raw` base units of `asset` to one recipient, ranked
  * best first, plus the suggested one and the plain send ("as typed").
  * @param {{ quote: object, asset: string, raw: bigint, prices: Record<string, number>, shielded?: Record<string, bigint>,

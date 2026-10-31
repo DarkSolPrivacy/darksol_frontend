@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, meterLevel, poolFee, popularDeposit, sendOptions } from '../src/send-options.js'
+import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions } from '../src/send-options.js'
 
 const USDC = (value) => BigInt(Math.round(value * 1e6))
 const prices = { USDC: 1, USDT: 1, SOL: 100 }
@@ -95,4 +95,16 @@ test('options need enough measured sends and a pool that can run here', () => {
   const blocked = options(19.28, { canRun: (protocol) => protocol !== 'umbrav2' })
   assert.equal(blocked.asTyped.id, 'cloakc:now:now')
   assert.equal(sendOptions({ quote, asset: 'USDC', raw: 0n, prices }), null)
+})
+
+test('a send set up by hand gets the measured privacy of what it does', () => {
+  const pools = { ...quote.pools, privacycash: { ...quote.pools.privacycash, cells: [...quote.pools.privacycash.cells, cell('keep', 'now', '10-100', 30, 29), cell('split', 'now', '10-100', 30, 30)] } }
+  const measure = (kind, extra = {}) => measuredPrivacy({ quote: { ...quote, pools }, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind, ...extra })
+  // Keeping part of a common deposit and sending now: the keep cell. Of any other deposit: an exact send's.
+  assert.deepEqual(measure('keep', { deposit: USDC(25) }), { score: 3, sends: 30, level: 0 })
+  assert.deepEqual(measure('keep', { deposit: USDC(23.4) }), { score: 0, sends: 30, level: 0 })
+  assert.deepEqual(measure('balance'), { score: 100, sends: 30, level: 5 })
+  assert.deepEqual(measure('split'), { score: 0, sends: 30, level: 0 })
+  assert.equal(measuredPrivacy({ quote, protocol: 'curvy', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }), null)
+  assert.equal(measuredPrivacy({ quote, protocol: 'cloakc', asset: 'USDC', raw: USDC(19.28), prices, kind: 'split' }), null)
 })

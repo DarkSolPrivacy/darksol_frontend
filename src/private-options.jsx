@@ -84,6 +84,17 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onRe
   </section>
 }
 
+/** Measured privacy for a send set up by hand (shield options, several recipients): one line, a hint when it is weak. */
+export function MeasuredSummary({ privacy, title, detail, hint, action, onAction }) {
+  return <section className="privOptions privMeasured" aria-label="How private this send is">
+    <div className="privHero">
+      {privacy && <Meter option={privacy} large />}
+      <div><b>{title}</b><span>{detail}</span></div>
+    </div>
+    {hint && <p className="privHint">{hint}{action && <button type="button" onClick={onAction}>{action}</button>}</p>}
+  </section>
+}
+
 const PRIORITIES = [['privacy', 'Privacy'], ['time', 'Time'], ['fees', 'Fees']]
 const MAX_WAITS = [['now', 'None'], ['6h', '6 h'], ['24h', '24 h']]
 

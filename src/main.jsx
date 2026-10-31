@@ -22,9 +22,9 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
-import { sendOptions } from './send-options.js'
+import { measuredPrivacy, sendOptions } from './send-options.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
-import { PendingPayments, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
+import { MeasuredSummary, PendingPayments, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
 // bridge picker named privacycash directly. Both follow the manifests now.
@@ -602,13 +602,13 @@ function PrivacyHome({ walletSession }) {
 
   // One token's quote for every size at once, so the amount never leaves the page.
   useEffect(() => {
-    if (!optionsMode) return undefined
+    if (isSwap || isBridge) return undefined
     const controller = new AbortController()
     fetch(`/api/privacy-quote?asset=${asset}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : null)
       .then((data) => setQuote(data?.asset === asset ? data : null), () => {})
     return () => controller.abort()
-  }, [asset, optionsMode])
+  }, [asset, isSwap, isBridge])
 
   // A new amount or token starts from the suggestion again.
   useEffect(() => setChosenOptionId(null), [asset, sentAmount])
@@ -979,6 +979,37 @@ function PrivacyHome({ walletSession }) {
       shielded: pcShielded?.state === 'ready' ? { privacycash: BigInt(pcShielded.spendable?.[asset] ?? 0n) } : {} })
     : null, [optionsMode, sentRaw, quote, asset, prices, settings, pcShielded])
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
+  // A send set up by hand (keep part shielded, from shielded, shield only,
+  // several recipients) shows its measured privacy in the pool it goes through.
+  // Paying from shielded funds has no planner pick until the balance is read; the one pool that can pay from it stands in.
+  const manualProtocol = shieldOnly ? shieldPool : recommended?.protocol ?? (payingShielded ? FROM_SHIELDED_IDS[0] : null)
+  const measured = useMemo(() => {
+    if (chosenOption || isSwap || isBridge || !quote || !manualProtocol) return null
+    const measure = (kind, raw, deposit) => measuredPrivacy({ quote, protocol: manualProtocol, asset, raw: raw ?? 0n, prices, kind, deposit })
+    const pool = poolLabel(manualProtocol)
+    const fee = recommended && feeDisplay(recommended.fee || recommended.estimatedFee, asset).primary
+    const via = fee && fee !== 'Unavailable' ? `Fee ${fee} · ${pool}` : pool
+    const weak = (privacy) => privacy && privacy.level <= 1
+    if (shieldOnly) {
+      const later = measure('balance', totalRaw)
+      return later && { privacy: later, title: 'Nothing is sent now', detail: `Paying from it later scores like this · ${pool}` }
+    }
+    if (payingShielded) {
+      const privacy = measure('balance', sentRaw)
+      return privacy && { privacy, title: 'Sends now from shielded', detail: via }
+    }
+    if (keeping) {
+      const privacy = measure('keep', sentRaw, totalRaw)
+      return privacy && { privacy, title: 'Sends now', detail: `Keeps ${keepRaw ? rawTokenText(keepRaw, asset) : '0'} ${asset} shielded · ${via}`,
+        hint: weak(privacy) ? 'Sent right after the deposit, it is easy to trace.' : null, action: weak(privacy) ? 'See private options' : null }
+    }
+    if (receiverCount > 1) {
+      const privacy = measure('split', sentRaw)
+      return privacy && { privacy, title: `Sends now to ${receiverCount} recipients`, detail: via,
+        hint: weak(privacy) ? 'One deposit paying several people points back to it.' : null }
+    }
+    return null
+  }, [chosenOption, isSwap, isBridge, quote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, keeping, receiverCount, totalRaw, sentRaw, keepRaw])
   const optionAction = !chosenOption ? '' : chosenOption.kind === 'keep' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
     : chosenOption.kind === 'balance' ? `Send ${sentAmount} ${asset} from shielded` : `Send ${sentAmount} ${asset} now`
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
@@ -1088,6 +1119,7 @@ function PrivacyHome({ walletSession }) {
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
         shielded={!wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
+        : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {settingsOpen && optionsMode && <SendSettings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
       <div className="sendAction">
@@ -1099,7 +1131,7 @@ function PrivacyHome({ walletSession }) {
       </div>
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
-    {!chosenOption && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}
+    {!chosenOption && !measured && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}
       onDelay={null} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : receipt?.pending ? `Deposited · ${tokenText(BigInt(receipt.pending.baseUnits), receipt.pending.asset)} ${receipt.pending.asset} is ready to send ${new Date(receipt.pending.readyAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}` : receipt?.shielded ? `${receipt.shielded} ${receipt.viaLinks ? 'shielded · collect it from Payment links' : 'is now in your private balance'}` : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded`
         : !receipt?.depositSignature && receipt?.withdrawals?.length > 1 ? `Transfer complete · sent in ${receipt.withdrawals.length} private withdrawals` : 'Transfer complete')}{!sendError && receipt?.gas && ` · ${receipt.gasText} for fees sent`}</span>{receipt && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
