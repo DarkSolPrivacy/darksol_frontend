@@ -48,6 +48,22 @@ function loadSdk() {
   return loading
 }
 
+// Deletes an unregistered identity's note store and opens the session again on a
+// fresh one. The unlock secret is kept, so the wallet is not asked to sign again.
+async function restartNoteStore(nimbus, sdk, session, signer) {
+  const { buildNoteStoreBackendName } = await import('@umbra-privacy/nimbus-storage-solana/note-store')
+  const name = buildNoteStoreBackendName({ deployment: sdk.deployment, identityCommitment: session.identity.commitmentBytes })
+  nimbus.closeNimbusSession(session)
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(name)
+    request.onsuccess = request.onblocked = () => resolve()
+    request.onerror = () => reject(request.error)
+  })
+  const reopened = await nimbus.openNimbusSession(sdk, { connectedWallet: signer })
+  if (reopened.kind === 'declined') throw new Error('The Umbra v2 unlock message was declined.')
+  return reopened.session
+}
+
 // Polls until `check` holds. A failed read counts as not yet: the deposit has
 // already landed by the time this runs, so one network error must not end it.
 async function waitFor(what, check) {
@@ -80,12 +96,21 @@ async function send({ provider, asset, totalBaseUnits, recipient, onStatus }) {
   onStatus('Approve the Umbra v2 unlock message…')
   const opened = await nimbus.openNimbusSession(sdk, { connectedWallet: signer })
   if (opened.kind === 'declined') throw new Error('The Umbra v2 unlock message was declined.')
-  const { session } = opened
+  let { session } = opened
   try {
     if (session.registration.kind === 'unregistered') {
       onStatus('Approve the one-time Umbra v2 registration…')
-      const registration = await nimbus.register(await nimbus.createRegistrationContext(session), {}, { transactionVersion })
-      if (registration.kind !== 'complete' && !landed(registration)) throw new Error(`Umbra v2 registration did not land (${outcomeName(registration)})`)
+      const register = async () => nimbus.register(await nimbus.createRegistrationContext(session), {}, { transactionVersion })
+      let registration = await register()
+      // A registration that stopped after preparing (a failed request, a rejected
+      // signature) left the note store a birthday, and the next one, from a later
+      // slot, is refused for good. The identity is not registered, so its store
+      // holds nothing: start it over and try once more.
+      if (registration.kind === 'store-refused' && registration.refusal?.kind === 'refused-later-birthday') {
+        session = await restartNoteStore(nimbus, sdk, session, signer)
+        registration = await register()
+      }
+      if (registration.kind !== 'complete' && !landed(registration)) throw new Error(`Umbra v2 registration did not land (${outcomeName(registration)}${registration.refusal?.kind ? `: ${registration.refusal.kind}` : ''})`)
       // A deposit is refused until the context API has indexed the registration.
       onStatus('Waiting for Umbra v2 to confirm the registration…')
       await waitFor('registration', async () => (await nimbus.readRegistration(session)).kind === 'registered')
@@ -120,8 +145,11 @@ async function send({ provider, asset, totalBaseUnits, recipient, onStatus }) {
 
       // Never more than this send, even when an earlier balance sits beside it.
       onStatus('Sending privately…')
+      // Native SOL is paid to the wallet itself. Left to the SDK, it names the wallet's
+      // wrapped-SOL token account, which the payout refuses: no key signs for lamports there.
       const withdrawn = await nimbus.withdraw(await nimbus.createWithdrawalContext(session),
-        { mint, amount: available < amount ? available : amount, recipient: String(recipient) })
+        { mint, amount: available < amount ? available : amount, recipient: String(recipient) },
+        asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {})
       if (withdrawn.kind !== 'relayed') throw new Error(`the relayer did not take the withdrawal (${spendFailure(withdrawn)})`)
       const { settlement } = withdrawn
       if (settlement.kind === 'failed') throw new Error(`the withdrawal ${settlement.state}${settlement.failureCode ? ` (${settlement.failureCode})` : ''}`)
