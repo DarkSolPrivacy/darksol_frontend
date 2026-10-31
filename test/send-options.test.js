@@ -40,22 +40,24 @@ test('fees, meter steps, buckets and the copied deposit', () => {
 
 test('new money: deposit a common amount, keep the rest, send in a day; the plain send is the cheapest pool now', () => {
   const result = options(19.28)
-  assert.equal(result.suggested.id, 'privacycash:keep:24h')
+  assert.equal(result.suggested.id, 'privacycash:later:24h')
   assert.equal(result.suggested.score, 96)
   assert.equal(result.suggested.deposit, USDC(25))
   assert.equal(result.suggested.kept, USDC(5.72))
   assert.equal(result.asTyped.id, 'umbrav2:now:now')
   assert.equal(result.asTyped.score, 0)
   // Umbra v2's keep cell has too few sends, and Umbra v2 cannot keep change anyway.
-  assert.ok(!result.options.some((option) => option.id.startsWith('umbrav2:keep')))
+  assert.ok(!result.options.some((option) => option.id.startsWith('umbrav2:later')))
+  // The fastest really private one: a day's wait in Privacy Cash.
+  assert.equal(result.fastest.id, 'privacycash:later:24h')
 })
 
 test('priorities: time sends now in the cheapest pool, fees takes the cheapest option', () => {
   const custom = (priority) => ({ ...DEFAULT_SETTINGS, mode: 'custom', priority })
   assert.equal(options(19.28, { settings: custom('time') }).suggested.id, 'umbrav2:now:now')
   assert.equal(options(19.28, { settings: custom('fees') }).suggested.id, 'umbrav2:now:now')
-  assert.equal(options(19.28, { settings: custom('privacy') }).suggested.id, 'privacycash:keep:24h')
-  assert.equal(options(19.28, { settings: { ...custom('privacy'), maxWait: '6h' } }).suggested.id, 'privacycash:keep:6h')
+  assert.equal(options(19.28, { settings: custom('privacy') }).suggested.id, 'privacycash:later:24h')
+  assert.equal(options(19.28, { settings: { ...custom('privacy'), maxWait: '6h' } }).suggested.id, 'privacycash:later:6h')
   assert.equal(options(19.28, { settings: { ...custom('privacy'), pools: { privacycash: false } } }).suggested.id, 'umbrav2:now:now')
   // Auto ignores the custom choices.
   assert.equal(effectiveSettings({ mode: 'auto', priority: 'fees', maxWait: 'now' }).priority, 'auto')
@@ -63,14 +65,14 @@ test('priorities: time sends now in the cheapest pool, fees takes the cheapest o
 
 test('a fee that is most of a small payment outweighs the wait', () => {
   // $1.50: Privacy Cash's fee is half the payment, yet a day's wait still wins a step.
-  assert.equal(options(1.5).suggested.id, 'privacycash:keep:24h')
+  assert.equal(options(1.5).suggested.id, 'privacycash:later:24h')
   // $1: its fee is three quarters of the payment; every option is on the lowest step, so the cheapest wins.
   assert.equal(options(1).suggested.id, 'umbrav2:now:now')
 })
 
-test('keep nothing in pools drops the keep options', () => {
+test('keep nothing in pools deposits only what is sent', () => {
   const result = options(19.28, { settings: { ...DEFAULT_SETTINGS, keepNothing: true } })
-  assert.ok(!result.options.some((option) => option.kind === 'keep'))
+  assert.ok(!result.options.some((option) => option.kept > 0n))
   assert.equal(result.suggested.id, 'umbrav2:now:now')
 })
 
@@ -107,4 +109,65 @@ test('a send set up by hand gets the measured privacy of what it does', () => {
   assert.deepEqual(measure('split'), { score: 0, sends: 30, level: 0 })
   assert.equal(measuredPrivacy({ quote, protocol: 'curvy', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }), null)
   assert.equal(measuredPrivacy({ quote, protocol: 'cloakc', asset: 'USDC', raw: USDC(19.28), prices, kind: 'split' }), null)
+})
+
+// The same pools with the waits measured for exact, split and later sends.
+const timed = {
+  ...quote,
+  pools: {
+    ...quote.pools,
+    privacycash: {
+      ...quote.pools.privacycash,
+      cells: [...quote.pools.privacycash.cells, ...['1-10', '10-100'].flatMap((bucket) => [
+        cell('exact', '6h', bucket, 30, 30), cell('exact', '24h', bucket, 30, 29), cell('keep', 'now', bucket, 30, 30), cell('keep', '12h', bucket, 26, 4),
+        cell('split', 'now', bucket, 30, 30), cell('split', '6h', bucket, 30, 30), cell('split', '24h', bucket, 30, 27),
+      ])],
+    },
+  },
+}
+const timedOptions = (amount, extra = {}) => sendOptions({ quote: timed, asset: 'USDC', raw: USDC(amount), prices, ...extra })
+
+test('with no common amount to copy, the waits still show, measured as an exact deposit', () => {
+  // 4 USDC: no popular deposit in [4, 6].
+  const result = timedOptions(4)
+  const later = result.options.filter((option) => option.protocol === 'privacycash' && option.kind === 'later')
+  assert.deepEqual(later.map((option) => option.wait).sort(), ['24h', '6h'])
+  assert.ok(later.every((option) => option.deposit === USDC(4) && option.kept === 0n && option.level === 0))
+  // Nothing reaches 4 of 5, so the page says what a shielded balance would score.
+  assert.equal(result.fastest, null)
+  assert.deepEqual(result.balanceHint, { protocol: 'privacycash', score: 100, sends: 30, level: 5, known: false })
+  // A balance that covers it is the fastest private one, and the hint goes.
+  const funded = timedOptions(4, { shielded: { privacycash: USDC(10) } })
+  assert.equal(funded.fastest.id, 'privacycash:balance:now')
+  assert.equal(funded.balanceHint, null)
+})
+
+test('a 12 h wait shows once the quote measures it', () => {
+  const result = timedOptions(19.28)
+  assert.equal(result.options.find((option) => option.id === 'privacycash:later:12h').score, 85)
+  // 12 h hides it well enough and comes before a day.
+  assert.equal(result.fastest.id, 'privacycash:later:12h')
+  assert.ok(!options(19.28).options.some((option) => option.wait === '12h'))
+})
+
+test('keeping part shielded: every option deposits what the user set, in the pools that keep change', () => {
+  // A common deposit (25) reads as keep, any other as exact.
+  const common = timedOptions(19.28, { deposit: USDC(25) })
+  assert.ok(common.options.every((option) => option.protocol === 'privacycash'))
+  assert.deepEqual(common.options.filter((option) => option.kind !== 'balance').map((option) => [option.wait, option.score]).sort(),
+    [['12h', 85], ['24h', 96], ['6h', 50], ['now', 0]])
+  assert.ok(common.options.every((option) => option.deposit === USDC(25) && option.kept === USDC(5.72)))
+  const odd = timedOptions(3, { deposit: USDC(4) })
+  assert.deepEqual(odd.options.map((option) => [option.wait, option.score]).sort(), [['24h', 3], ['6h', 0], ['now', 0]])
+  assert.equal(odd.balanceHint.level, 5)
+})
+
+test('several recipients: measured as a split, in the pools that pay several, the fixed fee per recipient', () => {
+  const result = timedOptions(19.28, { recipients: 3 })
+  assert.ok(result.options.every((option) => option.protocol === 'privacycash'))
+  assert.deepEqual(result.options.map((option) => [option.wait, option.score]).sort(), [['24h', 10], ['6h', 0], ['now', 0]])
+  // 0.35% once, 0.006 SOL ($0.60) three times.
+  assert.equal(result.options[0].fee, poolFee('privacycash', 'USDC', USDC(19.28), prices) + 2n * 600_000n)
+  // Without split cells there is nothing to offer.
+  assert.equal(options(19.28, { recipients: 2 }).suggested, null)
 })

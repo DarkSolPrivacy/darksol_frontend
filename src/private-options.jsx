@@ -14,7 +14,7 @@ const POOL_RISK = {
   cloakc: { text: 'Multisig', tone: 'plain' },
   umbrav2: { text: 'One key', tone: 'warn' },
 }
-const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '24h': 'In 24 h' }
+const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
 
 export function tokenText(raw, asset) {
@@ -39,18 +39,28 @@ export function Meter({ option, large = false }) {
 export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onReveal, onSettings }) {
   const [othersOpen, setOthersOpen] = React.useState(false)
   if (!result?.suggested || !chosen) return null
-  // The suggested pool's options, with one "Now": the plain send in its cheapest pool.
-  const main = result.options.filter((option) => option.protocol === result.suggested.protocol && option.executable
-    && (option.kind !== 'now' || option === result.suggested || !result.asTyped))
-  if (result.asTyped && !main.includes(result.asTyped)) main.push(result.asTyped)
-  const order = { balance: 0, now: 1, keep: 2 }
+  // One row per way to send (now, each wait, from shielded): the suggestion, the
+  // fastest really private one, the plain send, then the suggested pool's
+  // option, else the best other pool's. The rest fold under "Other pools".
+  const main = []
+  const taken = new Set()
+  const take = (option, always = false) => {
+    const slot = option && `${option.kind}:${option.wait}`
+    if (!option?.executable || main.includes(option) || (taken.has(slot) && !always)) return
+    main.push(option); taken.add(slot)
+  }
+  take(result.suggested); take(result.fastest, true); take(result.asTyped)
+  const runnable = result.options.filter((option) => option.executable)
+  for (const option of runnable) if (option.protocol === result.suggested.protocol) take(option)
+  for (const option of runnable) take(option)
+  const order = { balance: 0, now: 1, later: 2 }
   main.sort((a, b) => order[a.kind] - order[b.kind] || a.waitSeconds - b.waitSeconds)
   const others = result.options.filter((option) => !main.includes(option))
   const before = chosen.kind === 'balance' ? chosen.balanceBefore : shielded ?? null
   const after = chosen.kind === 'balance' ? chosen.balanceAfter : before === null ? chosen.kept : before + chosen.kept
   const row = (option) => <label className={`privOption${option.id === chosen.id ? ' chosen' : ''}${option.executable ? '' : ' off'}`} key={option.id}>
     <input type="radio" name="privOption" checked={option.id === chosen.id} disabled={!option.executable} onChange={() => onChoose(option.id)} />
-    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <em>Best</em>}<small>{POOL_NAMES[option.protocol]}</small></span>
+    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <em>Best</em>}{option === result.fastest && <em className="private">Private</em>}<small>{POOL_NAMES[option.protocol]}</small></span>
     <Meter option={option} />
   </label>
 
@@ -76,6 +86,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onRe
         {othersOpen && others.map(row)}
       </>}
     </div>
+    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={shielded === undefined} onReveal={onReveal} />}
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>
@@ -84,7 +95,15 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onRe
   </section>
 }
 
-/** Measured privacy for a send set up by hand (shield options, several recipients): one line, a hint when it is weak. */
+/** When nothing reaches 4 of 5: what paying from a shielded balance would score, and a way to read it. */
+export function PrivateHint({ result, prefix, canReveal, onReveal }) {
+  const lead = prefix ? `${prefix} ` : ''
+  return <p className="privHint">{result.balanceHint
+    ? <>{lead}Paying from a shielded balance scores {result.balanceHint.level} of 5.{canReveal && <button type="button" onClick={onReveal}>Show balance</button>}</>
+    : `${lead}Try a longer wait or another pool in settings.`}</p>
+}
+
+/** Measured privacy for shield only and paying from shielded funds: one line, a hint when it is weak. */
 export function MeasuredSummary({ privacy, title, detail, hint, action, onAction }) {
   return <section className="privOptions privMeasured" aria-label="How private this send is">
     <div className="privHero">
@@ -96,7 +115,7 @@ export function MeasuredSummary({ privacy, title, detail, hint, action, onAction
 }
 
 const PRIORITIES = [['privacy', 'Privacy'], ['time', 'Time'], ['fees', 'Fees']]
-const MAX_WAITS = [['now', 'None'], ['6h', '6 h'], ['24h', '24 h']]
+const MAX_WAITS = [['now', 'None'], ['6h', '6 h'], ['12h', '12 h'], ['24h', '24 h']]
 
 export function SendSettings({ settings, onChange, onClose }) {
   const set = (patch) => onChange({ ...settings, ...patch })
@@ -143,7 +162,7 @@ export function PendingPayments({ items, now, onSend, onKeep, sending }) {
       return <div className={`privPendingItem panel${ready ? ' ready' : ''}`} key={item.id}>
         <div className="privPendingHead">
           <b>{tokenText(BigInt(item.baseUnits), item.asset)} {item.asset}</b>
-          <code>→ {item.recipient.slice(0, 4)}…{item.recipient.slice(-4)}</code>
+          <code>→ {item.recipients?.length > 1 ? `${item.recipients.length} recipients` : `${item.recipient.slice(0, 4)}…${item.recipient.slice(-4)}`}</code>
         </div>
         {ready ? <span className="privPendingReady"><Check aria-hidden="true" />Ready to send</span>
           : <div className="privProgress"><span>Ready in {remaining(item.readyAt - now)}</span><i><b style={{ width: `${Math.round(share * 100)}%` }} /></i></div>}

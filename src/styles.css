@@ -645,6 +645,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privOptionLabel { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .privOptionLabel b { font-size: 14px; font-weight: 500; }
 .privOptionLabel em { padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font: 600 11px var(--font-ui); }
+.privOptionLabel em.private { background: var(--positive); }
 .privOptionLabel small { margin-left: auto; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
 .privOthers { min-height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
 .privOthers svg { width: 14px; height: 14px; transition: transform .15s; }
