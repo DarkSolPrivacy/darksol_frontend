@@ -33,6 +33,7 @@
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.115.0",
     "@umbra-privacy/nimbus-solana-web": "0.1.1",
+    "@umbra-privacy/nimbus-storage-solana": "0.1.1",
     "@umbra-privacy/sdk": "5.0.0-rc.6",
     "@vercel/functions": "3.9.9",
     "@vitejs/plugin-react": "^6.1.1",
