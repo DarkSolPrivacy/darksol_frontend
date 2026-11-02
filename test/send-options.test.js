@@ -132,6 +132,15 @@ const timed = {
 }
 const timedOptions = (amount, extra = {}) => sendOptions({ quote: timed, asset: 'USDC', raw: USDC(amount), prices, ...extra })
 
+test('sending all of a common deposit is measured as exact, so pools with few keep sends still show', () => {
+  // 25 USDC is a common deposit in every pool; Umbra v2 and Cloak have no keep cell for now.
+  const popular = [{ amount: '25000000', deposits: 40 }]
+  const common = { ...timed, pools: { ...timed.pools, umbrav2: { ...timed.pools.umbrav2, popular }, cloakc: { ...timed.pools.cloakc, popular } } }
+  const result = sendOptions({ quote: common, asset: 'USDC', raw: USDC(25), prices, settings: { ...DEFAULT_SETTINGS, keepNothing: true } })
+  assert.deepEqual([...new Set(result.options.map((option) => option.protocol))].sort(), ['cloakc', 'privacycash', 'umbrav2'])
+  assert.equal(result.options.find((option) => option.id === 'privacycash:now:now').score, 0)
+})
+
 test('with no common amount to copy, the waits still show, measured as an exact deposit', () => {
   // 4 USDC: no popular deposit in [4, 6].
   const result = timedOptions(4)

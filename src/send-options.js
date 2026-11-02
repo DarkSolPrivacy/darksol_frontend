@@ -94,11 +94,12 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
 }
 
 // Which cell measures a send: from the balance, to several recipients, a
-// deposit others make too (keep), or any other deposit, read as an exact one.
+// deposit others make too that keeps part (keep), or any other deposit, read as
+// an exact one. Sending all of a common deposit keeps nothing, so it is exact.
 function strategyOf(pool, kind, recipients, deposit, raw) {
   if (kind === 'balance') return 'balance'
   if (recipients > 1) return 'split'
-  return deposit >= raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? 'keep' : 'exact'
+  return deposit > raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? 'keep' : 'exact'
 }
 
 /**
