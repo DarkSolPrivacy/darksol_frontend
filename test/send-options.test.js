@@ -68,6 +68,15 @@ test('priorities: time sends now in the cheapest pool, fees takes the cheapest o
   assert.equal(effectiveSettings({ mode: 'auto', priority: 'fees', maxWait: 'now' }).priority, 'auto')
 })
 
+test('once two waits show the same meter step at the same fee, the sooner one is suggested', () => {
+  // 90 USDC: 6 h scores 90 and 24 h 97, both 5 of 5; less the fee, 6 h ranked a step lower.
+  const both = { ...quote, pools: { privacycash: { cells: [cell('exact', 'now', '10-100', 30, 30), cell('exact', '6h', '10-100', 30, 3), cell('exact', '24h', '10-100', 30, 1)], popular: [] } } }
+  const result = sendOptions({ quote: both, asset: 'USDC', raw: USDC(90), prices })
+  assert.deepEqual(result.options.filter((option) => option.kind === 'later').map((option) => option.level), [5, 5])
+  assert.equal(result.suggested.id, 'privacycash:later:6h')
+  assert.equal(result.options[0], result.suggested)
+})
+
 test('a fee that is most of a small payment outweighs the wait', () => {
   // $1.50: Privacy Cash's fee is half the payment, yet a day's wait still wins a step.
   assert.equal(options(1.5).suggested.id, 'privacycash:later:24h')

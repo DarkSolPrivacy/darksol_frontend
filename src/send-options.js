@@ -167,8 +167,14 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   }
   const allowed = options.filter((option) => option.executable && chosen.pools[option.protocol] && option.waitSeconds <= WAITS[chosen.maxWait])
   const pool = chosen.priority === 'time' && allowed.some((option) => option.waitSeconds === 0) ? allowed.filter((option) => option.waitSeconds === 0) : allowed
-  const ranked = [...pool].sort(compare(chosen.priority))
-  const suggested = ranked[0] ?? null
+  const sorted = [...pool].sort(compare(chosen.priority))
+  // An option on the same meter step or higher, at no higher fee, leads when it
+  // is sooner: two 5 of 5 waits send in 6 h, not 24 h, even when the longer one
+  // scored a few points more.
+  const lead = sorted[0]
+  const suggested = (lead && sorted.filter((option) => option.level >= lead.level && option.feeUsd <= lead.feeUsd)
+    .sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0]) ?? null
+  const ranked = suggested ? [suggested, ...sorted.filter((option) => option !== suggested)] : sorted
   const asTyped = options.filter((option) => option.kind === 'now' && option.executable).sort((a, b) => a.feeUsd - b.feeUsd)[0] ?? null
   // The soonest really private one; same wait, the cheaper.
   const fastest = allowed.filter((option) => option.level >= PRIVATE_LEVEL).sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0] ?? null
