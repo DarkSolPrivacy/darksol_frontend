@@ -3,21 +3,11 @@
 // shielded before and after, the settings,
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
-import { Check, ChevronDown, Coins, ShieldCheck, TriangleAlert, X, Zap } from 'lucide-react'
+import { Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'lucide-react'
 import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
 const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
-// Who can upgrade each pool's program, read on chain 2026-11-02: every upgrade
-// authority is vault 0 of a Squads v4 multisig with no config authority.
-// Privacy Cash AqoNsGV9…: 3 of 5. Cloak EorYbDdQ…: 3 of 4, 1 h time lock.
-// Umbra v2 CVdXkXFv… (program and user registry): 2 of 5, since 2026-10-15; a
-// single key upgraded it until then.
-const POOL_RISK = {
-  privacycash: { text: '3 of 5 multisig', tone: 'good' },
-  cloakc: { text: '3 of 4 multisig · 1 h delay', tone: 'good' },
-  umbrav2: { text: '2 of 5 multisig', tone: 'plain' },
-}
 const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
 
@@ -156,31 +146,30 @@ export function SendSettings({ open, settings, onChange, onClose }) {
   React.useEffect(() => { open ? dialog.current?.showModal() : dialog.current?.close() }, [open])
   const set = (patch) => onChange({ ...settings, ...patch })
   const custom = settings.mode === 'custom'
+  // One setting per row: what it is on the left, its control on the right.
+  const row = (label, detail, control) => <div className="privRow"><span>{label}{detail && <small>{detail}</small>}</span>{control}</div>
   const segment = (items, value, pick, label) => <div className="privSegment" role="group" aria-label={label}>
     {items.map(([id, text]) => <button type="button" key={id} aria-pressed={value === id} onClick={() => pick(id)}>{text}</button>)}
   </div>
+  const toggle = (label, detail, checked, onToggle, disabled = false) => <label className="privRow" key={label}>
+    <span>{label}{detail && <small>{detail}</small>}</span>
+    <input type="checkbox" role="switch" className="privSwitch" checked={checked} disabled={disabled} onChange={(event) => onToggle(event.target.checked)} />
+  </label>
   return <dialog className="paymentDialog privSettings" ref={dialog} aria-label="Send settings" onClose={onClose}
     onClick={(event) => { if (event.target === event.currentTarget) dialog.current.close() }}>
-    <div className="privSettingsHead"><b>Send settings</b><button type="button" aria-label="Close settings" onClick={() => dialog.current.close()}><X /></button></div>
-    {segment([['auto', 'Auto'], ['custom', 'Custom']], settings.mode, (mode) => set({ mode }), 'Mode')}
-    {custom ? <>
-      <span className="privSettingsLabel">Optimize for</span>
-      {segment(PRIORITIES, settings.priority, (priority) => set({ priority }), 'Optimize for')}
-      <span className="privSettingsLabel">Longest wait</span>
-      {segment(MAX_WAITS, settings.maxWait, (maxWait) => set({ maxWait }), 'Longest wait')}
-    </> : <div className="privChips"><span className="good">Privacy first</span><span>Wait up to 24 h</span><span>Best pool</span></div>}
-    <div className="privToggles">
-      <label>Keep nothing in pools<input type="checkbox" checked={settings.keepNothing} onChange={(event) => set({ keepNothing: event.target.checked })} /></label>
-      <label>Remind me when ready<input type="checkbox" checked={settings.remind} onChange={(event) => set({ remind: event.target.checked })} /></label>
-    </div>
-    <span className="privSettingsLabel">Pools</span>
-    <div className="privToggles">
-      {Object.entries(POOL_NAMES).map(([id, name]) => <label key={id}>
-        <span>{name}</span>
-        <small className={POOL_RISK[id].tone}>{POOL_RISK[id].tone === 'warn' && <TriangleAlert aria-hidden="true" />}{POOL_RISK[id].text}</small>
-        <input type="checkbox" checked={custom ? settings.pools[id] !== false : true} disabled={!custom} onChange={(event) => set({ pools: { ...settings.pools, [id]: event.target.checked } })} />
-      </label>)}
-    </div>
+    <div className="privSettingsHead"><b>Settings</b><button type="button" aria-label="Close settings" onClick={() => dialog.current.close()}><X /></button></div>
+    {row('Mode', custom ? 'You pick the priority and the wait' : 'Privacy first, waits up to 24 h, every pool',
+      segment([['auto', 'Auto'], ['custom', 'Custom']], settings.mode, (mode) => set({ mode }), 'Mode'))}
+    {custom && <>
+      {row('Optimize for', null, segment(PRIORITIES, settings.priority, (priority) => set({ priority }), 'Optimize for'))}
+      {row('Longest wait', null, segment(MAX_WAITS, settings.maxWait, (maxWait) => set({ maxWait }), 'Longest wait'))}
+    </>}
+    {toggle('Keep nothing in pools', 'Deposit only what you send', settings.keepNothing, (keepNothing) => set({ keepNothing }))}
+    {toggle('Remind me when ready', 'Notify me when a waiting payment can go out', settings.remind, (remind) => set({ remind }))}
+    <hr className="privDivider" />
+    {row(<b className="privSection">Pools</b>, custom ? null : 'Auto uses every pool. Switch to Custom to choose.', null)}
+    {Object.entries(POOL_NAMES).map(([id, name]) => toggle(name, null, custom ? settings.pools[id] !== false : true,
+      (on) => set({ pools: { ...settings.pools, [id]: on } }), !custom))}
   </dialog>
 }
 
