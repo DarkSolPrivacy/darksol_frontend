@@ -1,13 +1,16 @@
 // The ways to send this amount privately, and the one we suggest. Each option's
 // privacy is measured, not scored: the share of DarkSol sends like it that our
-// tracer linked to the sender, from GET /api/privacy-quote (darksol-backend
-// docs/PRIVACY_QUOTE.md). Pure: the page passes in the quote, prices, shielded
-// balances and settings.
+// tracer linked to the sender. For this exact amount it comes from POST
+// /api/privacy-sim (darksol-backend docs/PRIVACY_SIM.md), good to ±6 points at
+// most (95% interval). Until that answers, or without it, it comes from the
+// amount's size bucket in GET /api/privacy-quote (docs/PRIVACY_QUOTE.md), good
+// to about ±10. Pure: the page passes in the quote (merged by withSimulation),
+// prices, shielded balances and settings.
 //
 // Ranking. value = privacy − k × fee as a % of the payment, so a fee that is a
-// big share of a small payment counts for more. Privacy shows as a 5-step meter
-// (the quote is good to about ±10 points), and options on the same step of
-// value are a tie: the cheaper one wins, then the sooner one.
+// big share of a small payment counts for more. Privacy shows as a 5-step
+// meter, and options on the same step of value are a tie: the cheaper one wins,
+// then the sooner one.
 import { PROTOCOLS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
@@ -17,6 +20,7 @@ export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
 export const MIN_SENDS = 10
 export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h': 86_400 })
 // A wait shows once the quote measures it: 12h is offered from the first quote that has its cells.
+// The simulation also measures 30m, which is not offered.
 const LATER_WAITS = ['6h', '12h', '24h']
 // "Really private": the step a send must reach to be offered as the fastest private one.
 export const PRIVATE_LEVEL = 4
@@ -70,11 +74,31 @@ export function bucketFor(usd, buckets) {
   return usd < ranges[0][0] ? buckets[0] : buckets.at(-1)
 }
 
-// The first of `strategies` the quote measured with enough sends.
+/**
+ * The quote for this exact amount: each pool the simulation (POST
+ * /api/privacy-sim) measured has its cells in `bucket`, the amount's bucket,
+ * replaced by the simulated ones, marked `simulated: { days, samples }`. Other
+ * buckets, `popular` and the pools it lacks (Umbra v2, pools still loading)
+ * stay as quoted. Without a quote, the simulation alone, with buckets [bucket].
+ */
+export function withSimulation(quote, sim, bucket) {
+  if (!sim?.pools || !bucket) return quote
+  const pools = { ...quote?.pools }
+  const simulated = { days: sim.days, samples: sim.samples }
+  for (const [protocol, measured] of Object.entries(sim.pools)) {
+    if (!Array.isArray(measured?.cells)) continue
+    const quoted = pools[protocol]
+    pools[protocol] = { ...quoted, cells: [...(quoted?.cells ?? []).filter((cell) => cell.bucket !== bucket), ...measured.cells.map((cell) => ({ ...cell, bucket, simulated }))] }
+  }
+  return quote ? { ...quote, pools } : { asset: sim.asset, buckets: [bucket], pools }
+}
+
+// The first of `strategies` the quote measured with enough sends; `simulated`
+// when it was measured for this exact amount.
 function privacyOf(pool, strategies, wait, bucket) {
   for (const strategy of [strategies].flat()) {
     const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
-    if (cell && cell.sends >= MIN_SENDS) return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends }
+    if (cell && cell.sends >= MIN_SENDS) return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends, ...cell.simulated && { simulated: cell.simulated } }
   }
   return null
 }
@@ -93,7 +117,7 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
   const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
   const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
   const privacy = privacyOf(pool, kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact', 'now', bucket)
-  return privacy && { ...privacy, level: meterLevel(privacy.score) }
+  return privacy && { ...privacy, bucket, level: meterLevel(privacy.score) }
 }
 
 // Which cells measure a send: from the balance, to several recipients, a
@@ -145,7 +169,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       const cost = feeUsd + (kind === 'balance' ? 0 : depositUsd)
       options.push({
         id: `${protocol}:${kind}:${wait}`, protocol, kind, wait, waitSeconds: WAITS[wait],
-        score: privacy.score, sends: privacy.sends, level: meterLevel(privacy.score),
+        score: privacy.score, sends: privacy.sends, simulated: privacy.simulated, level: meterLevel(privacy.score),
         fee, feeUsd: cost, feePct: 100 * cost / usd, receives: raw > fee ? raw - fee : 0n,
         deposit, kept: deposit - raw, executable: runs, ...extra,
       })

@@ -25,6 +25,15 @@ const meterTone = (level) => level >= 4 ? 'high' : level >= 2 ? 'mid' : 'low'
 // is good to roughly ±10 points, too coarse to quote as a percentage.
 const TRACE_WORDS = ['Most likely traced', 'Most likely traced', 'Often traced', 'Sometimes traced', 'Rarely traced', 'Very rarely traced']
 
+// What a privacy figure rests on: a simulation of this exact amount, else the quote's size bucket ("10-100").
+const dollars = (value) => `$${Number(value).toLocaleString('en-US')}`
+function Basis({ privacy, bucket }) {
+  const [from, to] = String(bucket ?? '').split('-')
+  const text = privacy?.simulated ? `Measured for this exact amount: ${privacy.simulated.samples} simulated sends over ${privacy.simulated.days} days`
+    : to ? `Measured on DarkSol sends of ${dollars(from)}–${dollars(to)}` : null
+  return text && <small className="privBasis">{text}</small>
+}
+
 /** Privacy as 5 steps; how likely it is traced is in the label for screen readers and on hover. */
 export function Meter({ option, large = false }) {
   const level = option?.level ?? 0
@@ -104,6 +113,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
       <div>
         <b>{chosen.waitSeconds ? `Sends ${WAIT_LABEL[chosen.wait].toLowerCase()}` : 'Sends now'}</b>
         <span>Fee {usd(chosen.feeUsd)}{chosen.feePct >= 5 ? ` (${Math.round(chosen.feePct)}%)` : ''} · {POOL_NAMES[chosen.protocol]}</span>
+        <Basis privacy={chosen} bucket={result.bucket} />
       </div>
     </div>
     <div className="privList" role="radiogroup" aria-label="How to send">
@@ -131,7 +141,7 @@ export function MeasuredSummary({ privacy, title, detail, hint, action, onAction
   return <section className="privOptions privMeasured" aria-label="How private this send is">
     <div className="privHero">
       {privacy && <Meter option={privacy} large />}
-      <div><b>{title}</b><span>{detail}</span></div>
+      <div><b>{title}</b><span>{detail}</span>{privacy && <Basis privacy={privacy} bucket={privacy.bucket} />}</div>
     </div>
     {hint && <p className="privHint">{hint}{action && <button type="button" onClick={onAction}>{action}</button>}</p>}
   </section>

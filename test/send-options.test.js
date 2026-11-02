@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions } from '../src/send-options.js'
+import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, withSimulation } from '../src/send-options.js'
 
 const USDC = (value) => BigInt(Math.round(value * 1e6))
 const prices = { USDC: 1, USDT: 1, SOL: 100 }
@@ -117,10 +117,11 @@ test('a send set up by hand gets the measured privacy of what it does', () => {
   const pools = { ...quote.pools, privacycash: { ...quote.pools.privacycash, cells: [...quote.pools.privacycash.cells, cell('keep', 'now', '10-100', 30, 29), cell('split', 'now', '10-100', 30, 30)] } }
   const measure = (kind, extra = {}) => measuredPrivacy({ quote: { ...quote, pools }, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind, ...extra })
   // Keeping part of a common deposit and sending now: the keep cell. Of any other deposit: an exact send's.
-  assert.deepEqual(measure('keep', { deposit: USDC(25) }), { score: 3, sends: 30, level: 0 })
-  assert.deepEqual(measure('keep', { deposit: USDC(23.4) }), { score: 0, sends: 30, level: 0 })
-  assert.deepEqual(measure('balance'), { score: 100, sends: 30, level: 5 })
-  assert.deepEqual(measure('split'), { score: 0, sends: 30, level: 0 })
+  const bucket = '10-100'
+  assert.deepEqual(measure('keep', { deposit: USDC(25) }), { score: 3, sends: 30, bucket, level: 0 })
+  assert.deepEqual(measure('keep', { deposit: USDC(23.4) }), { score: 0, sends: 30, bucket, level: 0 })
+  assert.deepEqual(measure('balance'), { score: 100, sends: 30, bucket, level: 5 })
+  assert.deepEqual(measure('split'), { score: 0, sends: 30, bucket, level: 0 })
   assert.equal(measuredPrivacy({ quote, protocol: 'curvy', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }), null)
   assert.equal(measuredPrivacy({ quote, protocol: 'cloakc', asset: 'USDC', raw: USDC(19.28), prices, kind: 'split' }), null)
 })
@@ -198,4 +199,55 @@ test('several recipients: measured as a split, in the pools that pay several, th
   assert.equal(result.options[0].fee, poolFee('privacycash', 'USDC', USDC(19.28), prices) + 2n * 600_000n)
   // Without split cells there is nothing to offer.
   assert.equal(options(19.28, { recipients: 2 }).suggested, null)
+})
+
+// POST /api/privacy-sim for 19.28 USDC: Privacy Cash measured for this exact amount, Cloak still loading.
+const simCell = (strategy, wait, sends, traced) => ({ strategy, wait, planned: sends, sends, traced, linked: traced, timed: 0 })
+const sim = {
+  asset: 'USDC', model: 'privacy-sim/1', days: 90, samples: 300,
+  pools: { privacycash: { asOf: '2026-11-01T00:00:00.000Z', cells: [simCell('exact', 'now', 300, 300), simCell('keep', '30m', 300, 150), simCell('keep', '6h', 300, 3), simCell('balance', 'now', 300, 0)] } },
+}
+
+test('the simulation replaces its pools\' cells for the amount\'s bucket, and keeps the rest of the quote', () => {
+  const merged = withSimulation(quote, sim, '10-100')
+  const pc = merged.pools.privacycash
+  assert.deepEqual(pc.cells.filter((item) => item.bucket === '10-100').map(({ strategy, wait, sends, simulated }) => [strategy, wait, sends, simulated]),
+    [['exact', 'now', 300, { days: 90, samples: 300 }], ['keep', '30m', 300, { days: 90, samples: 300 }], ['keep', '6h', 300, { days: 90, samples: 300 }], ['balance', 'now', 300, { days: 90, samples: 300 }]])
+  assert.deepEqual(pc.cells.filter((item) => item.bucket === '1-10'), quote.pools.privacycash.cells.filter((item) => item.bucket === '1-10'))
+  assert.equal(pc.popular, quote.pools.privacycash.popular)
+  assert.equal(merged.pools.umbrav2, quote.pools.umbrav2)
+  assert.equal(merged.pools.cloakc, quote.pools.cloakc)
+  assert.equal(merged.buckets, buckets)
+  // The quote itself is untouched, and nothing to merge leaves it as is.
+  assert.equal(quote.pools.privacycash.cells.length, 8)
+  assert.equal(withSimulation(quote, null, '10-100'), quote)
+  assert.equal(withSimulation(quote, sim, null), quote)
+  // No quote yet (404): the simulation alone.
+  const alone = withSimulation(null, sim, 'exact')
+  assert.deepEqual(alone.buckets, ['exact'])
+  assert.deepEqual(Object.keys(alone.pools), ['privacycash'])
+  // With no popular amounts to copy, a deposit reads as exact: it sends now, and the balance would hide it.
+  const result = sendOptions({ quote: alone, asset: 'USDC', raw: USDC(19.28), prices })
+  assert.deepEqual(result.options.map((option) => option.id), ['privacycash:now:now'])
+  assert.deepEqual(result.options[0].simulated, { days: 90, samples: 300 })
+  assert.equal(result.balanceHint.score, 100)
+  assert.equal(sendOptions({ quote: alone, asset: 'USDC', raw: USDC(19.28), prices, shielded: { privacycash: USDC(50) } }).suggested.id, 'privacycash:balance:now')
+})
+
+test('options use a simulated cell for this exact amount, and never offer its 30 min wait', () => {
+  const before = options(19.28).options.find((option) => option.id === 'privacycash:later:6h')
+  assert.equal(before.score, 50)
+  assert.equal(before.simulated, undefined)
+  const result = sendOptions({ quote: withSimulation(quote, sim, '10-100'), asset: 'USDC', raw: USDC(19.28), prices })
+  const after = result.options.find((option) => option.id === 'privacycash:later:6h')
+  assert.equal(after.score, 99)
+  assert.equal(after.sends, 300)
+  assert.deepEqual(after.simulated, { days: 90, samples: 300 })
+  assert.ok(!result.options.some((option) => option.wait === '30m'))
+  // The simulation measured no day's wait for this amount; Umbra v2 still reads the quote.
+  assert.ok(!result.options.some((option) => option.id === 'privacycash:later:24h'))
+  assert.equal(result.options.find((option) => option.id === 'umbrav2:now:now').simulated, undefined)
+  assert.equal(result.suggested.id, 'privacycash:later:6h')
+  assert.deepEqual(measuredPrivacy({ quote: withSimulation(quote, sim, '10-100'), protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }),
+    { score: 100, sends: 300, simulated: { days: 90, samples: 300 }, bucket: '10-100', level: 5 })
 })

@@ -71,7 +71,7 @@
         <h3>How routes are scored</h3>
         <p>The privacy estimate is a score from 0 to 100, based on how deep the pool is compared with your amount, how much recent activity there is, how many flows of a similar size it has seen, how spread out that activity is over time, and how unusual your amount is. A transfer larger than the pool, or a pool with too small a published anonymity set, is marked <strong>Not private</strong> and can't be sent. The score is an estimate, not a guarantee.</p>
         <h3>What DarkSol sees</h3>
-        <p>To compare routes, your browser sends only the token, the amount and how it is split between recipients. Your wallet address and your recipients' addresses are not part of route planning. Deposits and withdrawals are public Solana transactions, as with any pool.</p>
+        <p>To compare routes, your browser sends only the token, the amount and how it is split between recipients. Your wallet address and your recipients' addresses are not part of route planning. To measure how private each way of sending is, it also sends the token and the exact amount; DarkSol does not log or store that amount. Deposits and withdrawals are public Solana transactions, as with any pool.</p>
         <h3>Supported pools</h3>
         <table>
           <caption>Pools available for private transfers</caption>
