@@ -630,6 +630,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privHero > div { display: flex; flex-direction: column; gap: 3px; }
 .privHero b { font-size: 16px; font-weight: 500; }
 .privHero span { color: var(--text-secondary); font-size: 12px; }
+.privBasis { color: var(--text-tertiary); font-size: 11px; }
 .privMeter { display: inline-flex; align-items: flex-end; gap: 3px; flex: none; }
 .privMeter i { width: 6px; height: 14px; border-radius: 2px; background: var(--border-default); }
 .privMeter.large i { width: 12px; height: 30px; border-radius: 3px; }

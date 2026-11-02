@@ -25,6 +25,7 @@ DarkSol does not run its own pool. It is a routing and analysis layer on top of 
 ## What DarkSol can and cannot see
 
 - Route planning receives only the token, the amount and how it is split between recipients. Wallet and recipient addresses are not sent for planning.
+- To measure the private send options, the browser also sends the token and the exact amount. DarkSol does not log or store that amount.
 - The payment-link service stores an anonymous merchant ID, invoice terms, note commitments, encrypted notes and payment status. It never receives the creator's wallet address, wallet signatures, note spending keys, or collection destinations. Spending keys are derived in the browser from a wallet signature.
 - For delayed delivery, DarkSol's server holds the prepared withdrawal until it is sent. The recipient and amount are fixed inside it, so it can only be delivered or dropped, never redirected.
 - Deposits and withdrawals are public Solana transactions, as with any privacy pool.

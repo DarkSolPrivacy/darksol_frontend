@@ -22,7 +22,7 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
-import { measuredPrivacy, sendOptions } from './send-options.js'
+import { bucketFor, measuredPrivacy, sendOptions, withSimulation } from './send-options.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
 
@@ -511,6 +511,8 @@ function PrivacyHome({ walletSession, settings }) {
   // The private options (src/send-options.js): the quote they rank with, the
   // one picked, and the payments whose deposit waits to be sent.
   const [quote, setQuote] = useState(null)
+  // The simulation for one exact amount, with the asset:amount key it was for.
+  const [sim, setSim] = useState(null)
   const [chosenOptionId, setChosenOptionId] = useState(null)
   const [pending, setPending] = useState(loadPending)
   const [clock, setClock] = useState(Date.now)
@@ -555,6 +557,9 @@ function PrivacyHome({ walletSession, settings }) {
   // What leaves the pool for the recipients: the amount, less what stays shielded.
   const sentRaw = totalRaw === null || keepRaw === null ? null : totalRaw - keepRaw
   const sentAmount = keeping ? (sentRaw !== null && sentRaw > 0n ? rawTokenText(sentRaw, asset) : '') : amount
+  // The amount the options measure: what is sent, or for shield only all of it.
+  const simRaw = shieldOnly ? totalRaw : sentRaw
+  const simKey = !isSwap && !isBridge && simRaw > 0n ? `${asset}:${simRaw}` : null
   const keepError = !keeping ? '' : keepRaw === null ? 'Enter a valid amount to keep shielded'
     : !keepRaw ? 'Enter how much to keep shielded' : sentRaw !== null && sentRaw <= 0n ? 'Keep less than the full amount' : ''
   const receiverRaws = receiverAmounts.map((value) => rawTokenAmount(value, asset))
@@ -601,7 +606,7 @@ function PrivacyHome({ walletSession, settings }) {
   useEffect(() => saveScheduled(scheduled), [scheduled])
   useEffect(() => savePending(pending), [pending])
 
-  // One token's quote for every size at once, so the amount never leaves the page.
+  // One token's quote for every size at once, by size bucket. The options show from it at once.
   useEffect(() => {
     if (isSwap || isBridge) return undefined
     const controller = new AbortController()
@@ -610,6 +615,22 @@ function PrivacyHome({ walletSession, settings }) {
       .then((data) => setQuote(data?.asset === asset ? data : null), () => {})
     return () => controller.abort()
   }, [asset, isSwap, isBridge])
+
+  // Then the privacy of this exact amount, simulated by the server, once typing
+  // pauses. The amount goes in a POST body, never a URL; the server neither logs
+  // nor stores it. A 404 (not deployed), 503 (busy) or failure keeps the quote.
+  useEffect(() => {
+    if (!simKey) return undefined
+    const controller = new AbortController()
+    const [simAsset, raw] = simKey.split(':')
+    const timer = setTimeout(() => fetch('/api/privacy-sim', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ asset: simAsset, amount: rawTokenText(BigInt(raw), simAsset) }),
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => { if (data?.asset === simAsset) setSim({ key: simKey, data }) }, () => {}), 400)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [simKey])
 
   // A new amount or token starts from the suggestion again.
   useEffect(() => setChosenOptionId(null), [asset, sentAmount, receiverCount, shieldMode])
@@ -980,18 +1001,28 @@ function PrivacyHome({ walletSession, settings }) {
   // then (or for a swap or bridge) the planner's route stands. Keeping part
   // shielded fixes the deposit; several recipients are measured as a split.
   const pcShielded = shielded.pools.privacycash
-  const optionResult = useMemo(() => optionsMode && !keepError && sentRaw > 0n && quote
-    ? sendOptions({ quote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
+  // The quote with this exact amount's simulated cells in place of its bucket's,
+  // once they arrive for it. Without a quote, the simulation alone.
+  const amountQuote = useMemo(() => {
+    const data = sim?.key === simKey ? sim.data : null
+    const base = quote?.asset === asset ? quote : null
+    if (!data) return base
+    const bucket = !base?.buckets?.length ? 'exact'
+      : prices[asset] > 0 ? bucketFor(Number(rawTokenText(simRaw, asset)) * prices[asset], base.buckets) : null
+    return withSimulation(base, data, bucket)
+  }, [sim, simKey, quote, asset, prices, simRaw])
+  const optionResult = useMemo(() => optionsMode && !keepError && sentRaw > 0n && amountQuote
+    ? sendOptions({ quote: amountQuote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
       recipients: receiverCount, deposit: keeping ? totalRaw : null,
       shielded: pcShielded?.state === 'ready' ? { privacycash: BigInt(pcShielded.spendable?.[asset] ?? 0n) } : {} })
-    : null, [optionsMode, keepError, sentRaw, quote, asset, prices, settings, pcShielded, receiverCount, keeping, totalRaw])
+    : null, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, pcShielded, receiverCount, keeping, totalRaw])
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
   // Shield only and paying from shielded funds show their measured privacy in the pool they go through.
   // Paying from shielded funds has no planner pick until the balance is read; the one pool that can pay from it stands in.
   const manualProtocol = shieldOnly ? shieldPool : recommended?.protocol ?? (payingShielded ? FROM_SHIELDED_IDS[0] : null)
   const measured = useMemo(() => {
-    if (chosenOption || isSwap || isBridge || !quote || !manualProtocol) return null
-    const measure = (kind, raw, deposit) => measuredPrivacy({ quote, protocol: manualProtocol, asset, raw: raw ?? 0n, prices, kind, deposit })
+    if (chosenOption || isSwap || isBridge || !amountQuote || !manualProtocol) return null
+    const measure = (kind, raw, deposit) => measuredPrivacy({ quote: amountQuote, protocol: manualProtocol, asset, raw: raw ?? 0n, prices, kind, deposit })
     const pool = poolLabel(manualProtocol)
     const fee = recommended && feeDisplay(recommended.fee || recommended.estimatedFee, asset).primary
     const via = fee && fee !== 'Unavailable' ? `Fee ${fee} · ${pool}` : pool
@@ -1005,7 +1036,7 @@ function PrivacyHome({ walletSession, settings }) {
       return privacy && { privacy, title: 'Sends now from shielded', detail: via }
     }
     return null
-  }, [chosenOption, isSwap, isBridge, quote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, totalRaw, sentRaw])
+  }, [chosenOption, isSwap, isBridge, amountQuote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, totalRaw, sentRaw])
   const optionAction = !chosenOption ? '' : chosenOption.kind === 'later' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
     : chosenOption.kind === 'balance' ? `Send ${sentAmount} ${asset} from shielded` : `Send ${sentAmount} ${asset} now`
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
