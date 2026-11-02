@@ -8,12 +8,15 @@ import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
 const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
-// What a user should know about each contract before keeping money in it
-// (darksol-backend docs/*_FORENSICS.md). Cloak's multisig is per its own docs.
+// Who can upgrade each pool's program, read on chain 2026-11-02: every upgrade
+// authority is vault 0 of a Squads v4 multisig with no config authority.
+// Privacy Cash AqoNsGV9…: 3 of 5. Cloak EorYbDdQ…: 3 of 4, 1 h time lock.
+// Umbra v2 CVdXkXFv… (program and user registry): 2 of 5, since 2026-10-15; a
+// single key upgraded it until then.
 const POOL_RISK = {
-  privacycash: { text: 'Multisig · verified', tone: 'good' },
-  cloakc: { text: 'Multisig', tone: 'plain' },
-  umbrav2: { text: 'One key', tone: 'warn' },
+  privacycash: { text: '3 of 5 multisig', tone: 'good' },
+  cloakc: { text: '3 of 4 multisig · 1 h delay', tone: 'good' },
+  umbrav2: { text: '2 of 5 multisig', tone: 'plain' },
 }
 const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
