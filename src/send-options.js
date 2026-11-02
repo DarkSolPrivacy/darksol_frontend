@@ -103,8 +103,8 @@ function strategyOf(pool, kind, recipients, deposit, raw) {
 
 /**
  * Every option for sending `raw` base units of `asset`, ranked best first, plus
- * the suggested one, the plain send ("as typed") and the fastest one that is
- * really private (PRIVATE_LEVEL or more). Now, later (deposit now, send from
+ * the suggested one and why it leads (reason: privacy, fees or time), the plain
+ * send ("as typed") and the fastest one that is really private (PRIVATE_LEVEL or more). Now, later (deposit now, send from
  * the shielded balance in 6, 12 or 24 hours) and from the balance. `recipients`
  * splits the payment; `deposit` is a deposit the user set (keeping part
  * shielded), else later copies a common amount when there is one.
@@ -169,7 +169,15 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const fastest = allowed.filter((option) => option.level >= PRIVATE_LEVEL).sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0] ?? null
   // Everything else after the ranked ones, so the list can still show it, marked unavailable.
   const rest = options.filter((option) => !pool.includes(option)).sort(compare(chosen.priority))
-  return { bucket, usd, suggested, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, options: [...ranked, ...rest], settings: chosen }
+  // Why the suggestion leads: it hides you better than the rest, it is the most
+  // private that sends now, or its fee won (a lower fee outweighed a step of
+  // privacy, or every option is as private).
+  const levels = allowed.map((option) => option.level)
+  const top = Math.max(...levels)
+  const reason = !suggested ? null : chosen.priority === 'fees' ? 'fees'
+    : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
+      : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
+  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, options: [...ranked, ...rest], settings: chosen }
 }
 
 function compare(priority) {

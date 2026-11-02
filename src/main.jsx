@@ -34,6 +34,9 @@ const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || nul
 const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
 const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
+// Shield only offers the payment-link pools and Umbra v2, which deposits into the
+// wallet's own private balance but has no payment links.
+const SHIELD_POOLS = [...POOLS, { id: 'umbrav2', name: 'Umbra v2' }]
 const sourceName = (source) => source === 'links' ? 'Payment links' : PROTOCOLS[source]?.name || source
 // A pool as people know it ("Privacy Cash", "Cloak"), not its manifest id.
 const poolLabel = (id) => POOLS.find((pool) => pool.id === id)?.name ?? PROTOCOLS[id]?.name ?? id
@@ -969,7 +972,7 @@ function PrivacyHome({ walletSession }) {
   const resultAmount = pickNumber(comparison?.amount, total)
   // Shield only skips the planner: the pool is the one picked from the list.
   const shieldBlocked = totalRaw > 0n && totalRaw < PAYMENT_ASSETS[asset].cloakMin ? { cloakc: `Needs at least ${cloakMinimum(asset)}` } : {}
-  const shieldPools = rankPools({ asset, amount: total, prices, summary, sort: shieldSort, unavailable: shieldBlocked })
+  const shieldPools = rankPools({ pools: SHIELD_POOLS, asset, amount: total, prices, summary, sort: shieldSort, unavailable: shieldBlocked })
   // A pool that cannot keep a send's change shielded (Cloak) shields as a payment link paid to yourself.
   const shieldViaLinks = !PROTOCOLS[shieldPool].send.keepShielded
   const recommended = shieldOnly ? (!shieldBlocked[shieldPool] && { protocol: shieldPool, protocolName: PROTOCOLS[shieldPool].name, available: true }) || null
@@ -996,7 +999,8 @@ function PrivacyHome({ walletSession }) {
     const via = fee && fee !== 'Unavailable' ? `Fee ${fee} · ${pool}` : pool
     if (shieldOnly) {
       const later = measure('balance', totalRaw)
-      return later && { privacy: later, title: 'Nothing is sent now', detail: `Paying from it later scores like this · ${pool}` }
+      return later ? { privacy: later, title: 'Nothing is sent now', detail: `Paying from it later scores like this · ${pool}` }
+        : { privacy: null, title: 'Nothing is sent now', detail: `Stays in your private balance · ${pool}` }
     }
     if (payingShielded) {
       const privacy = measure('balance', sentRaw)
@@ -1104,7 +1108,8 @@ function PrivacyHome({ walletSession }) {
         </div>}
       </div>
       {shieldOnly && <p className="paymentPoolHint shieldPoolHint" role="status">{poolHint(shieldSort, summary, shieldPools.volumeAvailable, 'Estimated fee to withdraw it later. Shielding costs only network fees.')}
-        {shieldViaLinks && ' Cloak keeps it as a paid payment link, collected from Payment links.'}</p>}
+        {shieldViaLinks && ' Cloak keeps it as a paid payment link, collected from Payment links.'}
+        {!shieldViaLinks && !PROTOCOLS[shieldPool].send.fromShielded && ` ${poolLabel(shieldPool)} keeps it in its own private balance; DarkSol cannot pay from it yet.`}</p>}
       {(sendAttempted || amount) && (keepError || !activeValidation.valid) && <div className="splitStatus">{keepError || (!isBridge && !shieldOnly && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}
         {keeping && sentRaw === 0n && <> · <button type="button" onClick={() => chooseShield('shield')}>Shield it all instead</button></>}</div>}
       {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>Send <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
@@ -1112,7 +1117,7 @@ function PrivacyHome({ walletSession }) {
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
-        shielded={!wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
+        shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}

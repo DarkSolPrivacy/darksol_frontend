@@ -79,9 +79,10 @@ const outcomeName = (outcome) => outcome?.kind === 'submitted' ? outcome.submiss
 const spendFailure = (outcome) => outcome.kind === 'refused' ? outcome.refusal.kind
   : outcome.kind === 'relay-refused' ? outcome.code || outcome.detail : outcome.kind
 
-async function send({ provider, asset, totalBaseUnits, recipient, onStatus }) {
+async function send({ provider, asset, totalBaseUnits, recipient, recipients, onStatus }) {
   const mint = MINTS[String(asset).toUpperCase()]
   if (!mint) throw new Error(`Umbra v2 does not support ${asset}`)
+  if (recipients?.length > 1) throw new Error('Umbra v2 sends to one recipient')
   const standard = provider?.walletStandard
   if (!standard?.wallet) throw new Error('Umbra v2 needs a wallet-standard account. Reconnect the wallet and try again.')
 
@@ -117,11 +118,15 @@ async function send({ provider, asset, totalBaseUnits, recipient, onStatus }) {
     }
 
     const amount = BigInt(totalBaseUnits)
+    // What the recipient is paid: the whole deposit, less when part stays
+    // shielded, nothing when shielding only.
+    const payout = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : amount
     onStatus('Approve the Umbra v2 deposit…')
     const deposited = await nimbus.deposit(await nimbus.createDepositContext(session),
       { mint, amount, recipient: session.walletAddress }, { transactionVersion })
     if (!landed(deposited)) throw new Error(`The Umbra v2 deposit did not land (${outcomeName(deposited)})`)
     const receipt = createReceipt({ provider: 'umbrav2', asset, depositSignature: bs58.encode(deposited.submission.submission.signature) })
+    if (!payout) return receipt
 
     try {
       const balance = async () => {
@@ -148,7 +153,7 @@ async function send({ provider, asset, totalBaseUnits, recipient, onStatus }) {
       // Native SOL is paid to the wallet itself. Left to the SDK, it names the wallet's
       // wrapped-SOL token account, which the payout refuses: no key signs for lamports there.
       const withdrawn = await nimbus.withdraw(await nimbus.createWithdrawalContext(session),
-        { mint, amount: available < amount ? available : amount, recipient: String(recipient) },
+        { mint, amount: available < payout ? available : payout, recipient: String(recipient) },
         asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {})
       if (withdrawn.kind !== 'relayed') throw new Error(`the relayer did not take the withdrawal (${spendFailure(withdrawn)})`)
       const { settlement } = withdrawn

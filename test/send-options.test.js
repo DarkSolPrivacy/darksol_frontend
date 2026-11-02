@@ -59,6 +59,11 @@ test('priorities: time sends now in the cheapest pool, fees takes the cheapest o
   assert.equal(options(19.28, { settings: custom('privacy') }).suggested.id, 'privacycash:later:24h')
   assert.equal(options(19.28, { settings: { ...custom('privacy'), maxWait: '6h' } }).suggested.id, 'privacycash:later:6h')
   assert.equal(options(19.28, { settings: { ...custom('privacy'), pools: { privacycash: false } } }).suggested.id, 'umbrav2:now:now')
+  // Why the suggestion leads.
+  assert.equal(options(19.28).reason, 'privacy')
+  assert.equal(options(19.28, { settings: custom('time') }).reason, 'time')
+  assert.equal(options(19.28, { settings: custom('fees') }).reason, 'fees')
+  assert.equal(options(1).reason, 'fees')
   // Auto ignores the custom choices.
   assert.equal(effectiveSettings({ mode: 'auto', priority: 'fees', maxWait: 'now' }).priority, 'auto')
 })
@@ -153,12 +158,15 @@ test('a 12 h wait shows once the quote measures it', () => {
 test('keeping part shielded: every option deposits what the user set, in the pools that keep change', () => {
   // A common deposit (25) reads as keep, any other as exact.
   const common = timedOptions(19.28, { deposit: USDC(25) })
-  assert.ok(common.options.every((option) => option.protocol === 'privacycash'))
-  assert.deepEqual(common.options.filter((option) => option.kind !== 'balance').map((option) => [option.wait, option.score]).sort(),
+  // Cloak cannot keep change; Umbra v2 can, sending now (it cannot pay later from the balance).
+  assert.deepEqual([...new Set(common.options.map((option) => option.protocol))].sort(), ['privacycash', 'umbrav2'])
+  assert.deepEqual(common.options.filter((option) => option.protocol === 'umbrav2').map((option) => option.id), ['umbrav2:now:now'])
+  const pc = common.options.filter((option) => option.protocol === 'privacycash')
+  assert.deepEqual(pc.filter((option) => option.kind !== 'balance').map((option) => [option.wait, option.score]).sort(),
     [['12h', 85], ['24h', 96], ['6h', 50], ['now', 0]])
   assert.ok(common.options.every((option) => option.deposit === USDC(25) && option.kept === USDC(5.72)))
   const odd = timedOptions(3, { deposit: USDC(4) })
-  assert.deepEqual(odd.options.map((option) => [option.wait, option.score]).sort(), [['24h', 3], ['6h', 0], ['now', 0]])
+  assert.deepEqual(odd.options.filter((option) => option.protocol === 'privacycash').map((option) => [option.wait, option.score]).sort(), [['24h', 3], ['6h', 0], ['now', 0]])
   assert.equal(odd.balanceHint.level, 5)
 })
 

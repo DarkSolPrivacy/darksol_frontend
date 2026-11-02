@@ -309,7 +309,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
 }
 
 /* Tooltips on icon actions */
-:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon)[data-tooltip]::after {
+:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon, .privBest)[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
@@ -329,7 +329,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
   transform: translate(-50%, 3px);
   transition: opacity .12s, transform .12s;
 }
-:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon)[data-tooltip]:is(:hover, :focus-visible)::after { opacity: 1; transform: translate(-50%, 0); }
+:is(.shieldControl, .delayControl, .addReceiver, .toolButton, .linkIcon, .paymentPoolPicker .soon, .privBest)[data-tooltip]:is(:hover, :focus-visible)::after { opacity: 1; transform: translate(-50%, 0); }
 /* An open menu already says what the control does. */
 :is(.shieldControl, .delayControl)[aria-expanded=true][data-tooltip]:is(:hover, :focus-visible)::after { opacity: 0; }
 
@@ -637,8 +637,18 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privMeter.high i.on { background: var(--positive); }
 .privMeter.mid i.on { background: var(--accent); }
 .privMeter.low i.on { background: var(--text-secondary); }
-.privList { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); overflow: hidden; }
-.privOption { min-height: 48px; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
+/* No overflow clip: the Best tooltip has to show past the list's edge. */
+.privList { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
+.privGroup + .privGroup { border-top: 1px solid var(--border-subtle); }
+.privGroupHead { width: 100%; min-height: 48px; display: grid; grid-template-columns: 22px 1fr auto 14px; align-items: center; gap: 12px; padding: 0 14px; border: 0; background: transparent; color: var(--text-primary); text-align: left; }
+.privGroupHead:hover { background: var(--bg-hover); }
+.privGroup:first-child .privGroupHead { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.privGroupHead img { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; }
+.privGroupHead > svg { width: 14px; height: 14px; color: var(--text-secondary); transition: transform .15s; }
+.privGroupHead[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.privGroupHead .privOptionLabel small.chosen { margin-left: 0; color: var(--text-secondary); }
+.privOption { min-height: 48px; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border-subtle); cursor: pointer; }
+.privGroup:last-child .privOption:last-child { border-radius: 0 0 var(--radius-md) var(--radius-md); }
 .privOption.chosen { background: var(--bg-elevated); }
 .privOption.off { opacity: .5; cursor: default; }
 .privOption input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
@@ -646,10 +656,12 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privOptionLabel b { font-size: 14px; font-weight: 500; }
 .privOptionLabel em { padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font: 600 11px var(--font-ui); }
 .privOptionLabel em.private { background: var(--positive); }
+.privOptionLabel em.privBest { position: relative; display: inline-flex; align-items: center; gap: 3px; align-self: center; cursor: help; }
+.privBest svg { width: 11px; height: 11px; }
 .privOptionLabel small { margin-left: auto; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
-.privOthers { min-height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
-.privOthers svg { width: 14px; height: 14px; transition: transform .15s; }
-.privOthers[aria-expanded="true"] svg { transform: rotate(180deg); }
+/* Anchored at the badge's left so the tooltip stays on a phone screen. */
+.privBest[data-tooltip]::after { left: 0; transform: translateY(3px); }
+.privBest[data-tooltip]:is(:hover, :focus-visible)::after { transform: none; }
 .privTiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .privTiles div { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-input); }
 .privTiles small { color: var(--text-tertiary); font-size: 11px; }

@@ -53,7 +53,10 @@ export default Object.freeze({
   }),
   recipients: Object.freeze({ multi: false, max: 1 }),
 
-  send: Object.freeze({ execution: 'sdk' }),
+  // keepShielded: a send deposits into the wallet's own private balance and then
+  // withdraws, so it can withdraw less than it deposited, or nothing (shield
+  // only). The rest stays in that balance, which DarkSol does not pay from yet.
+  send: Object.freeze({ execution: 'sdk', keepShielded: true }),
   swap: Object.freeze({
     execution: 'unsupported',
     aggregator: null,

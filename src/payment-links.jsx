@@ -96,10 +96,10 @@ function withdrawalFee(protocol, asset, amount, prices) {
   return fixed + amount * fees.variableRate
 }
 
-// POOLS with each one's estimated withdrawal fee on `amount` and its 24h volume,
-// in `sort` order. A pool with an `unavailable` reason goes last.
-export function rankPools({ asset, amount, prices, summary, sort, unavailable = {} }) {
-  const pools = POOLS.map((item) => {
+// `pools` (POOLS by default) with each one's estimated withdrawal fee on `amount`
+// and its 24h volume, in `sort` order. A pool with an `unavailable` reason goes last.
+export function rankPools({ pools: list = POOLS, asset, amount, prices, summary, sort, unavailable = {} }) {
+  const pools = list.map((item) => {
     const fees = poolFees(item.id, asset)
     const activity = summary.pools.find((entry) => entry.protocol === item.id)
     const hasVolume = !summary.loading && !summary.error && activity

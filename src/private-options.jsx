@@ -1,9 +1,10 @@
-// The send page's private options (src/send-options.js picks them): a 5-step
-// privacy meter per option, what is shielded before and after, the settings,
+// The send page's private options (src/send-options.js picks them), grouped by
+// pool: a 5-step privacy meter per option and per pool (its best), what is
+// shielded before and after, the settings,
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
-import { Check, ChevronDown, ShieldCheck, SlidersHorizontal, TriangleAlert, X } from 'lucide-react'
-import { PROTOCOLS } from '../protocols/registry.js'
+import { Check, ChevronDown, Coins, ShieldCheck, SlidersHorizontal, TriangleAlert, X, Zap } from 'lucide-react'
+import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
 const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
@@ -36,38 +37,66 @@ export function Meter({ option, large = false }) {
   </span>
 }
 
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onReveal, onSettings }) {
-  const [othersOpen, setOthersOpen] = React.useState(false)
+// Why the suggestion is the best one (result.reason, src/send-options.js).
+const REASONS = {
+  privacy: { Icon: ShieldCheck, text: 'Best for privacy: it hides you best' },
+  fees: { Icon: Coins, text: 'Best for fees: the lowest fee for its privacy' },
+  time: { Icon: Zap, text: 'Best to send now: the most private without a wait' },
+}
+function BestBadge({ reason }) {
+  const { Icon, text } = REASONS[reason] ?? REASONS.privacy
+  return <em className="privBest" data-tooltip={text} aria-label={text}><Icon aria-hidden="true" />Best</em>
+}
+
+const ORDER = { balance: 0, now: 1, later: 2 }
+
+// `shielded` holds the balance of each pool DarkSol reads: undefined while
+// unread (Show reads it). A pool missing from it shows no balance.
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, onReveal, onSettings }) {
+  // Pools opened or closed by hand; the chosen option's pool starts open.
+  const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
-  // One row per way to send (now, each wait, from shielded): the suggestion, the
-  // fastest really private one, the plain send, then the suggested pool's
-  // option, else the best other pool's. The rest fold under "Other pools".
-  const main = []
-  const taken = new Set()
-  const take = (option, always = false) => {
-    const slot = option && `${option.kind}:${option.wait}`
-    if (!option?.executable || main.includes(option) || (taken.has(slot) && !always)) return
-    main.push(option); taken.add(slot)
+  // Every option, grouped by pool: the suggested pool first, then the most private.
+  const groups = []
+  for (const option of result.options) {
+    const group = groups.find((item) => item.protocol === option.protocol)
+    if (group) group.options.push(option)
+    else groups.push({ protocol: option.protocol, options: [option] })
   }
-  take(result.suggested); take(result.fastest, true); take(result.asTyped)
-  const runnable = result.options.filter((option) => option.executable)
-  for (const option of runnable) if (option.protocol === result.suggested.protocol) take(option)
-  for (const option of runnable) take(option)
-  const order = { balance: 0, now: 1, later: 2 }
-  main.sort((a, b) => order[a.kind] - order[b.kind] || a.waitSeconds - b.waitSeconds)
-  const others = result.options.filter((option) => !main.includes(option))
-  const before = chosen.kind === 'balance' ? chosen.balanceBefore : shielded ?? null
+  for (const group of groups) {
+    group.options.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.waitSeconds - b.waitSeconds)
+    // Its best scenario: the most private option it can run, else any.
+    const pick = group.options.some((option) => option.executable) ? group.options.filter((option) => option.executable) : group.options
+    group.best = pick.reduce((best, option) => option.score > best.score ? option : best)
+  }
+  groups.sort((a, b) => (b.protocol === result.suggested.protocol) - (a.protocol === result.suggested.protocol)
+    || b.options.some((option) => option.executable) - a.options.some((option) => option.executable) || b.best.score - a.best.score)
+  const known = chosen.protocol in shielded
+  const before = chosen.kind === 'balance' ? chosen.balanceBefore : known ? shielded[chosen.protocol] ?? null : null
   const after = chosen.kind === 'balance' ? chosen.balanceAfter : before === null ? chosen.kept : before + chosen.kept
   const row = (option) => <label className={`privOption${option.id === chosen.id ? ' chosen' : ''}${option.executable ? '' : ' off'}`} key={option.id}>
     <input type="radio" name="privOption" checked={option.id === chosen.id} disabled={!option.executable} onChange={() => onChoose(option.id)} />
-    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <em>Best</em>}{option === result.fastest && <em className="private">Private</em>}<small>{POOL_NAMES[option.protocol]}</small></span>
+    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <BestBadge reason={result.reason} />}{option === result.fastest && <em className="private">Private</em>}<small>Fee {usd(option.feeUsd)}</small></span>
     <Meter option={option} />
   </label>
+  const group = ({ protocol, options, best }) => {
+    const open = toggled[protocol] ?? protocol === chosen.protocol
+    const name = POOL_NAMES[protocol]
+    return <div className="privGroup" key={protocol}>
+      <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
+        <img src={LOGOS[protocol]?.src} alt="" title={name} />
+        <span className="privOptionLabel">{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}</span>
+        <Meter option={best} />
+        <ChevronDown aria-hidden="true" />
+      </button>
+      {open && options.map(row)}
+    </div>
+  }
 
   return <section className="privOptions" aria-label="How to send">
     <div className="privShielded">
       <span><ShieldCheck aria-hidden="true" />Shielded</span>
-      {shielded === undefined && chosen.kind !== 'balance'
+      {known && shielded[chosen.protocol] === undefined && chosen.kind !== 'balance'
         ? <button type="button" className="privReveal" onClick={onReveal}>Show</button>
         : <b>{before === null ? '—' : tokenText(before, asset)} <i aria-hidden="true">→</i> <span className={after > (before ?? 0n) ? 'up' : ''}>{tokenText(after, asset)}</span> <small>{asset}</small></b>}
       <button type="button" className="privSettingsButton" aria-label="Send settings" onClick={onSettings}><SlidersHorizontal /></button>
@@ -79,14 +108,10 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded, onRe
         <span>Fee {usd(chosen.feeUsd)}{chosen.feePct >= 5 ? ` (${Math.round(chosen.feePct)}%)` : ''} · {POOL_NAMES[chosen.protocol]}</span>
       </div>
     </div>
-    <div className="privList" role="radiogroup" aria-label="When to send">
-      {main.map(row)}
-      {others.length > 0 && <>
-        <button type="button" className="privOthers" aria-expanded={othersOpen} onClick={() => setOthersOpen(!othersOpen)}>Other pools <ChevronDown /></button>
-        {othersOpen && others.map(row)}
-      </>}
+    <div className="privList" role="radiogroup" aria-label="How to send">
+      {groups.map(group)}
     </div>
-    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={shielded === undefined} onReveal={onReveal} />}
+    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>
