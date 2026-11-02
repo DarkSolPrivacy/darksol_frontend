@@ -16,7 +16,7 @@ export function decimalsFor(asset) {
 // throwing, because every caller is validating user input.
 export function rawTokenAmount(value, asset) {
   const text = String(value ?? '').trim()
-  if (!/^\d+(?:\.\d+)?$/.test(text)) return null
+  if (!/^\d+(?:\.\d*)?$/.test(text)) return null
   const decimals = decimalsFor(asset)
   const [whole, fraction = ''] = text.split('.')
   if (fraction.length > decimals) return null
