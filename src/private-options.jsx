@@ -3,7 +3,7 @@
 // shielded before and after, the settings,
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
-import { Check, ChevronDown, Coins, ShieldCheck, SlidersHorizontal, TriangleAlert, X, Zap } from 'lucide-react'
+import { Check, ChevronDown, Coins, ShieldCheck, TriangleAlert, X, Zap } from 'lucide-react'
 import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
@@ -55,7 +55,7 @@ function BestBadge({ reason }) {
 // `shielded` holds the balance of each pool DarkSol reads: undefined while
 // unread (Show reads it). A pool missing from it shows no balance. `reading`:
 // a read is already running, which Show cannot speed up; `status` says how far it got.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, status = '', onReveal, onSettings }) {
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, status = '', onReveal }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -105,7 +105,6 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
         ? reading ? <span className="privReading" title={status || undefined}>Reading…</span>
           : <button type="button" className="privReveal" onClick={onReveal}>Show</button>
         : <b>{before === null ? '—' : tokenText(before, asset)} <i aria-hidden="true">→</i> <span className={after > (before ?? 0n) ? 'up' : ''}>{tokenText(after, asset)}</span> <small>{asset}</small></b>}
-      <button type="button" className="privSettingsButton" aria-label="Send settings" onClick={onSettings}><SlidersHorizontal /></button>
     </div>
     <div className="privHero">
       <Meter option={chosen} large />
@@ -148,14 +147,18 @@ export function MeasuredSummary({ privacy, title, detail, hint, action, onAction
 const PRIORITIES = [['privacy', 'Privacy'], ['time', 'Time'], ['fees', 'Fees']]
 const MAX_WAITS = [['now', 'None'], ['6h', '6 h'], ['12h', '12 h'], ['24h', '24 h']]
 
-export function SendSettings({ settings, onChange, onClose }) {
+/** The send settings, a modal over the blurred page; a click outside closes it. */
+export function SendSettings({ open, settings, onChange, onClose }) {
+  const dialog = React.useRef(null)
+  React.useEffect(() => { open ? dialog.current?.showModal() : dialog.current?.close() }, [open])
   const set = (patch) => onChange({ ...settings, ...patch })
   const custom = settings.mode === 'custom'
   const segment = (items, value, pick, label) => <div className="privSegment" role="group" aria-label={label}>
     {items.map(([id, text]) => <button type="button" key={id} aria-pressed={value === id} onClick={() => pick(id)}>{text}</button>)}
   </div>
-  return <section className="privSettings panel" aria-label="Send settings">
-    <div className="privSettingsHead"><b>Send settings</b><button type="button" aria-label="Close settings" onClick={onClose}><X /></button></div>
+  return <dialog className="paymentDialog privSettings" ref={dialog} aria-label="Send settings" onClose={onClose}
+    onClick={(event) => { if (event.target === event.currentTarget) dialog.current.close() }}>
+    <div className="privSettingsHead"><b>Send settings</b><button type="button" aria-label="Close settings" onClick={() => dialog.current.close()}><X /></button></div>
     {segment([['auto', 'Auto'], ['custom', 'Custom']], settings.mode, (mode) => set({ mode }), 'Mode')}
     {custom ? <>
       <span className="privSettingsLabel">Optimize for</span>
@@ -175,7 +178,7 @@ export function SendSettings({ settings, onChange, onClose }) {
         <input type="checkbox" checked={custom ? settings.pools[id] !== false : true} disabled={!custom} onChange={(event) => set({ pools: { ...settings.pools, [id]: event.target.checked } })} />
       </label>)}
     </div>
-  </section>
+  </dialog>
 }
 
 const remaining = (ms) => {

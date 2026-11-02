@@ -626,8 +626,6 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privShielded .up, .privTiles .up { color: var(--positive); }
 .privReveal { height: 28px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
 .privReading { color: var(--text-tertiary); font-size: 12px; }
-.privSettingsButton { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); }
-.privSettingsButton svg { width: 16px; height: 16px; }
 .privHero { display: flex; align-items: center; gap: 16px; padding: 6px 4px; }
 .privHero > div { display: flex; flex-direction: column; gap: 3px; }
 .privHero b { font-size: 16px; font-weight: 500; }
@@ -670,7 +668,9 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privTiles div { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-input); }
 .privTiles small { color: var(--text-tertiary); font-size: 11px; }
 .privTiles b { font: 500 13px var(--font-mono); overflow-wrap: anywhere; }
-.privSettings { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 14px; }
+.privSettings { flex-direction: column; gap: 10px; }
+/* A closed dialog keeps the browser display: none. */
+.privSettings[open] { display: flex; }
 .privSettingsHead { display: flex; align-items: center; justify-content: space-between; }
 .privSettingsHead button { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--text-secondary); }
 .privSettingsLabel { color: var(--text-tertiary); font-size: 12px; }
@@ -1207,7 +1207,8 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 /* ==========================================================================
    Wallet: header button and drawer
    ========================================================================== */
-.walletMenu { position: fixed; top: 16px; right: 24px; z-index: 45; }
+.walletMenu { position: fixed; top: 16px; right: 24px; z-index: 45; display: flex; gap: 8px; }
+.walletButton.topSettings { width: var(--control-md); justify-content: center; padding: 0; }
 .walletButton {
   height: var(--control-md);
   display: flex;

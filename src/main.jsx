@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Mail, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Mail, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, SlidersHorizontal, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rankPools, shieldToSelf, uncollectedTotals } from './payment-links.jsx'
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
@@ -481,7 +481,8 @@ function RouteDetails({ estimate, alternatives, asset, amount, delayMinutes, onD
   </section>
 }
 
-function PrivacyHome({ walletSession }) {
+// `settings`: the send settings, which the app keeps and edits from the top bar.
+function PrivacyHome({ walletSession, settings }) {
   const { wallet, connecting, connectWallet: connectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
@@ -507,10 +508,8 @@ function PrivacyHome({ walletSession }) {
   const [selectedProtocol, setSelectedProtocol] = useState(null)
   const [walletBalance, setWalletBalance] = useState(null)
   const [balanceLoading, setBalanceLoading] = useState(false)
-  // The private options (src/send-options.js): the settings and quote they rank
-  // with, the one picked, and the payments whose deposit waits to be sent.
-  const [settings, setSettings] = useState(loadSettings)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  // The private options (src/send-options.js): the quote they rank with, the
+  // one picked, and the payments whose deposit waits to be sent.
   const [quote, setQuote] = useState(null)
   const [chosenOptionId, setChosenOptionId] = useState(null)
   const [pending, setPending] = useState(loadPending)
@@ -600,7 +599,6 @@ function PrivacyHome({ walletSession }) {
   }, [wallet])
 
   useEffect(() => saveScheduled(scheduled), [scheduled])
-  useEffect(() => saveSettings(settings), [settings])
   useEffect(() => savePending(pending), [pending])
 
   // One token's quote for every size at once, so the amount never leaves the page.
@@ -1118,12 +1116,11 @@ function PrivacyHome({ walletSession }) {
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
         shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }}
-        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} status={shielded.status} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
+        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} status={shielded.status} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
       {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && ['locked', 'error'].includes(pcShielded?.state)} onReveal={shielded.reveal} />}
-      {settingsOpen && optionsMode && <SendSettings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
       <div className="sendAction">
         <div className="actionArea">{chosenOption
           ? <button type="button" onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
@@ -1763,7 +1760,8 @@ function WalletPanel({ wallet, onClose, onDisconnect, onPaymentLinks }) {
 }
 
 // The wallet's one control on every page but analytics: connect, see balances, disconnect.
-function WalletMenu({ walletSession, onPaymentLinks }) {
+// `children`: page actions shown left of the wallet button (the send settings on the home page).
+function WalletMenu({ walletSession, onPaymentLinks, children }) {
   const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
   const drawer = useRef(null)
   const [open, setOpen] = useState(false)
@@ -1786,6 +1784,7 @@ function WalletMenu({ walletSession, onPaymentLinks }) {
     disconnectWallet()
   }
   return <div className="walletMenu">
+    {children}
     <button type="button" className={`walletButton${wallet ? ' connected' : ''}`} aria-haspopup={wallet ? 'dialog' : undefined} disabled={connecting} onClick={press}>
       {wallet ? <>{wallet.icon ? <img src={wallet.icon} alt="" /> : <Wallet />}<span>{short(wallet.address)}</span><ChevronDown /></>
         : <><Wallet /><span>{connecting ? 'Connecting…' : 'Connect wallet'}</span></>}
@@ -1815,6 +1814,10 @@ function App() {
   }, [path])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // The send settings live here so the top bar can open them beside the wallet.
+  const [sendSettings, setSendSettings] = useState(loadSettings)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => saveSettings(sendSettings), [sendSettings])
   const [protocol, setProtocol] = useState('privacycash')
   const [selectedEstimate, setSelectedEstimate] = useState(null)
   useEffect(() => {
@@ -1855,7 +1858,9 @@ function App() {
   function openPaymentLinks(event) { event.preventDefault(); closeDrawer(); navigate('/payment-links') }
   function openTrace(event) { event.preventDefault(); closeDrawer(); navigate('/trace') }
   function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
-  const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks} />
+  const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks}>
+    {view === 'home' && <button type="button" className="walletButton topSettings" aria-label="Send settings" aria-haspopup="dialog" onClick={() => setSettingsOpen(true)}><SlidersHorizontal /></button>}
+  </WalletMenu>
   const mobileNav = <>
     <MobileBar onOpen={() => setDrawerOpen(true)} />
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onTrace={openTrace} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
@@ -1866,7 +1871,8 @@ function App() {
   return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
     // Not decoded: a hash is plain base58, and a malformed escape would throw. TracePage parses it before any request.
     : view === 'trace' ? <TracePage key={path} signature={path.split('/')[2] || ''} onTrace={(signature) => navigate(`/trace/${signature}`)} />
-    : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
+    : <PrivacyHome walletSession={walletSession} settings={sendSettings} />}</main>{walletMenu}{walletPicker}
+    <SendSettings open={settingsOpen} settings={sendSettings} onChange={setSendSettings} onClose={() => setSettingsOpen(false)} /><Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)
