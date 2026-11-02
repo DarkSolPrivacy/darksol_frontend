@@ -625,6 +625,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privShielded > b i, .privShielded > b small { color: var(--text-tertiary); font-style: normal; }
 .privShielded .up, .privTiles .up { color: var(--positive); }
 .privReveal { height: 28px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
+.privReading { color: var(--text-tertiary); font-size: 12px; }
 .privSettingsButton { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); }
 .privSettingsButton svg { width: 16px; height: 16px; }
 .privHero { display: flex; align-items: center; gap: 16px; padding: 6px 4px; }

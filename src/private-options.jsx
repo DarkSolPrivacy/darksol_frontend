@@ -53,8 +53,9 @@ function BestBadge({ reason }) {
 }
 
 // `shielded` holds the balance of each pool DarkSol reads: undefined while
-// unread (Show reads it). A pool missing from it shows no balance.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, onReveal, onSettings }) {
+// unread (Show reads it). A pool missing from it shows no balance. `reading`:
+// a read is already running, which Show cannot speed up; `status` says how far it got.
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, status = '', onReveal, onSettings }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -101,7 +102,8 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     <div className="privShielded">
       <span><ShieldCheck aria-hidden="true" />Shielded</span>
       {known && shielded[chosen.protocol] === undefined && chosen.kind !== 'balance'
-        ? <button type="button" className="privReveal" onClick={onReveal}>Show</button>
+        ? reading ? <span className="privReading" title={status || undefined}>Reading…</span>
+          : <button type="button" className="privReveal" onClick={onReveal}>Show</button>
         : <b>{before === null ? '—' : tokenText(before, asset)} <i aria-hidden="true">→</i> <span className={after > (before ?? 0n) ? 'up' : ''}>{tokenText(after, asset)}</span> <small>{asset}</small></b>}
       <button type="button" className="privSettingsButton" aria-label="Send settings" onClick={onSettings}><SlidersHorizontal /></button>
     </div>
@@ -115,7 +117,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     <div className="privList" role="radiogroup" aria-label="How to send">
       {groups.map(group)}
     </div>
-    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
+    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={!reading && result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>

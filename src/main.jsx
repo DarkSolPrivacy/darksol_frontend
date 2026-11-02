@@ -1117,11 +1117,12 @@ function PrivacyHome({ walletSession }) {
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
-        shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
+        shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }}
+        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} status={shielded.status} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
-      {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && pcShielded?.state !== 'ready'} onReveal={shielded.reveal} />}
+      {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && ['locked', 'error'].includes(pcShielded?.state)} onReveal={shielded.reveal} />}
       {settingsOpen && optionsMode && <SendSettings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
       <div className="sendAction">
         <div className="actionArea">{chosenOption
