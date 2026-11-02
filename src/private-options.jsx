@@ -52,8 +52,6 @@ function BestBadge({ reason }) {
   return <em className="privBest" data-tooltip={text} aria-label={text}><Icon aria-hidden="true" />Best</em>
 }
 
-const ORDER = { balance: 0, now: 1, later: 2 }
-
 // `shielded` holds the balance of each pool DarkSol reads: undefined while
 // unread (Show reads it). A pool missing from it shows no balance.
 export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, onReveal, onSettings }) {
@@ -68,7 +66,9 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     else groups.push({ protocol: option.protocol, options: [option] })
   }
   for (const group of groups) {
-    group.options.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.waitSeconds - b.waitSeconds)
+    // The suggestion on top, then the most private; the sooner, then the cheaper, of equals.
+    group.options.sort((a, b) => (b === result.suggested) - (a === result.suggested) || b.executable - a.executable
+      || b.score - a.score || a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)
     // Its best scenario: the most private option it can run, else any.
     const pick = group.options.some((option) => option.executable) ? group.options.filter((option) => option.executable) : group.options
     group.best = pick.reduce((best, option) => option.score > best.score ? option : best)
@@ -86,7 +86,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
   const group = ({ protocol, options, best }) => {
     const open = toggled[protocol] ?? protocol === chosen.protocol
     const name = POOL_NAMES[protocol]
-    return <div className="privGroup" key={protocol}>
+    return <div className={`privGroup${options.includes(result.suggested) ? ' best' : ''}`} key={protocol}>
       <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
         <img src={LOGOS[protocol]?.src} alt="" />
         <span className="privOptionLabel"><b className="privPoolName">{name}</b>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}</span>
