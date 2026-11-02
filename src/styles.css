@@ -647,6 +647,7 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privGroupHead > svg { width: 14px; height: 14px; color: var(--text-secondary); transition: transform .15s; }
 .privGroupHead[aria-expanded="true"] > svg { transform: rotate(180deg); }
 .privGroupHead .privOptionLabel small.chosen { margin-left: 0; color: var(--text-secondary); }
+.privGroupHead .privOptionLabel b.privPoolName { font-weight: 600; white-space: nowrap; }
 .privOption { min-height: 48px; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border-subtle); cursor: pointer; }
 .privGroup:last-child .privOption:last-child { border-radius: 0 0 var(--radius-md) var(--radius-md); }
 .privOption.chosen { background: var(--bg-elevated); }

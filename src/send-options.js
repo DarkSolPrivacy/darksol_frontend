@@ -70,10 +70,13 @@ export function bucketFor(usd, buckets) {
   return usd < ranges[0][0] ? buckets[0] : buckets.at(-1)
 }
 
-function privacyOf(pool, strategy, wait, bucket) {
-  const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
-  if (!cell || cell.sends < MIN_SENDS) return null
-  return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends }
+// The first of `strategies` the quote measured with enough sends.
+function privacyOf(pool, strategies, wait, bucket) {
+  for (const strategy of [strategies].flat()) {
+    const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
+    if (cell && cell.sends >= MIN_SENDS) return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends }
+  }
+  return null
 }
 
 /**
@@ -89,17 +92,18 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
   if (!pool || !(raw > 0n) || !(prices[asset] > 0)) return null
   const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
   const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
-  const privacy = privacyOf(pool, kind === 'keep' && !common ? 'exact' : kind, 'now', bucket)
+  const privacy = privacyOf(pool, kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact', 'now', bucket)
   return privacy && { ...privacy, level: meterLevel(privacy.score) }
 }
 
-// Which cell measures a send: from the balance, to several recipients, a
-// deposit others make too that keeps part (keep), or any other deposit, read as
-// an exact one. Sending all of a common deposit keeps nothing, so it is exact.
+// Which cells measure a send: from the balance, to several recipients, a
+// deposit others make too (keep), or any other deposit, read as an exact one. A
+// common deposit falls back to exact where the pool has too few keep sends: an
+// exact send's deposit is an amount no one else makes, so it is the worse case.
 function strategyOf(pool, kind, recipients, deposit, raw) {
   if (kind === 'balance') return 'balance'
   if (recipients > 1) return 'split'
-  return deposit > raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? 'keep' : 'exact'
+  return deposit >= raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? ['keep', 'exact'] : 'exact'
 }
 
 /**

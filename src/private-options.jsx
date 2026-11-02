@@ -28,10 +28,14 @@ export function tokenText(raw, asset) {
 const optionLabel = (option) => option.kind === 'balance' ? 'From shielded' : WAIT_LABEL[option.wait]
 const meterTone = (level) => level >= 4 ? 'high' : level >= 2 ? 'mid' : 'low'
 
-/** Privacy as 5 steps; the exact share is in the label for screen readers and on hover. */
+// How likely a send like this is traced, in words: about 30 sends per measurement
+// is good to roughly ±10 points, too coarse to quote as a percentage.
+const TRACE_WORDS = ['Most likely traced', 'Most likely traced', 'Often traced', 'Sometimes traced', 'Rarely traced', 'Very rarely traced']
+
+/** Privacy as 5 steps; how likely it is traced is in the label for screen readers and on hover. */
 export function Meter({ option, large = false }) {
   const level = option?.level ?? 0
-  const label = `Privacy ${level} of 5 · ${option ? 100 - option.score : '—'}% of sends like this were traced`
+  const label = `Privacy ${level} of 5 · ${option ? TRACE_WORDS[level] : 'Not measured'}`
   return <span className={`privMeter ${meterTone(level)}${large ? ' large' : ''}`} role="img" aria-label={label} title={label}>
     {[1, 2, 3, 4, 5].map((step) => <i key={step} className={step <= level ? 'on' : ''} />)}
   </span>
@@ -84,8 +88,8 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     const name = POOL_NAMES[protocol]
     return <div className="privGroup" key={protocol}>
       <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
-        <img src={LOGOS[protocol]?.src} alt="" title={name} />
-        <span className="privOptionLabel">{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}</span>
+        <img src={LOGOS[protocol]?.src} alt="" />
+        <span className="privOptionLabel"><b className="privPoolName">{name}</b>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}</span>
         <Meter option={best} />
         <ChevronDown aria-hidden="true" />
       </button>
