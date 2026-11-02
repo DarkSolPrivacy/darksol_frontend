@@ -164,7 +164,8 @@ const formatMetricMoney = (value) => finite(value) === null ? 'Unavailable' : mo
 const formatPercent = (value) => finite(value) === null ? 'Unavailable' : `${compact(Number(value) * 100, Number(value) < .001 ? 3 : 2)}%`
 const rawTokenAmount = (value, asset) => {
   const text = String(value ?? '').trim()
-  if (!/^\d+(?:\.\d+)?$/.test(text)) return null
+  // "5." is 5 while the decimals are still being typed.
+  if (!/^\d+(?:\.\d*)?$/.test(text)) return null
   const decimals = TOKEN_DECIMALS[asset]
   const [whole, fraction = ''] = text.split('.')
   if (fraction.length > decimals) return null
@@ -556,7 +557,9 @@ function PrivacyHome({ walletSession, settings }) {
   const keepRaw = !keeping ? 0n : keepAmount.trim() ? rawTokenAmount(keepAmount, asset) : 0n
   // What leaves the pool for the recipients: the amount, less what stays shielded.
   const sentRaw = totalRaw === null || keepRaw === null ? null : totalRaw - keepRaw
-  const sentAmount = keeping ? (sentRaw !== null && sentRaw > 0n ? rawTokenText(sentRaw, asset) : '') : amount
+  // Without a trailing dot, so "5." shows, plans and sends as "5".
+  const sentAmount = keeping ? (sentRaw !== null && sentRaw > 0n ? rawTokenText(sentRaw, asset) : '') : amount.replace(/\.$/, '')
+  const plannedAmounts = strategy === 'multiple' ? receiverAmounts.map((value) => value.replace(/\.$/, '')) : [sentAmount]
   // The amount the options measure: what is sent, or for shield only all of it.
   const simRaw = shieldOnly ? totalRaw : sentRaw
   const simKey = !isSwap && !isBridge && simRaw > 0n ? `${asset}:${simRaw}` : null
@@ -694,7 +697,7 @@ function PrivacyHome({ walletSession, settings }) {
       destinationAsset: plannedDestinationAsset,
       amount: sentAmount,
       strategy,
-      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [sentAmount],
+      receiverAmounts: plannedAmounts,
       privacyTarget,
     })
   }
@@ -712,7 +715,7 @@ function PrivacyHome({ walletSession, settings }) {
       destinationAsset: plannedDestinationAsset,
       amount: sentAmount,
       strategy,
-      receiverAmounts: strategy === 'multiple' ? receiverAmounts : [sentAmount],
+      receiverAmounts: plannedAmounts,
       privacyTarget,
     }, controller.signal), 350)
     return () => { clearTimeout(timeout); controller.abort() }

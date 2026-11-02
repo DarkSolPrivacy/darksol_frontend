@@ -12,7 +12,8 @@ export function parseAmount(value, asset) {
   const decimals = TOKEN_DECIMALS[asset]
   if (decimals === undefined) return { valid: false, error: 'Unsupported asset' }
   if (!text) return { valid: false, error: 'Enter an amount' }
-  if (!/^\d+(?:\.\d+)?$/.test(text)) return { valid: false, error: 'Use numbers only' }
+  // A trailing dot ("5.") is a whole amount still being typed.
+  if (!/^\d+(?:\.\d*)?$/.test(text)) return { valid: false, error: 'Use numbers only' }
   const [whole, fraction = ''] = text.split('.')
   if (fraction.length > decimals) return { valid: false, error: `${asset} supports ${decimals} decimals` }
   const baseUnits = BigInt(whole) * (10n ** BigInt(decimals))

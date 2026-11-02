@@ -14,6 +14,9 @@ test('amounts are normalized and converted without floating point math', () => {
     normalized: '1.23',
   })
   assert.equal(parseAmount('0.000000001', 'SOL').baseUnits, 1n)
+  // A trailing dot is a whole amount while the decimals are still being typed.
+  assert.deepEqual(parseAmount('5.', 'USDC'), { valid: true, baseUnits: 5_000_000n, normalized: '5' })
+  assert.equal(parseAmount('.5', 'USDC').valid, false)
 })
 
 test('invalid, zero, over-precision, and unsafe amounts are rejected', () => {
