@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Mail, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, Wallet, X } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Mail, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, SlidersHorizontal, Wallet, X } from 'lucide-react'
 import './styles.css'
 import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rankPools, shieldToSelf, uncollectedTotals } from './payment-links.jsx'
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
@@ -24,7 +24,7 @@ import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
 import { measuredPrivacy, sendOptions } from './send-options.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
-import { MeasuredSummary, PendingPayments, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
+import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
 // bridge picker named privacycash directly. Both follow the manifests now.
@@ -34,6 +34,9 @@ const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || nul
 const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
 const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
+// Shield only offers the payment-link pools and Umbra v2, which deposits into the
+// wallet's own private balance but has no payment links.
+const SHIELD_POOLS = [...POOLS, { id: 'umbrav2', name: 'Umbra v2' }]
 const sourceName = (source) => source === 'links' ? 'Payment links' : PROTOCOLS[source]?.name || source
 // A pool as people know it ("Privacy Cash", "Cloak"), not its manifest id.
 const poolLabel = (id) => POOLS.find((pool) => pool.id === id)?.name ?? PROTOCOLS[id]?.name ?? id
@@ -478,7 +481,8 @@ function RouteDetails({ estimate, alternatives, asset, amount, delayMinutes, onD
   </section>
 }
 
-function PrivacyHome({ walletSession }) {
+// `settings`: the send settings, which the app keeps and edits from the top bar.
+function PrivacyHome({ walletSession, settings }) {
   const { wallet, connecting, connectWallet: connectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
   const [destinationAsset, setDestinationAsset] = useState('USDC')
@@ -504,10 +508,8 @@ function PrivacyHome({ walletSession }) {
   const [selectedProtocol, setSelectedProtocol] = useState(null)
   const [walletBalance, setWalletBalance] = useState(null)
   const [balanceLoading, setBalanceLoading] = useState(false)
-  // The private options (src/send-options.js): the settings and quote they rank
-  // with, the one picked, and the payments whose deposit waits to be sent.
-  const [settings, setSettings] = useState(loadSettings)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  // The private options (src/send-options.js): the quote they rank with, the
+  // one picked, and the payments whose deposit waits to be sent.
   const [quote, setQuote] = useState(null)
   const [chosenOptionId, setChosenOptionId] = useState(null)
   const [pending, setPending] = useState(loadPending)
@@ -538,8 +540,8 @@ function PrivacyHome({ walletSession }) {
   const keeping = activeShield === 'keep'
   const shieldOnly = activeShield === 'shield'
   const payingShielded = activeShield === 'use'
-  // A plain send to one recipient picks from the measured private options.
-  const optionsMode = !isSwap && !isBridge && receiverCount === 1 && shieldMode === 'off'
+  // A send, to one recipient or several, keeping part shielded or not, picks from the measured private options.
+  const optionsMode = !isSwap && !isBridge && (activeShield === 'off' || keeping)
   const shielded = useShieldedPools(wallet, payingShielded || optionsMode)
   // Delayed delivery held a proof made right after the deposit, whose root points
   // straight back to it, so it is no longer offered. A payment that waits is
@@ -597,7 +599,6 @@ function PrivacyHome({ walletSession }) {
   }, [wallet])
 
   useEffect(() => saveScheduled(scheduled), [scheduled])
-  useEffect(() => saveSettings(settings), [settings])
   useEffect(() => savePending(pending), [pending])
 
   // One token's quote for every size at once, so the amount never leaves the page.
@@ -611,7 +612,7 @@ function PrivacyHome({ walletSession }) {
   }, [asset, isSwap, isBridge])
 
   // A new amount or token starts from the suggestion again.
-  useEffect(() => setChosenOptionId(null), [asset, sentAmount])
+  useEffect(() => setChosenOptionId(null), [asset, sentAmount, receiverCount, shieldMode])
 
   // The pending payments' progress, and a notification when one is ready while this page is open.
   useEffect(() => {
@@ -852,8 +853,9 @@ function PrivacyHome({ walletSession }) {
     } finally { setSending(false) }
   }
 
-  // Sends the chosen private option. Keep deposits now and leaves the payment
-  // pending; it goes out from the shielded balance when the user taps Send.
+  // Sends the chosen private option to every recipient. Later deposits now and
+  // leaves the payment pending; it goes out from the shielded balance when the
+  // user taps Send. Now deposits the option's deposit (more when keeping part shielded).
   async function sendOption(option) {
     setSendAttempted(true); setSendError('')
     if (submitted) return setSendError('This payment was already submitted. Do not send it again.')
@@ -862,12 +864,13 @@ function PrivacyHome({ walletSession }) {
     if (!activeValidation.valid) return setSendError(activeValidation.error)
     setSending(true)
     try {
-      const [row] = transferValidation.rows
+      const rows = transferValidation.rows
       const { execute } = await loadBrowserAdapter(option.protocol)
-      if (option.kind === 'keep') {
+      if (option.kind === 'later') {
         const result = await execute({ kind: 'send', provider: wallet.provider, asset, recipients: [], totalBaseUnits: option.deposit, source: 'wallet', onStatus: setSendStatus })
         const created = Date.now()
-        const item = { id: crypto.randomUUID(), protocol: option.protocol, asset, recipient: row.address.sanitized, baseUnits: String(row.amount.baseUnits),
+        const item = { id: crypto.randomUUID(), protocol: option.protocol, asset, recipient: rows[0].address.sanitized, baseUnits: String(activeValidation.total.baseUnits),
+          recipients: rows.map((row) => ({ address: row.address.sanitized, baseUnits: String(row.amount.baseUnits) })),
           deposit: String(option.deposit), depositSignature: result.depositSignature, owner: wallet.address, createdAt: created, readyAt: created + option.waitSeconds * 1000 }
         setPending((items) => [...items, item])
         if (settings.remind && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
@@ -877,17 +880,18 @@ function PrivacyHome({ walletSession }) {
       }
       const gas = await askForGas('send')
       if (!gas) return
+      const fromBalance = option.kind === 'balance'
       const result = await execute({
-        kind: 'send', provider: wallet.provider, asset, recipient: row.address.publicKey,
-        recipients: [{ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits }],
-        totalBaseUnits: activeValidation.total.baseUnits, source: option.kind === 'balance' ? 'shielded' : 'wallet', onStatus: setSendStatus,
+        kind: 'send', provider: wallet.provider, asset, recipient: rows[0].address.publicKey,
+        recipients: rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
+        totalBaseUnits: fromBalance ? activeValidation.total.baseUnits : option.deposit, source: fromBalance ? 'shielded' : 'wallet', onStatus: setSendStatus,
       })
       if (gas.units) {
         Object.assign(result, await sendGas(gas))
-        result.gasText = `${rawTokenText(gas.net, 'SOL')} SOL`
+        result.gasText = `${rawTokenText(gas.net, 'SOL')} SOL${gas.indexes.length > 1 ? ' each' : ''}`
       }
-      if (option.kind === 'balance' || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
-      setReceipt(result); setSendStatus('Sent')
+      if (fromBalance || option.kept > 0n || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
+      setReceipt({ ...result, kept: option.kept > 0n ? `${rawTokenText(option.kept, asset)} ${asset}` : null }); setSendStatus('Sent')
     } catch (transferError) {
       if (transferError?.receipt) setReceipt(transferError.receipt)
       setSendError(explainFailure(transferError instanceof Error ? transferError.message : String(transferError))); setSendStatus('')
@@ -900,15 +904,16 @@ function PrivacyHome({ walletSession }) {
     setSendError('')
     if (!wallet) return connectWallet()
     if (wallet.address !== item.owner) return setSendError(`Connect ${short(item.owner)}, the wallet that made this deposit`)
-    const amount = rawTokenText(BigInt(item.baseUnits), item.asset)
-    const check = validateTransfer({ asset: item.asset, amount, recipients: [{ address: item.recipient, amount }], senderAddress: wallet.address })
+    // Payments saved before several recipients could wait name one.
+    const parts = item.recipients ?? [{ address: item.recipient, baseUnits: item.baseUnits }]
+    const text = (units) => rawTokenText(BigInt(units), item.asset)
+    const check = validateTransfer({ asset: item.asset, amount: text(item.baseUnits), recipients: parts.map((part) => ({ address: part.address, amount: text(part.baseUnits) })), senderAddress: wallet.address })
     if (!check.valid) return setSendError(check.error)
     setSending(true)
     try {
       const { execute } = await loadBrowserAdapter(item.protocol)
-      const [row] = check.rows
-      const result = await execute({ kind: 'send', provider: wallet.provider, asset: item.asset, recipient: row.address.publicKey,
-        recipients: [{ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits }], totalBaseUnits: row.amount.baseUnits, source: 'shielded', onStatus: setSendStatus })
+      const result = await execute({ kind: 'send', provider: wallet.provider, asset: item.asset, recipient: check.rows[0].address.publicKey,
+        recipients: check.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })), totalBaseUnits: check.total.baseUnits, source: 'shielded', onStatus: setSendStatus })
       setPending((items) => items.filter((entry) => entry.id !== item.id))
       shieldedCache.delete(wallet.address); shielded.refresh()
       setReceipt(result); setSendStatus('Sent')
@@ -965,22 +970,23 @@ function PrivacyHome({ walletSession }) {
   const resultAmount = pickNumber(comparison?.amount, total)
   // Shield only skips the planner: the pool is the one picked from the list.
   const shieldBlocked = totalRaw > 0n && totalRaw < PAYMENT_ASSETS[asset].cloakMin ? { cloakc: `Needs at least ${cloakMinimum(asset)}` } : {}
-  const shieldPools = rankPools({ asset, amount: total, prices, summary, sort: shieldSort, unavailable: shieldBlocked })
+  const shieldPools = rankPools({ pools: SHIELD_POOLS, asset, amount: total, prices, summary, sort: shieldSort, unavailable: shieldBlocked })
   // A pool that cannot keep a send's change shielded (Cloak) shields as a payment link paid to yourself.
   const shieldViaLinks = !PROTOCOLS[shieldPool].send.keepShielded
   const recommended = shieldOnly ? (!shieldBlocked[shieldPool] && { protocol: shieldPool, protocolName: PROTOCOLS[shieldPool].name, available: true }) || null
     : rankings.find((item) => item.available && item.protocol === activeProtocol)
   const alternatives = rankings.filter((item) => item.protocol !== activeProtocol)
-  // The measured options for a plain send, once the quote covers this token;
-  // until then (or for a swap, bridge or split) the planner's route stands.
+  // The measured options for a send, once the quote covers this token; until
+  // then (or for a swap or bridge) the planner's route stands. Keeping part
+  // shielded fixes the deposit; several recipients are measured as a split.
   const pcShielded = shielded.pools.privacycash
-  const optionResult = useMemo(() => optionsMode && sentRaw > 0n && quote
+  const optionResult = useMemo(() => optionsMode && !keepError && sentRaw > 0n && quote
     ? sendOptions({ quote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
+      recipients: receiverCount, deposit: keeping ? totalRaw : null,
       shielded: pcShielded?.state === 'ready' ? { privacycash: BigInt(pcShielded.spendable?.[asset] ?? 0n) } : {} })
-    : null, [optionsMode, sentRaw, quote, asset, prices, settings, pcShielded])
+    : null, [optionsMode, keepError, sentRaw, quote, asset, prices, settings, pcShielded, receiverCount, keeping, totalRaw])
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
-  // A send set up by hand (keep part shielded, from shielded, shield only,
-  // several recipients) shows its measured privacy in the pool it goes through.
+  // Shield only and paying from shielded funds show their measured privacy in the pool they go through.
   // Paying from shielded funds has no planner pick until the balance is read; the one pool that can pay from it stands in.
   const manualProtocol = shieldOnly ? shieldPool : recommended?.protocol ?? (payingShielded ? FROM_SHIELDED_IDS[0] : null)
   const measured = useMemo(() => {
@@ -989,28 +995,18 @@ function PrivacyHome({ walletSession }) {
     const pool = poolLabel(manualProtocol)
     const fee = recommended && feeDisplay(recommended.fee || recommended.estimatedFee, asset).primary
     const via = fee && fee !== 'Unavailable' ? `Fee ${fee} · ${pool}` : pool
-    const weak = (privacy) => privacy && privacy.level <= 1
     if (shieldOnly) {
       const later = measure('balance', totalRaw)
-      return later && { privacy: later, title: 'Nothing is sent now', detail: `Paying from it later scores like this · ${pool}` }
+      return later ? { privacy: later, title: 'Nothing is sent now', detail: `Paying from it later scores like this · ${pool}` }
+        : { privacy: null, title: 'Nothing is sent now', detail: `Stays in your private balance · ${pool}` }
     }
     if (payingShielded) {
       const privacy = measure('balance', sentRaw)
       return privacy && { privacy, title: 'Sends now from shielded', detail: via }
     }
-    if (keeping) {
-      const privacy = measure('keep', sentRaw, totalRaw)
-      return privacy && { privacy, title: 'Sends now', detail: `Keeps ${keepRaw ? rawTokenText(keepRaw, asset) : '0'} ${asset} shielded · ${via}`,
-        hint: weak(privacy) ? 'Sent right after the deposit, it is easy to trace.' : null, action: weak(privacy) ? 'See private options' : null }
-    }
-    if (receiverCount > 1) {
-      const privacy = measure('split', sentRaw)
-      return privacy && { privacy, title: `Sends now to ${receiverCount} recipients`, detail: via,
-        hint: weak(privacy) ? 'One deposit paying several people points back to it.' : null }
-    }
     return null
-  }, [chosenOption, isSwap, isBridge, quote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, keeping, receiverCount, totalRaw, sentRaw, keepRaw])
-  const optionAction = !chosenOption ? '' : chosenOption.kind === 'keep' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
+  }, [chosenOption, isSwap, isBridge, quote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, totalRaw, sentRaw])
+  const optionAction = !chosenOption ? '' : chosenOption.kind === 'later' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
     : chosenOption.kind === 'balance' ? `Send ${sentAmount} ${asset} from shielded` : `Send ${sentAmount} ${asset} now`
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
   // Any deposit consolidates the wallet's notes, including the one a queued proof
@@ -1110,7 +1106,8 @@ function PrivacyHome({ walletSession }) {
         </div>}
       </div>
       {shieldOnly && <p className="paymentPoolHint shieldPoolHint" role="status">{poolHint(shieldSort, summary, shieldPools.volumeAvailable, 'Estimated fee to withdraw it later. Shielding costs only network fees.')}
-        {shieldViaLinks && ' Cloak keeps it as a paid payment link, collected from Payment links.'}</p>}
+        {shieldViaLinks && ' Cloak keeps it as a paid payment link, collected from Payment links.'}
+        {!shieldViaLinks && !PROTOCOLS[shieldPool].send.fromShielded && ` ${poolLabel(shieldPool)} keeps it in its own private balance; DarkSol cannot pay from it yet.`}</p>}
       {(sendAttempted || amount) && (keepError || !activeValidation.valid) && <div className="splitStatus">{keepError || (!isBridge && !shieldOnly && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}
         {keeping && sentRaw === 0n && <> · <button type="button" onClick={() => chooseShield('shield')}>Shield it all instead</button></>}</div>}
       {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>Send <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
@@ -1118,10 +1115,12 @@ function PrivacyHome({ walletSession }) {
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
-        shielded={!wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined} onReveal={shielded.reveal} onSettings={() => setSettingsOpen(!settingsOpen)} />
+        shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }}
+        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} status={shielded.status} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
-      {settingsOpen && optionsMode && <SendSettings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
+      {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
+      {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && ['locked', 'error'].includes(pcShielded?.state)} onReveal={shielded.reveal} />}
       <div className="sendAction">
         <div className="actionArea">{chosenOption
           ? <button type="button" onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
@@ -1761,7 +1760,8 @@ function WalletPanel({ wallet, onClose, onDisconnect, onPaymentLinks }) {
 }
 
 // The wallet's one control on every page but analytics: connect, see balances, disconnect.
-function WalletMenu({ walletSession, onPaymentLinks }) {
+// `children`: page actions shown left of the wallet button (the send settings on the home page).
+function WalletMenu({ walletSession, onPaymentLinks, children }) {
   const { wallet, connecting, connectWallet, disconnectWallet } = walletSession
   const drawer = useRef(null)
   const [open, setOpen] = useState(false)
@@ -1784,6 +1784,7 @@ function WalletMenu({ walletSession, onPaymentLinks }) {
     disconnectWallet()
   }
   return <div className="walletMenu">
+    {children}
     <button type="button" className={`walletButton${wallet ? ' connected' : ''}`} aria-haspopup={wallet ? 'dialog' : undefined} disabled={connecting} onClick={press}>
       {wallet ? <>{wallet.icon ? <img src={wallet.icon} alt="" /> : <Wallet />}<span>{short(wallet.address)}</span><ChevronDown /></>
         : <><Wallet /><span>{connecting ? 'Connecting…' : 'Connect wallet'}</span></>}
@@ -1813,6 +1814,10 @@ function App() {
   }, [path])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  // The send settings live here so the top bar can open them beside the wallet.
+  const [sendSettings, setSendSettings] = useState(loadSettings)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => saveSettings(sendSettings), [sendSettings])
   const [protocol, setProtocol] = useState('privacycash')
   const [selectedEstimate, setSelectedEstimate] = useState(null)
   useEffect(() => {
@@ -1853,7 +1858,9 @@ function App() {
   function openPaymentLinks(event) { event.preventDefault(); closeDrawer(); navigate('/payment-links') }
   function openTrace(event) { event.preventDefault(); closeDrawer(); navigate('/trace') }
   function openAnalyticsPage(event) { event.preventDefault(); closeDrawer(); openAnalytics(protocol) }
-  const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks} />
+  const walletMenu = <WalletMenu walletSession={walletSession} onPaymentLinks={openPaymentLinks}>
+    {view === 'home' && <button type="button" className="walletButton topSettings" aria-label="Send settings" aria-haspopup="dialog" onClick={() => setSettingsOpen(true)}><SlidersHorizontal /></button>}
+  </WalletMenu>
   const mobileNav = <>
     <MobileBar onOpen={() => setDrawerOpen(true)} />
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onTrace={openTrace} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
@@ -1864,7 +1871,8 @@ function App() {
   return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
     // Not decoded: a hash is plain base58, and a malformed escape would throw. TracePage parses it before any request.
     : view === 'trace' ? <TracePage key={path} signature={path.split('/')[2] || ''} onTrace={(signature) => navigate(`/trace/${signature}`)} />
-    : <PrivacyHome walletSession={walletSession} />}</main>{walletMenu}{walletPicker}<Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
+    : <PrivacyHome walletSession={walletSession} settings={sendSettings} />}</main>{walletMenu}{walletPicker}
+    <SendSettings open={settingsOpen} settings={sendSettings} onChange={setSendSettings} onClose={() => setSettingsOpen(false)} /><Onboarding wallet={walletSession.wallet} ready={view === 'home'} /></div>
 }
 
 createRoot(document.getElementById('root')).render(<App />)

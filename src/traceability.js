@@ -172,7 +172,7 @@ export const LIMIT_TEXT = {
   PROGRAM_SOURCE_UNAVAILABLE: 'Cloak publishes neither its program nor its circuit. What its instructions do is read from the chain, and the order of its notes is checked by replaying the whole pool against the live account.',
   SHIELDED_TRANSFERS: 'Cloak has private transfers, so a note can hold money its owner never deposited. A wallet’s balance on this page is what it deposited, not what it holds.',
   'umbrav2:DEPLOYMENT_BEHAVIOUR_VERIFIED': 'No Umbra v2 program version has a reproducible build. Each is checked by replaying every transaction since the pool’s creation.',
-  'umbrav2:PROGRAM_SOURCE_UNAVAILABLE': 'Umbra publishes neither its program nor its circuit, and a single key, not a multisig, can upgrade the program. What its instructions do is read from the chain and Umbra’s SDK, and the whole pool is replayed against the live account.',
+  'umbrav2:PROGRAM_SOURCE_UNAVAILABLE': 'Umbra publishes neither its program nor its circuit. A 2 of 5 multisig has upgraded the program since October 15, 2026; a single key did before. What its instructions do is read from the chain and Umbra’s SDK, and the whole pool is replayed against the live account.',
   'umbrav2:SHIELDED_TRANSFERS': 'Umbra v2 has private transfers, so a note can hold money its owner never deposited. One pool holds every token, so the possible sources include notes of other tokens; wallet links only compare deposits of the same token.',
 }
 

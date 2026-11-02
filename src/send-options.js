@@ -15,8 +15,11 @@ import { PAYMENT_ASSETS } from './payment-assets.js'
 export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
 // A cell with fewer sends says too little to offer the option.
 export const MIN_SENDS = 10
-export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '24h': 86_400 })
-const KEEP_WAITS = ['6h', '24h']
+export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h': 86_400 })
+// A wait shows once the quote measures it: 12h is offered from the first quote that has its cells.
+const LATER_WAITS = ['6h', '12h', '24h']
+// "Really private": the step a send must reach to be offered as the fastest private one.
+export const PRIVATE_LEVEL = 4
 // k per priority. Fees ranks on the fee alone, privacy breaking ties.
 const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
@@ -67,10 +70,13 @@ export function bucketFor(usd, buckets) {
   return usd < ranges[0][0] ? buckets[0] : buckets.at(-1)
 }
 
-function privacyOf(pool, strategy, wait, bucket) {
-  const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
-  if (!cell || cell.sends < MIN_SENDS) return null
-  return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends }
+// The first of `strategies` the quote measured with enough sends.
+function privacyOf(pool, strategies, wait, bucket) {
+  for (const strategy of [strategies].flat()) {
+    const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
+    if (cell && cell.sends >= MIN_SENDS) return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends }
+  }
+  return null
 }
 
 /**
@@ -86,61 +92,103 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
   if (!pool || !(raw > 0n) || !(prices[asset] > 0)) return null
   const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
   const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
-  const privacy = privacyOf(pool, kind === 'keep' && !common ? 'exact' : kind, 'now', bucket)
+  const privacy = privacyOf(pool, kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact', 'now', bucket)
   return privacy && { ...privacy, level: meterLevel(privacy.score) }
 }
 
+// Which cells measure a send: from the balance, to several recipients, a
+// deposit others make too (keep), or any other deposit, read as an exact one. A
+// common deposit falls back to exact where the pool has too few keep sends: an
+// exact send's deposit is an amount no one else makes, so it is the worse case.
+function strategyOf(pool, kind, recipients, deposit, raw) {
+  if (kind === 'balance') return 'balance'
+  if (recipients > 1) return 'split'
+  return deposit >= raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? ['keep', 'exact'] : 'exact'
+}
+
 /**
- * Every option for sending `raw` base units of `asset` to one recipient, ranked
- * best first, plus the suggested one and the plain send ("as typed").
+ * Every option for sending `raw` base units of `asset`, ranked best first, plus
+ * the suggested one and why it leads (reason: privacy, fees or time), the plain
+ * send ("as typed") and the fastest one that is really private (PRIVATE_LEVEL or more). Now, later (deposit now, send from
+ * the shielded balance in 6, 12 or 24 hours) and from the balance. `recipients`
+ * splits the payment; `deposit` is a deposit the user set (keeping part
+ * shielded), else later copies a common amount when there is one.
  * @param {{ quote: object, asset: string, raw: bigint, prices: Record<string, number>, shielded?: Record<string, bigint>,
- *   settings?: object, canRun?: (protocol: string) => boolean }} input
+ *   settings?: object, canRun?: (protocol: string) => boolean, recipients?: number, deposit?: bigint|null }} input
  */
-export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true }) {
+export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true, recipients = 1, deposit: fixed = null }) {
   if (!quote?.pools || !(raw > 0n) || !(prices[asset] > 0)) return null
   const chosen = effectiveSettings(settings)
   const amount = toNumber(raw, asset)
   const usd = amount * prices[asset]
   const bucket = bucketFor(usd, quote.buckets)
   const options = []
+  let balanceHint = null
   for (const protocol of QUOTE_POOLS) {
     const pool = quote.pools[protocol]
-    const send = PROTOCOLS[protocol]?.send
-    if (!pool || !send || !PROTOCOLS[protocol].assets.includes(asset)) continue
-    const fee = poolFee(protocol, asset, raw, prices)
+    const manifest = PROTOCOLS[protocol]
+    const send = manifest?.send
+    if (!pool || !send || !manifest.assets.includes(asset)) continue
+    if (recipients > 1 && !manifest.recipients.multi) continue
+    if (fixed !== null && fixed > raw && !send.keepShielded) continue
+    let fee = poolFee(protocol, asset, raw, prices)
     if (fee === null) continue
+    // Privacy Cash charges its fixed part per recipient.
+    if (recipients > 1 && manifest.fees.fixedBasis === 'recipient') fee += poolFee(protocol, asset, 0n, prices) * BigInt(recipients - 1)
     const feeUsd = toNumber(fee, asset) * prices[asset]
     // A fresh deposit also pays its network fee and rent.
-    const depositUsd = (PROTOCOLS[protocol].fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
+    const depositUsd = (manifest.fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
     const runs = canRun(protocol) && (protocol !== 'cloakc' || raw >= PAYMENT_ASSETS[asset].cloakMin)
-    const add = (kind, strategy, wait, extra) => {
-      const privacy = privacyOf(pool, strategy, wait, bucket)
+    const add = (kind, wait, deposit, extra) => {
+      const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket)
       if (!privacy) return
       const cost = feeUsd + (kind === 'balance' ? 0 : depositUsd)
       options.push({
         id: `${protocol}:${kind}:${wait}`, protocol, kind, wait, waitSeconds: WAITS[wait],
         score: privacy.score, sends: privacy.sends, level: meterLevel(privacy.score),
         fee, feeUsd: cost, feePct: 100 * cost / usd, receives: raw > fee ? raw - fee : 0n,
-        deposit: kind === 'balance' ? 0n : raw, kept: 0n, executable: runs, ...extra,
+        deposit, kept: deposit - raw, executable: runs, ...extra,
       })
     }
-    add('now', 'exact', 'now')
-    if (send.keepShielded && send.fromShielded && !chosen.keepNothing) {
-      const deposit = popularDeposit(pool.popular, raw)
-      if (deposit !== null) for (const wait of KEEP_WAITS) add('keep', 'keep', wait, { deposit, kept: deposit - raw })
+    add('now', 'now', fixed ?? raw)
+    if (send.keepShielded && send.fromShielded) {
+      const deposit = fixed ?? (chosen.keepNothing ? null : popularDeposit(pool.popular, raw)) ?? raw
+      for (const wait of LATER_WAITS) add('later', wait, deposit)
     }
-    if (send.fromShielded && shielded[protocol] !== undefined && shielded[protocol] >= raw) {
-      add('balance', 'balance', 'now', { balanceBefore: shielded[protocol], balanceAfter: shielded[protocol] - raw })
+    if (send.fromShielded) {
+      const balance = shielded[protocol]
+      if (balance !== undefined && balance >= raw) add('balance', 'now', 0n, { kept: 0n, balanceBefore: balance, balanceAfter: balance - raw })
+      else {
+        // Not read yet, or too small: say what paying from a balance would score.
+        const privacy = privacyOf(pool, 'balance', 'now', bucket)
+        if (privacy && meterLevel(privacy.score) >= PRIVATE_LEVEL && !balanceHint) balanceHint = { protocol, ...privacy, level: meterLevel(privacy.score), known: balance !== undefined }
+      }
     }
   }
-  const allowed = options.filter((option) => option.executable && chosen.pools[option.protocol] && option.waitSeconds <= WAITS[chosen.maxWait === 'now' ? 'now' : chosen.maxWait])
+  const allowed = options.filter((option) => option.executable && chosen.pools[option.protocol] && option.waitSeconds <= WAITS[chosen.maxWait])
   const pool = chosen.priority === 'time' && allowed.some((option) => option.waitSeconds === 0) ? allowed.filter((option) => option.waitSeconds === 0) : allowed
-  const ranked = [...pool].sort(compare(chosen.priority))
-  const suggested = ranked[0] ?? null
+  const sorted = [...pool].sort(compare(chosen.priority))
+  // An option on the same meter step or higher, at no higher fee, leads when it
+  // is sooner: two 5 of 5 waits send in 6 h, not 24 h, even when the longer one
+  // scored a few points more.
+  const lead = sorted[0]
+  const suggested = (lead && sorted.filter((option) => option.level >= lead.level && option.feeUsd <= lead.feeUsd)
+    .sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0]) ?? null
+  const ranked = suggested ? [suggested, ...sorted.filter((option) => option !== suggested)] : sorted
   const asTyped = options.filter((option) => option.kind === 'now' && option.executable).sort((a, b) => a.feeUsd - b.feeUsd)[0] ?? null
+  // The soonest really private one; same wait, the cheaper.
+  const fastest = allowed.filter((option) => option.level >= PRIVATE_LEVEL).sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0] ?? null
   // Everything else after the ranked ones, so the list can still show it, marked unavailable.
   const rest = options.filter((option) => !pool.includes(option)).sort(compare(chosen.priority))
-  return { bucket, usd, suggested, asTyped, options: [...ranked, ...rest], settings: chosen }
+  // Why the suggestion leads: it hides you better than the rest, it is the most
+  // private that sends now, or its fee won (a lower fee outweighed a step of
+  // privacy, or every option is as private).
+  const levels = allowed.map((option) => option.level)
+  const top = Math.max(...levels)
+  const reason = !suggested ? null : chosen.priority === 'fees' ? 'fees'
+    : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
+      : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
+  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, options: [...ranked, ...rest], settings: chosen }
 }
 
 function compare(priority) {
