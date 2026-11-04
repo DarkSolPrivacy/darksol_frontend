@@ -25,12 +25,12 @@ const meterTone = (level) => level >= 4 ? 'high' : level >= 2 ? 'mid' : 'low'
 // is good to roughly ±10 points, too coarse to quote as a percentage.
 const TRACE_WORDS = ['Most likely traced', 'Most likely traced', 'Often traced', 'Sometimes traced', 'Rarely traced', 'Very rarely traced']
 
-// What a privacy figure rests on: a simulation of this exact amount, else the quote's size bucket ("10-100").
+// What a privacy figure rests on, when it is the quote's size bucket ("10-100").
 const dollars = (value) => `$${Number(value).toLocaleString('en-US')}`
 function Basis({ privacy, bucket }) {
   const [from, to] = String(bucket ?? '').split('-')
-  const text = privacy?.simulated ? `Measured for this exact amount: ${privacy.simulated.samples} simulated sends over ${privacy.simulated.days} days`
-    : to ? `Measured on DarkSol sends of ${dollars(from)}–${dollars(to)}` : null
+  // A simulation of this exact amount needs no note.
+  const text = !privacy?.simulated && to ? `Measured on DarkSol sends of ${dollars(from)}–${dollars(to)}` : null
   return text && <small className="privBasis">{text}</small>
 }
 
