@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Check, ExternalLink, RefreshCw, Wallet } from 'lucide-react'
 import { getPaymentLink, reportPaymentDeposit, validDepositId } from './payment-api.js'
 import { depositExpired, payPaymentInvoice, validateCheckout } from './payment-deposit.js'
-import { LOGOS } from '../protocols/registry.js'
+import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
 export default function PaymentCheckout({ paymentId, walletSession }) {
@@ -134,6 +134,7 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
 
   const paid = invoice?.status === 'paid'
   const tooSmall = invoice?.protocol === 'cloakc' && BigInt(invoice.amount) < PAYMENT_ASSETS[invoice.asset].cloakMin
+  const paused = invoice ? PROTOCOLS[invoice.protocol]?.depositsPaused : null
   return <div className="homePage paymentLinksPage paymentCheckout">
     <header><div><p className="eyebrow">DarkSol payment</p><h1>{paid ? 'Payment received' : 'Private checkout'}</h1></div></header>
     {loading && <p className="paymentLoading" role="status">Loading payment...</p>}
@@ -145,8 +146,9 @@ export default function PaymentCheckout({ paymentId, walletSession }) {
       <div className={`paymentCheckoutState ${paid ? 'paid' : ''}`} role="status">{paid ? <Check /> : <i aria-hidden="true" />}<span>{paid ? 'Paid' : reportedId ? 'Awaiting deposit confirmation' : 'Awaiting payment'}</span></div>
       <p className="paymentCheckoutId">Invoice <code>{paymentId.slice(0, 12)}</code></p>
       {paid ? <p className="paymentFormHint">This invoice is settled.</p> : <>
+        {paused && <p className="paymentError">{paused} in Privacy Cash. Try again later or ask the merchant for a Cloak link.</p>}
         {tooSmall && <p className="paymentError">Cloak requires at least {cloakMinimum(invoice.asset)}. Ask the merchant for a new link.</p>}
-        {!reportedId && <div className="paymentActions"><button type="button" className="paymentPrimary" disabled={busy || connecting || Boolean(loadError) || tooSmall} onClick={pay}>
+        {!reportedId && <div className="paymentActions"><button type="button" className="paymentPrimary" disabled={busy || connecting || Boolean(loadError) || tooSmall || Boolean(paused)} onClick={pay}>
           <Wallet />{connecting ? 'Connecting...' : busy ? status || 'Preparing payment...' : wallet ? 'Pay invoice' : 'Connect wallet to pay'}
         </button></div>}
         {busy && reportedId && <p className="paymentLoading" role="status">{status || 'Verifying deposit...'}</p>}

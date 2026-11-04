@@ -1895,3 +1895,5 @@ label.privRow { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.privMore { min-height: 0; padding: 4px 4px 0; }
+.privMore > span { flex: 1; }

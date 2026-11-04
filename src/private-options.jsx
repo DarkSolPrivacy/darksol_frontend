@@ -57,7 +57,7 @@ function BestBadge({ reason }) {
 // `shielded` holds the balance of each pool DarkSol reads: undefined while
 // unread (Show reads it). A pool missing from it shows no balance. `reading`:
 // a read is already running, which Show cannot speed up; `status` says how far it got.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, status = '', onReveal }) {
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -78,12 +78,9 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
   }
   groups.sort((a, b) => (b.protocol === result.suggested.protocol) - (a.protocol === result.suggested.protocol)
     || b.options.some((option) => option.executable) - a.options.some((option) => option.executable) || b.best.score - a.best.score)
-  const known = chosen.protocol in shielded
-  const before = chosen.kind === 'balance' ? chosen.balanceBefore : known ? shielded[chosen.protocol] ?? null : null
-  const after = chosen.kind === 'balance' ? chosen.balanceAfter : before === null ? chosen.kept : before + chosen.kept
   const row = (option) => <label className={`privOption${option.id === chosen.id ? ' chosen' : ''}${option.executable ? '' : ' off'}`} key={option.id}>
     <input type="radio" name="privOption" checked={option.id === chosen.id} disabled={!option.executable} onChange={() => onChoose(option.id)} />
-    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <BestBadge reason={result.reason} />}{option === result.fastest && <em className="private">Private</em>}<small>Fee {usd(option.feeUsd)}</small></span>
+    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <BestBadge reason={result.reason} />}{option === result.fastest && <em className="private">Private</em>}<small>{option.paused ? 'Paused' : `Fee ${usd(option.feeUsd)}`}</small></span>
     <Meter option={option} />
   </label>
   const group = ({ protocol, options, best }) => {
@@ -92,7 +89,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     return <div className={`privGroup${options.includes(result.suggested) ? ' best' : ''}`} key={protocol}>
       <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
         <img src={LOGOS[protocol]?.src} alt="" />
-        <span className="privOptionLabel"><b className="privPoolName">{name}</b>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}</span>
+        <span className="privOptionLabel"><b className="privPoolName">{name}</b>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}{options.every((option) => option.paused) && <small>{options[0].paused}</small>}</span>
         <Meter option={best} />
         <ChevronDown aria-hidden="true" />
       </button>
@@ -101,13 +98,6 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
   }
 
   return <section className="privOptions" aria-label="How to send">
-    <div className="privShielded">
-      <span><ShieldCheck aria-hidden="true" />Shielded</span>
-      {known && shielded[chosen.protocol] === undefined && chosen.kind !== 'balance'
-        ? reading ? <span className="privReading" title={status || undefined}>Reading…</span>
-          : <button type="button" className="privReveal" onClick={onReveal}>Show</button>
-        : <b>{before === null ? '—' : tokenText(before, asset)} <i aria-hidden="true">→</i> <span className={after > (before ?? 0n) ? 'up' : ''}>{tokenText(after, asset)}</span> <small>{asset}</small></b>}
-    </div>
     <div className="privHero">
       <Meter option={chosen} large />
       <div>
@@ -126,6 +116,15 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
       <div><small>Stays shielded</small><b className={chosen.kept > 0n ? 'up' : ''}>{chosen.kept > 0n ? `+${tokenText(chosen.kept, asset)}` : tokenText(chosen.kind === 'balance' ? chosen.balanceAfter : 0n, asset)}</b></div>
     </div>
   </section>
+}
+
+/** Optional: deposit a common amount, send what was typed and keep the rest shielded, for more privacy. */
+export function ShieldMore({ option, asset, on, onToggle }) {
+  return <label className="privRow privMore">
+    <span>Shield {tokenText(option.kept, asset)} {asset} more for more privacy<small>Deposit {tokenText(option.deposit, asset)}, they still get what you typed, the rest stays yours, shielded</small></span>
+    <Meter option={option} />
+    <input type="checkbox" role="switch" className="privSwitch" checked={on} onChange={(event) => onToggle(event.target.checked)} />
+  </label>
 }
 
 /** When nothing reaches 4 of 5: what paying from a shielded balance would score, and a way to read it. */
@@ -174,7 +173,7 @@ export function SendSettings({ open, settings, onChange, onClose }) {
       {row('Optimize for', null, segment(PRIORITIES, settings.priority, (priority) => set({ priority }), 'Optimize for'))}
       {row('Longest wait', null, segment(MAX_WAITS, settings.maxWait, (maxWait) => set({ maxWait }), 'Longest wait'))}
     </>}
-    {toggle('Keep nothing in pools', 'Deposit only what you send', settings.keepNothing, (keepNothing) => set({ keepNothing }))}
+    {toggle('Never suggest shielding more', 'Deposit only what you send', settings.keepNothing, (keepNothing) => set({ keepNothing }))}
     {toggle('Remind me when ready', 'Notify me when a waiting payment can go out', settings.remind, (remind) => set({ remind }))}
     <hr className="privDivider" />
     {row(<b className="privSection">Pools</b>, custom ? null : 'Auto uses every pool. Switch to Custom to choose.', null)}

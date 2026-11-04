@@ -138,9 +138,11 @@ function strategyOf(pool, kind, recipients, deposit, raw) {
  * splits the payment; `deposit` is a deposit the user set (keeping part
  * shielded), else later copies a common amount when there is one.
  * @param {{ quote: object, asset: string, raw: bigint, prices: Record<string, number>, shielded?: Record<string, bigint>,
- *   settings?: object, canRun?: (protocol: string) => boolean, recipients?: number, deposit?: bigint|null }} input
+ *   settings?: object, canRun?: (protocol: string) => boolean, recipients?: number, deposit?: bigint|null,
+ *   paused?: Record<string, string>, topUp?: boolean }} input  topUp: deposit a common amount above the payment and keep the rest
+ *   shielded (more privacy); false deposits only what is sent.  paused: pools that stopped deposits, with why; they can still pay from a balance.
  */
-export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true, recipients = 1, deposit: fixed = null }) {
+export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true, recipients = 1, deposit: fixed = null, paused: stopped = {}, topUp = true }) {
   if (!quote?.pools || !(raw > 0n) || !(prices[asset] > 0)) return null
   const chosen = effectiveSettings(settings)
   const amount = toNumber(raw, asset)
@@ -167,16 +169,18 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket)
       if (!privacy) return
       const cost = feeUsd + (kind === 'balance' ? 0 : depositUsd)
+      // A pool that paused deposits can still pay from its shielded balance.
+      const paused = kind !== 'balance' && stopped[protocol] ? stopped[protocol] : null
       options.push({
         id: `${protocol}:${kind}:${wait}`, protocol, kind, wait, waitSeconds: WAITS[wait],
         score: privacy.score, sends: privacy.sends, simulated: privacy.simulated, level: meterLevel(privacy.score),
         fee, feeUsd: cost, feePct: 100 * cost / usd, receives: raw > fee ? raw - fee : 0n,
-        deposit, kept: deposit - raw, executable: runs, ...extra,
+        deposit, kept: deposit - raw, executable: runs && !paused, paused, ...extra,
       })
     }
-    add('now', 'now', fixed ?? raw)
+    const deposit = fixed ?? (topUp && !chosen.keepNothing && send.keepShielded ? popularDeposit(pool.popular, raw) : null) ?? raw
+    add('now', 'now', deposit)
     if (send.keepShielded && send.fromShielded) {
-      const deposit = fixed ?? (chosen.keepNothing ? null : popularDeposit(pool.popular, raw)) ?? raw
       for (const wait of LATER_WAITS) add('later', wait, deposit)
     }
     if (send.fromShielded) {
