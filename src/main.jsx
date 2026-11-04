@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { ArrowLeftRight, ArrowRight, ArrowUpRight, BadgePercent, BookOpen, Check, ChevronDown, CircleAlert, Clock3, Copy, Database, ExternalLink, Home, Link2, LogOut, Mail, Menu, Plus, ScanSearch, Shield, ShieldCheck, ShieldX, SlidersHorizontal, Wallet, X } from 'lucide-react'
 import './styles.css'
-import PaymentLinks, { POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rankPools, shieldToSelf, uncollectedTotals } from './payment-links.jsx'
+import PaymentLinks, { PAUSED, POOLS, PoolPicker, PoolSort, forgetAccess, poolHint, rankPools, shieldToSelf, uncollectedTotals } from './payment-links.jsx'
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
@@ -24,7 +24,7 @@ import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
 import { bucketFor, measuredPrivacy, sendOptions, withSimulation } from './send-options.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
-import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, tokenText } from './private-options.jsx'
+import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
 // bridge picker named privacycash directly. Both follow the manifests now.
@@ -232,6 +232,7 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, dela
   if (!configured.supportsMultiRecipient) capabilities.supportsMultiRecipient = false
   if (!configured.supportsDeadline) capabilities.supportsDeadline = false
   const deadlineBlocked = delayed && !capabilities.supportsDeadline
+  const depositBlocked = shield?.mode !== 'use' && PROTOCOLS[protocol]?.depositsPaused
   // A bridge is ranked on its own route table: the swap table would report the
   // wrong answer, since bridging leaves Solana entirely.
   const route = bridge ? bridgeEligibility(protocol, inputAsset, bridge.chainId, bridge.token)
@@ -246,11 +247,12 @@ function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, dela
     ...item,
     protocol,
     protocolName: item?.protocolName || item?.providerName || PROTOCOLS[protocol]?.name || item?.provider || item?.protocol || 'Unknown pool',
-    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked && !deadlineBlocked && !shieldBlocked,
+    available: item?.available !== false && item?.eligible !== false && !capabilityBlocked && !routeBlocked && !deadlineBlocked && !shieldBlocked && !depositBlocked,
     unavailableReason: capabilityBlocked
       ? 'Multiple-recipient withdrawal is not currently supported by this provider.'
       : deadlineBlocked ? 'A delivery deadline is not supported by this provider.'
       : shieldBlocked ? shieldBlocked
+      : depositBlocked ? depositBlocked
       : routeBlocked ? route.reason
       : item?.unavailableReason || item?.ineligibleReason || item?.reason,
     capabilities,
@@ -515,6 +517,7 @@ function PrivacyHome({ walletSession, settings }) {
   // The simulation for one exact amount, with the asset:amount key it was for.
   const [sim, setSim] = useState(null)
   const [chosenOptionId, setChosenOptionId] = useState(null)
+  const [shieldMore, setShieldMore] = useState(false)
   const [pending, setPending] = useState(loadPending)
   const [clock, setClock] = useState(Date.now)
   // off: deposit and send it all. keep: deposit the amount, send part of it and
@@ -523,7 +526,7 @@ function PrivacyHome({ walletSession, settings }) {
   const [shieldMode, setShieldMode] = useState('off')
   const [keepAmount, setKeepAmount] = useState('')
   const [shieldMenuOpen, setShieldMenuOpen] = useState(false)
-  const [shieldPool, setShieldPool] = useState(POOLS[0].id)
+  const [shieldPool, setShieldPool] = useState((POOLS.find((item) => !PAUSED[item.id]) ?? POOLS[0]).id)
   const [shieldSort, setShieldSort] = useState('fees')
   const summary = usePoolSummary()
   // A delayed delivery outlives this page: it is reloaded from localStorage.
@@ -993,7 +996,7 @@ function PrivacyHome({ walletSession, settings }) {
   const resultAsset = comparison?.asset || asset
   const resultAmount = pickNumber(comparison?.amount, total)
   // Shield only skips the planner: the pool is the one picked from the list.
-  const shieldBlocked = totalRaw > 0n && totalRaw < PAYMENT_ASSETS[asset].cloakMin ? { cloakc: `Needs at least ${cloakMinimum(asset)}` } : {}
+  const shieldBlocked = { ...PAUSED, ...(totalRaw > 0n && totalRaw < PAYMENT_ASSETS[asset].cloakMin ? { cloakc: `Needs at least ${cloakMinimum(asset)}` } : {}) }
   const shieldPools = rankPools({ pools: SHIELD_POOLS, asset, amount: total, prices, summary, sort: shieldSort, unavailable: shieldBlocked })
   // A pool that cannot keep a send's change shielded (Cloak) shields as a payment link paid to yourself.
   const shieldViaLinks = !PROTOCOLS[shieldPool].send.keepShielded
@@ -1014,11 +1017,17 @@ function PrivacyHome({ walletSession, settings }) {
       : prices[asset] > 0 ? bucketFor(Number(rawTokenText(simRaw, asset)) * prices[asset], base.buckets) : null
     return withSimulation(base, data, bucket)
   }, [sim, simKey, quote, asset, prices, simRaw])
-  const optionResult = useMemo(() => optionsMode && !keepError && sentRaw > 0n && amountQuote
-    ? sendOptions({ quote: amountQuote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
-      recipients: receiverCount, deposit: keeping ? totalRaw : null,
+  // Two sets: the send as typed (deposit only what is sent), and with a common
+  // deposit above it, the rest kept shielded. The second is offered, never forced.
+  const [plainResult, moreResult] = useMemo(() => {
+    if (!(optionsMode && !keepError && sentRaw > 0n && amountQuote)) return [null, null]
+    const run = (topUp) => sendOptions({ quote: amountQuote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
+      recipients: receiverCount, deposit: keeping ? totalRaw : null, paused: PAUSED, topUp,
       shielded: pcShielded?.state === 'ready' ? { privacycash: BigInt(pcShielded.spendable?.[asset] ?? 0n) } : {} })
-    : null, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, pcShielded, receiverCount, keeping, totalRaw])
+    return [run(false), keeping ? null : run(true)]
+  }, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, pcShielded, receiverCount, keeping, totalRaw])
+  const moreOffer = moreResult?.suggested && moreResult.suggested.kept > 0n && moreResult.suggested.score > (plainResult?.suggested?.score ?? -1) ? moreResult.suggested : null
+  const optionResult = shieldMore && moreOffer ? moreResult : plainResult
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
   // Shield only and paying from shielded funds show their measured privacy in the pool they go through.
   // Paying from shielded funds has no planner pick until the balance is read; the one pool that can pay from it stands in.
@@ -1075,7 +1084,7 @@ function PrivacyHome({ walletSession, settings }) {
   ]
 
   return <div className="homePage">
-    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1><HomeLead /></header>
+    <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1></header>
     <PendingPayments items={pending} now={clock} onSend={sendPending} onKeep={keepPending} sending={sending} />
     <section className="sendCard panel">
       <div className={`amountRow${payingShielded ? ' fromShielded' : ''}`}>
@@ -1115,7 +1124,7 @@ function PrivacyHome({ walletSession, settings }) {
       <div className="recipientRows">
         {/* The header carries the recipient-level actions, so each row stays one line. */}
         <div className="recipientHead">
-          <span id="shieldPoolLabel">{shieldOnly ? 'Shield into' : receiverCount > 1 ? 'Recipients' : 'Recipient'}</span>
+          <span id="shieldPoolLabel">{shieldOnly ? 'Shield into' : ''}</span>
           {shieldOnly && <PoolSort sort={shieldSort} onSort={setShieldSort} />}
           {!isSwap && !isBridge && <>
             <button type="button" className={`shieldControl${activeShield !== 'off' ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={shieldMenuOpen} aria-label={shieldLabel} data-tooltip={shieldLabel}
@@ -1128,7 +1137,7 @@ function PrivacyHome({ walletSession, settings }) {
           </>}
         </div>
         {shieldOnly && <PoolPicker pools={shieldPools.pools} value={shieldPool} onChange={setShieldPool} asset={asset} amountValid={totalRaw > 0n} sort={shieldSort} summary={summary} disabled={sending} labelledBy="shieldPoolLabel" />}
-        {!shieldOnly && receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><span>{index + 1}</span><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives{swapOutput ? ` ≈ ${compact(swapOutput.amount, tokenDigits(swapOutput.amount, swapOutput.asset))}` : ''}</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
+        {!shieldOnly && receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives{swapOutput ? ` ≈ ${compact(swapOutput.amount, tokenDigits(swapOutput.amount, swapOutput.asset))}` : ''}</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
         {keeping && <div className="recipientRow keepRow">
           <span aria-hidden="true"><ShieldCheck /></span>
           <div className="recipientFields">
@@ -1142,15 +1151,16 @@ function PrivacyHome({ walletSession, settings }) {
       {shieldOnly && <p className="paymentPoolHint shieldPoolHint" role="status">{poolHint(shieldSort, summary, shieldPools.volumeAvailable, 'Estimated fee to withdraw it later. Shielding costs only network fees.')}
         {shieldViaLinks && ' Cloak keeps it as a paid payment link, collected from Payment links.'}
         {!shieldViaLinks && !PROTOCOLS[shieldPool].send.fromShielded && ` ${poolLabel(shieldPool)} keeps it in its own private balance; DarkSol cannot pay from it yet.`}</p>}
-      {(sendAttempted || amount) && (keepError || !activeValidation.valid) && <div className="splitStatus">{keepError || (!isBridge && !shieldOnly && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}
+      {(sendAttempted || amount) && (keepError || (!activeValidation.valid && activeValidation.error !== 'Enter an address')) && <div className="splitStatus">{keepError || (!isBridge && !shieldOnly && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}
         {keeping && sentRaw === 0n && <> · <button type="button" onClick={() => chooseShield('shield')}>Shield it all instead</button></>}</div>}
       {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>Send <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
       {shieldedSplit && shieldedSplit.withdrawals > receiverCount && <div className="keepSummary">
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
+      {moreOffer && <ShieldMore option={moreOffer} asset={asset} on={shieldMore} onToggle={(on) => { setShieldMore(on); setChosenOptionId(null) }} />}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
         shielded={{ privacycash: !wallet ? 0n : pcShielded?.state === 'ready' ? BigInt(pcShielded.spendable?.[asset] ?? 0n) : undefined }}
-        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} status={shielded.status} onReveal={shielded.reveal} />
+        reading={Boolean(wallet) && (!pcShielded || pcShielded.state === 'loading')} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
@@ -1184,9 +1194,6 @@ function PrivacyHome({ walletSession, settings }) {
 
 // Why routing matters. It names no pool and quotes no figure: what gives a
 // withdrawal away is how a pool is used, and that holds for every pool.
-function HomeLead() {
-  return <p className="homeLead">Privacy pools hide you <b>only when used well</b>. DarkSol picks the pool that hides you best.</p>
-}
 
 const GAS_DEFAULT = '0.005'
 const GAS_SOURCE = {

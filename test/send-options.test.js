@@ -84,6 +84,14 @@ test('a fee that is most of a small payment outweighs the wait', () => {
   assert.equal(options(1).suggested.id, 'umbrav2:now:now')
 })
 
+test('without the top-up every option deposits only what is sent; with it, now and the waits deposit the common amount', () => {
+  const plain = options(19.28, { topUp: false })
+  assert.ok(plain.options.every((option) => option.kind === 'balance' || option.deposit === USDC(19.28)))
+  assert.equal(plain.suggested.id, 'umbrav2:now:now')
+  const more = options(19.28)
+  assert.ok(more.options.filter((option) => option.protocol === 'privacycash').every((option) => option.deposit === USDC(25)))
+})
+
 test('keep nothing in pools deposits only what is sent', () => {
   const result = options(19.28, { settings: { ...DEFAULT_SETTINGS, keepNothing: true } })
   assert.ok(!result.options.some((option) => option.kept > 0n))
@@ -98,6 +106,14 @@ test('a shielded balance that covers the payment is the suggestion, with no new 
   assert.equal(result.suggested.balanceAfter, USDC(30.72))
   // Too small a balance offers nothing from it.
   assert.ok(!options(19.28, { shielded: { privacycash: USDC(10) } }).options.some((option) => option.kind === 'balance'))
+})
+
+test('a pool that paused deposits still shows its deposits, unpickable, and can pay from a balance', () => {
+  const result = options(19.28, { shielded: { privacycash: USDC(50) }, paused: { privacycash: 'Deposits temporarily paused' } })
+  const deposits = result.options.filter((option) => option.protocol === 'privacycash' && option.kind !== 'balance')
+  assert.ok(deposits.length && deposits.every((option) => !option.executable && option.paused === 'Deposits temporarily paused'))
+  assert.equal(result.suggested.id, 'privacycash:balance:now')
+  assert.notEqual(options(19.28, { paused: { privacycash: 'Paused' } }).suggested?.protocol, 'privacycash')
 })
 
 test('options need enough measured sends and a pool that can run here', () => {

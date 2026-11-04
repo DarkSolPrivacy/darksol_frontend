@@ -13,6 +13,8 @@ import { PAYMENT_ASSETS, assetAmount, cloakMinimum } from './payment-assets.js'
 
 const PRICED = Object.keys(PAYMENT_ASSETS)
 export const POOLS = [{ id: 'privacycash', name: 'Privacy Cash' }, { id: 'cloakc', name: 'Cloak' }]
+// Pools that paused deposits, with the reason the pool pickers show.
+export const PAUSED = Object.fromEntries(Object.values(PROTOCOLS).filter((item) => item.depositsPaused).map((item) => [item.id, item.depositsPaused]))
 const short = (value) => `${value.slice(0, 6)}…${value.slice(-6)}`
 const format = (value, digits = 6) => Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value)
 const tokenAmount = (raw, asset) => format(assetAmount(raw, asset), 9)
@@ -525,7 +527,7 @@ export default function PaymentLinks({ summary, walletSession }) {
   const amountResult = parseAmount(amount, asset)
   const amountError = amount && !amountResult.valid ? amountResult.error
     : pool === 'cloakc' && amountResult.valid && amountResult.baseUnits < PAYMENT_ASSETS[asset].cloakMin ? `Cloak requires at least ${cloakMinimum(asset)}.` : ''
-  const { pools, volumeAvailable } = rankPools({ asset, amount: amountResult.valid ? Number(amountResult.normalized) : 0, prices, summary, sort })
+  const { pools, volumeAvailable } = rankPools({ asset, amount: amountResult.valid ? Number(amountResult.normalized) : 0, prices, summary, sort, unavailable: PAUSED })
 
   const verifyForm = (payment) => <form className="linkVerify" onSubmit={(event) => {
     event.preventDefault()
