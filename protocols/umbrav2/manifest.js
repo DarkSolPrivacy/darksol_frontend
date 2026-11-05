@@ -55,8 +55,10 @@ export default Object.freeze({
 
   // keepShielded: a send deposits into the wallet's own private balance and then
   // withdraws, so it can withdraw less than it deposited, or nothing (shield
-  // only). The rest stays in that balance, which DarkSol does not pay from yet.
-  send: Object.freeze({ execution: 'sdk', keepShielded: true }),
+  // only). fromShielded: a send can withdraw from that balance with no deposit;
+  // the SDK merges notes first when the largest three fall short. The balance is
+  // found again from the wallet's unlock signature on any device.
+  send: Object.freeze({ execution: 'sdk', keepShielded: true, fromShielded: true }),
   swap: Object.freeze({
     execution: 'unsupported',
     aggregator: null,
@@ -84,5 +86,6 @@ export default Object.freeze({
   signerKind: 'wallet-standard',
   // The SDK is browser-only, so there is no CLI module. The backend indexes the
   // pool (darksol-backend's protocols/umbrav2/indexer.js); this repo ships no copy.
-  modules: Object.freeze({ indexer: false, browser: true, cli: false, quote: false, bridge: false }),
+  // shieldedBalance: browser.js exports shieldedBalances for the wallet panel.
+  modules: Object.freeze({ indexer: false, browser: true, cli: false, quote: false, bridge: false, shieldedBalance: true }),
 })

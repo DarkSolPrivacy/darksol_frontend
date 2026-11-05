@@ -38,7 +38,13 @@ export default Object.freeze({
   recipients: Object.freeze({ multi: false, max: 1 }),
   capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
 
-  send: Object.freeze({ execution: 'sdk' }),
+  // keepShielded: a send deposits, then withdraws only what the recipient is
+  // paid (partialWithdraw); the rest stays as a change note. fromShielded: a send
+  // can pay from those notes with no deposit, merging more than two first.
+  // localNotes: Cloak has no scan by wallet, so those notes are saved in this
+  // browser only, and Shield only goes through a payment link paid to yourself,
+  // which the wallet signature recovers on any device.
+  send: Object.freeze({ execution: 'sdk', keepShielded: true, fromShielded: true, localNotes: true }),
   swap: Object.freeze({
     execution: 'sdk',
     aggregator: 'Jupiter',

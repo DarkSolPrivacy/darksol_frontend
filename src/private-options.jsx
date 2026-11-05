@@ -132,7 +132,7 @@ export function PrivateHint({ result, prefix, canReveal, onReveal }) {
   const lead = prefix ? `${prefix} ` : ''
   return <p className="privHint">{result.balanceHint
     ? <>{lead}Paying from a shielded balance scores {result.balanceHint.level} of 5.{canReveal && <button type="button" onClick={onReveal}>Show balance</button>}</>
-    : `${lead}Try a longer wait or another pool in settings.`}</p>
+    : result.balanceOnly ? lead.trim() : `${lead}Try a longer wait or another pool in settings.`}</p>
 }
 
 /** Measured privacy for shield only and paying from shielded funds: one line, a hint when it is weak. */

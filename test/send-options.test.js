@@ -195,9 +195,10 @@ test('a 12 h wait shows once the quote measures it', () => {
 test('keeping part shielded: every option deposits what the user set, in the pools that keep change', () => {
   // A common deposit (25) reads as keep, any other as exact.
   const common = timedOptions(19.28, { deposit: USDC(25) })
-  // Cloak cannot keep change; Umbra v2 can, sending now (it cannot pay later from the balance).
-  assert.deepEqual([...new Set(common.options.map((option) => option.protocol))].sort(), ['privacycash', 'umbrav2'])
+  // Every pool keeps change now; Cloak and Umbra v2 send now only, since this quote measures no waits for them.
+  assert.deepEqual([...new Set(common.options.map((option) => option.protocol))].sort(), ['cloakc', 'privacycash', 'umbrav2'])
   assert.deepEqual(common.options.filter((option) => option.protocol === 'umbrav2').map((option) => option.id), ['umbrav2:now:now'])
+  assert.deepEqual(common.options.filter((option) => option.protocol === 'cloakc').map((option) => option.id), ['cloakc:now:now'])
   const pc = common.options.filter((option) => option.protocol === 'privacycash')
   assert.deepEqual(pc.filter((option) => option.kind !== 'balance').map((option) => [option.wait, option.score]).sort(),
     [['12h', 85], ['24h', 96], ['6h', 50], ['now', 0]])
@@ -205,6 +206,30 @@ test('keeping part shielded: every option deposits what the user set, in the poo
   const odd = timedOptions(3, { deposit: USDC(4) })
   assert.deepEqual(odd.options.filter((option) => option.protocol === 'privacycash').map((option) => [option.wait, option.score]).sort(), [['24h', 3], ['6h', 0], ['now', 0]])
   assert.equal(odd.balanceHint.level, 5)
+})
+
+test('Cloak and Umbra v2 pay from a shielded balance, and wait to send from it, once the quote measures it', () => {
+  const pools = Object.fromEntries(['cloakc', 'umbrav2'].map((protocol) => [protocol, { popular: [], cells: ['1-10', '10-100'].flatMap((bucket) => [
+    cell('exact', 'now', bucket, 30, 30), cell('exact', '24h', bucket, 30, 12), cell('balance', 'now', bucket, 30, 2)]) }]))
+  const both = { ...quote, pools }
+  const run = (extra) => sendOptions({ quote: both, asset: 'USDC', raw: USDC(19.28), prices, ...extra })
+  // Unread balances: no option from them, but the hint says what one would score.
+  const unread = run()
+  assert.ok(!unread.options.some((option) => option.kind === 'balance'))
+  assert.equal(unread.balanceHint.protocol, 'cloakc')
+  assert.deepEqual(unread.options.filter((option) => option.kind === 'later').map((option) => option.id).sort(), ['cloakc:later:24h', 'umbrav2:later:24h'])
+  // A balance that covers it in either pool is offered, and the cheaper pool leads.
+  const funded = run({ shielded: { cloakc: USDC(30), umbrav2: USDC(20) } })
+  assert.deepEqual(funded.options.filter((option) => option.kind === 'balance').map((option) => option.id).sort(), ['cloakc:balance:now', 'umbrav2:balance:now'])
+  assert.equal(funded.suggested.id, 'umbrav2:balance:now')
+  assert.equal(funded.suggested.balanceAfter, USDC(0.72))
+  // Too little in one pool offers only the other.
+  assert.deepEqual(run({ shielded: { cloakc: USDC(30), umbrav2: USDC(10) } }).options.filter((option) => option.kind === 'balance').map((option) => option.id), ['cloakc:balance:now'])
+  // Use shielded funds: only the payments from a balance, ranked by privacy and fee like the rest.
+  const only = run({ shielded: { cloakc: USDC(30), umbrav2: USDC(20) }, balanceOnly: true })
+  assert.deepEqual(only.options.map((option) => option.id), ['umbrav2:balance:now', 'cloakc:balance:now'])
+  assert.equal(only.balanceOnly, true)
+  assert.equal(run({ balanceOnly: true }).suggested, null)
 })
 
 test('several recipients: measured as a split, in the pools that pay several, the fixed fee per recipient', () => {

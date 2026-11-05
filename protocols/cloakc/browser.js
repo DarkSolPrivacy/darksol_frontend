@@ -1,6 +1,7 @@
 import { getAssociatedTokenAddressSync } from '@solana/spl-token'
 import { Connection, PublicKey } from '@solana/web3.js'
 import { MINTS } from '../addresses.js'
+import { TOKEN_DECIMALS } from '../shared/units.js'
 
 // Cloak settles into a public SPL recipient; the mints come from the registry.
 const OUTPUT_MINTS = Object.freeze({ USDC: MINTS.USDC, USDT: MINTS.USDT })
@@ -40,6 +41,80 @@ function saveUtxos(wallet, sdk, created, spent = []) {
   const gone = new Set(spent.map(encode))
   const kept = saved.filter((entry) => !gone.has(entry))
   localStorage.setItem(key, JSON.stringify([...new Set([...kept, ...created.filter((utxo) => utxo.amount > 0n).map(encode)])]))
+}
+
+const base64ToBytes = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
+const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
+const byAmount = (a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0)
+
+// Every note this browser saved for `wallet`, any mint, spent ones included
+// until saveUtxos sees them spent.
+async function savedNotes(sdk, wallet) {
+  let saved = []
+  try { saved = JSON.parse(localStorage.getItem(`cloak-utxos-${wallet}`) || '[]') } catch { saved = [] }
+  return Promise.all(saved.map((entry) => sdk.deserializeUtxo(base64ToBytes(entry))))
+}
+
+// What a private send or withdrawal needs: the relay authenticates the wallet
+// with one message signature per request. Deposits add their own fields.
+function relayOptions(sdk, provider, connection, onStatus) {
+  const publicKey = new PublicKey(String(provider.publicKey))
+  return {
+    connection,
+    programId: sdk.CLOAK_PROGRAM_ID,
+    relayUrl: sdk.CLOAK_PRODUCTION_RELAY_URL,
+    walletPublicKey: publicKey,
+    signMessage: async (message) => walletSignature(await provider.signMessage(message, 'utf8')),
+    onProgress: onStatus,
+  }
+}
+
+// Pays `amount` from `notes` (same mint) to `recipient`, keeping the rest as a
+// change note. A transaction spends at most two notes, so more are merged two
+// at a time first: a private send to a new note of the same owner, free of
+// pool fees, one wallet message each. The SDK's partialWithdraw merges too, but
+// keeps each merged note only in memory, so a failure after a merge would lose
+// it; here each is saved before the next step.
+export async function withdrawNotes({ sdk, options, wallet, notes, amount, recipient, onStatus = () => {} }) {
+  let inputs = [...notes]
+  let tree = options.cachedMerkleTree
+  for (let merge = 1, merges = inputs.length - 2; inputs.length > 2; merge++) {
+    onStatus(`Merging your Cloak notes (${merge} of ${merges})...`)
+    const [first, second, ...rest] = inputs.sort(byAmount)
+    const output = await sdk.createUtxo(first.amount + second.amount, first.keypair, first.mintAddress)
+    const result = await sdk.transact({ inputUtxos: [first, second], outputUtxos: [output], externalAmount: 0n }, { ...options, cachedMerkleTree: tree })
+    const merged = result.outputUtxos?.find((utxo) => utxo.amount > 0n) ?? output
+    if (merged.index === undefined && result.commitmentIndices?.[0] >= 0) merged.index = result.commitmentIndices[0]
+    saveUtxos(wallet, sdk, [merged], [first, second])
+    tree = result.merkleTree
+    inputs = [merged, ...rest]
+  }
+  onStatus('Sending privately...')
+  const withdrawal = await sdk.partialWithdraw(inputs, recipient, amount, { ...options, cachedMerkleTree: tree })
+  saveUtxos(wallet, sdk, withdrawal.outputUtxos, inputs)
+  return withdrawal
+}
+
+// Pays one recipient from the notes this browser saved, with no deposit.
+async function sendFromSaved({ provider, asset, amount, recipient, onStatus }) {
+  if (!provider?.publicKey || typeof provider.signMessage !== 'function') throw new Error('Connect a Solana wallet that supports message signing')
+  if (asset !== 'SOL' && !MINTS[asset]) throw new Error(`CLOAKC does not support ${asset}`)
+  onStatus('Reading your Cloak notes...')
+  const sdk = await import('@cloak.dev/sdk')
+  const connection = rpcConnection()
+  const wallet = String(provider.publicKey)
+  const mint = asset === 'SOL' ? sdk.NATIVE_SOL_MINT : new PublicKey(MINTS[asset])
+  const { unspent } = await sdk.verifyUtxos(await savedNotes(sdk, wallet), connection, sdk.CLOAK_PROGRAM_ID)
+  const notes = unspent.filter((utxo) => utxo.mintAddress.equals(mint) && utxo.amount > 0n)
+  // The fewest, largest notes that cover it, so as few merges as possible.
+  const picked = sdk.selectUtxos(notes, amount)
+  if (!picked) {
+    const held = sdk.sumUtxoAmounts(notes)
+    throw new Error(held ? `Your shielded Cloak ${asset} in this browser is ${Number(held) / 10 ** TOKEN_DECIMALS[asset]} ${asset}, less than this payment`
+      : `No shielded Cloak ${asset} is saved in this browser`)
+  }
+  const withdrawal = await withdrawNotes({ sdk, options: relayOptions(sdk, provider, connection, onStatus), wallet, notes: picked, amount, recipient, onStatus })
+  return { provider: 'cloakc', asset, depositSignature: null, withdrawals: [{ tx: withdrawal.signature }] }
 }
 
 async function quoteSwap(inputBaseUnits, outputMint) {
@@ -95,21 +170,31 @@ async function depositNote({ provider, asset, totalBaseUnits, onStatus }) {
   return { sdk, options, deposit, wallet }
 }
 
-// Deposits, then withdraws the whole note to one public address. The manifest
-// keeps Cloak single-recipient, so there is no change note to carry forward.
-export async function executeCloakSend({ provider, asset, totalBaseUnits, recipient, recipients = [], onStatus = () => {} }) {
-  if (recipients.length > 1) throw new Error('CLOAKC sends to one recipient')
-  const recipientWallet = new PublicKey(String(recipient))
+// Deposits `totalBaseUnits`, then withdraws what the recipient is paid to one
+// public address: all of it, less when part stays shielded (the change note,
+// saved in this browser), nothing when shielding only. `source: 'shielded'`
+// pays from the notes saved here instead, with no deposit.
+export async function executeCloakSend({ provider, asset, totalBaseUnits, recipient, recipients, source = 'wallet', onStatus = () => {} }) {
+  if (recipients?.length > 1) throw new Error('CLOAKC sends to one recipient')
+  const payout = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : BigInt(totalBaseUnits)
+  if (source === 'shielded') {
+    if (!payout) throw new Error('Nothing to pay')
+    return sendFromSaved({ provider, asset, amount: payout, recipient: new PublicKey(String(recipient)), onStatus })
+  }
+  if (payout > BigInt(totalBaseUnits)) throw new Error('The recipient gets more than the deposit')
+  const recipientWallet = payout ? new PublicKey(String(recipient)) : null
   const { sdk, options, deposit, wallet } = await depositNote({ provider, asset, totalBaseUnits, onStatus })
+  const receipt = { provider: 'cloakc', asset, depositSignature: deposit.signature, withdrawals: [] }
+  if (!payout) return receipt
   try {
-    onStatus('Sending privately...')
     // The relay rejects a withdrawal without exactly one compact chain note.
-    const withdrawal = await sdk.fullWithdraw(deposit.outputUtxos, recipientWallet, { ...options, disableChainNotes: false, cachedMerkleTree: deposit.merkleTree })
-    saveUtxos(wallet, sdk, withdrawal.outputUtxos, deposit.outputUtxos)
-    return { provider: 'cloakc', asset, depositSignature: deposit.signature, withdrawals: [{ tx: withdrawal.signature }] }
+    const notes = deposit.outputUtxos.filter((utxo) => utxo.amount > 0n)
+    const withdrawal = await withdrawNotes({ sdk, options: { ...options, disableChainNotes: false, cachedMerkleTree: deposit.merkleTree }, wallet, notes, amount: payout, recipient: recipientWallet, onStatus })
+    receipt.withdrawals.push({ tx: withdrawal.signature })
+    return receipt
   } catch (error) {
-    const wrapped = new Error(`Deposit succeeded, but the private send failed: ${error instanceof Error ? error.message : String(error)}. Your private CLOAKC note was saved in this browser for recovery.`)
-    wrapped.receipt = { provider: 'cloakc', asset, depositSignature: deposit.signature, withdrawals: [] }
+    const wrapped = new Error(`Deposit succeeded, but the private send failed: ${error instanceof Error ? error.message : String(error)}. Your private CLOAKC note was saved in this browser: pay from it with Use shielded funds.`)
+    wrapped.receipt = receipt
     throw wrapped
   }
 }
@@ -182,30 +267,29 @@ export async function solWithdrawalFee() {
   return { fee: calculateFeeBigint, minimum: 0n }
 }
 
-const base64ToBytes = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
-
-// Unspent notes this browser saved from a Cloak send or swap that did not finish,
-// per asset, in base units. Cloak has no scan by wallet, so a note saved in
-// another browser is not counted. A note the SDK cannot check (no leaf index
-// yet) is counted: saveUtxos drops every note it saw spent. The app does not
-// spend these (the manifest has no fromShielded), so nothing is spendable.
+// Unspent notes this browser saved, per asset, in base units: change kept
+// shielded, shield-only deposits, and sends or swaps that did not finish. Cloak
+// has no scan by wallet, so a note saved in another browser is not counted.
+// `balances` also counts a note the SDK cannot check (no leaf index yet), since
+// saveUtxos drops every note it saw spent; `spendable` only the checked ones,
+// which a payment from shielded funds spends (merged first when more than two).
 export async function shieldedBalances({ provider }) {
   const wallet = String(provider.publicKey)
+  const balances = { SOL: 0n, USDC: 0n, USDT: 0n }
+  const spendable = { SOL: 0n, USDC: 0n, USDT: 0n }
   let saved = []
   try { saved = JSON.parse(localStorage.getItem(`cloak-utxos-${wallet}`) || '[]') } catch { saved = [] }
-  const balances = { SOL: 0n, USDC: 0n, USDT: 0n }
-  const result = { balances, spendable: { SOL: 0n, USDC: 0n, USDT: 0n } }
-  if (!saved.length) return result
+  if (!saved.length) return { balances, spendable }
   const sdk = await import('@cloak.dev/sdk')
-  const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
-  const utxos = await Promise.all(saved.map((entry) => sdk.deserializeUtxo(base64ToBytes(entry))))
-  const { unspent, skipped } = await sdk.verifyUtxos(utxos, connection, sdk.CLOAK_PROGRAM_ID)
+  const { unspent, skipped } = await sdk.verifyUtxos(await savedNotes(sdk, wallet), rpcConnection(), sdk.CLOAK_PROGRAM_ID)
   const assets = { [sdk.NATIVE_SOL_MINT.toBase58()]: 'SOL', [MINTS.USDC]: 'USDC', [MINTS.USDT]: 'USDT' }
   for (const utxo of [...unspent, ...skipped]) {
     const asset = assets[utxo.mintAddress.toBase58()]
-    if (asset) balances[asset] += utxo.amount
+    if (!asset) continue
+    balances[asset] += utxo.amount
+    if (unspent.includes(utxo)) spendable[asset] += utxo.amount
   }
-  return result
+  return { balances, spendable }
 }
 
 // The one entry point the UI calls, so it branches on neither protocol nor
