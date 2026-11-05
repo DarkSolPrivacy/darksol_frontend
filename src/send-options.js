@@ -139,10 +139,11 @@ function strategyOf(pool, kind, recipients, deposit, raw) {
  * shielded), else later copies a common amount when there is one.
  * @param {{ quote: object, asset: string, raw: bigint, prices: Record<string, number>, shielded?: Record<string, bigint>,
  *   settings?: object, canRun?: (protocol: string) => boolean, recipients?: number, deposit?: bigint|null,
- *   paused?: Record<string, string>, topUp?: boolean }} input  topUp: deposit a common amount above the payment and keep the rest
+ *   paused?: Record<string, string>, topUp?: boolean, balanceOnly?: boolean }} input  topUp: deposit a common amount above the payment and keep the rest
  *   shielded (more privacy); false deposits only what is sent.  paused: pools that stopped deposits, with why; they can still pay from a balance.
+ *   balanceOnly: only payments from a shielded balance (Use shielded funds), one per pool that holds enough.
  */
-export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true, recipients = 1, deposit: fixed = null, paused: stopped = {}, topUp = true }) {
+export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings, canRun = () => true, recipients = 1, deposit: fixed = null, paused: stopped = {}, topUp = true, balanceOnly = false }) {
   if (!quote?.pools || !(raw > 0n) || !(prices[asset] > 0)) return null
   const chosen = effectiveSettings(settings)
   const amount = toNumber(raw, asset)
@@ -179,8 +180,8 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       })
     }
     const deposit = fixed ?? (topUp && !chosen.keepNothing && send.keepShielded ? popularDeposit(pool.popular, raw) : null) ?? raw
-    add('now', 'now', deposit)
-    if (send.keepShielded && send.fromShielded) {
+    if (!balanceOnly) add('now', 'now', deposit)
+    if (!balanceOnly && send.keepShielded && send.fromShielded) {
       for (const wait of LATER_WAITS) add('later', wait, deposit)
     }
     if (send.fromShielded) {
@@ -216,7 +217,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const reason = !suggested ? null : chosen.priority === 'fees' ? 'fees'
     : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
       : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
-  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, options: [...ranked, ...rest], settings: chosen }
+  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
 }
 
 function compare(priority) {

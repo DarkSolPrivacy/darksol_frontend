@@ -71,6 +71,8 @@ export const ENDPOINTS = Object.freeze({
   umbrav2Data: 'https://data.api-v2.umbraprivacy.com',
   umbrav2Context: 'https://context.api-v2.umbraprivacy.com',
   jupiterQuote: 'https://lite-api.jup.ag/swap/v1/quote',
+  // Jupiter Ultra (order, then execute), which Umbra v2 swaps call from a one-time wallet.
+  jupiterUltra: 'https://lite-api.jup.ag/ultra/v1',
   curvyApi: 'https://api.curvy.box',
   privacycashBridge: 'https://api3.privacycash.org/bridge',
   privacycashConfig: 'https://api3.privacycash.org/config',

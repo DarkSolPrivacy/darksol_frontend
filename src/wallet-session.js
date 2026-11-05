@@ -72,6 +72,9 @@ export function useWalletSession() {
   const [picker, setPicker] = useState(null)
   const pending = useRef(null)
   const generation = useRef(0)
+  // The connected address, for the wallet's events to compare against.
+  const connectedAddress = useRef(null)
+  connectedAddress.current = wallet?.address ?? null
 
   // Reconnect the last wallet without a prompt; wallets may register after load.
   useEffect(() => {
@@ -96,9 +99,14 @@ export function useWalletSession() {
   useEffect(() => {
     const provider = wallet?.provider
     if (!provider?.on) return
+    // A wallet may report the same account again (Umbra v2's SDK connects inside
+    // every send and balance read): that is no change, and must not clear the
+    // receipt of the payment it is part of, or re-enable its send button.
     const accountChanged = (publicKey) => {
+      const address = publicKey ? String(publicKey) : null
+      if (address && address === connectedAddress.current) return
       generation.current++
-      setWallet((current) => publicKey ? { ...current, provider, address: String(publicKey) } : null)
+      setWallet((current) => address ? { ...current, provider, address } : null)
     }
     const disconnected = () => { generation.current++; setWallet(null) }
     provider.on('accountChanged', accountChanged)

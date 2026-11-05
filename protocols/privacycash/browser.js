@@ -71,23 +71,33 @@ export function exclusive(task) {
 const signatureKey = (publicKey) => `privacycash-signature-${publicKey.toBase58()}`
 const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
 
-// The sign-in signature is also returned: the swap wallet is derived from it.
-async function encryptionForWallet(provider, publicKey, EncryptionService) {
+// The sign-in signature, kept in this browser: the note keys and the swap
+// wallet derive from it, so the wallet is asked once.
+async function signIn(provider, publicKey) {
   if (typeof provider.signMessage !== 'function') throw new Error('This wallet does not support message signing')
   const cacheKey = signatureKey(publicKey)
-  let signature
   const cached = localStorage.getItem(cacheKey)
   if (cached) {
-    try { signature = base64ToBytes(cached) } catch { localStorage.removeItem(cacheKey) }
+    try { return base64ToBytes(cached) } catch { localStorage.removeItem(cacheKey) }
   }
-  if (!signature) {
-    signature = signatureBytes(await provider.signMessage(SIGN_IN_MESSAGE, 'utf8'))
-    if (String(provider.publicKey) !== publicKey.toBase58()) throw new Error('Wallet account changed while signing')
-    localStorage.setItem(cacheKey, bytesToBase64(signature))
-  }
+  const signature = signatureBytes(await provider.signMessage(SIGN_IN_MESSAGE, 'utf8'))
+  if (String(provider.publicKey) !== publicKey.toBase58()) throw new Error('Wallet account changed while signing')
+  localStorage.setItem(cacheKey, bytesToBase64(signature))
+  return signature
+}
+
+// The sign-in signature is also returned: the swap wallet is derived from it.
+async function encryptionForWallet(provider, publicKey, EncryptionService) {
+  const signature = await signIn(provider, publicKey)
   const encryptionService = new EncryptionService()
   encryptionService.deriveEncryptionKeyFromSignature(signature)
   return { encryptionService, signature }
+}
+
+// Asks for the sign-in signature alone, so a balance read after it, which can
+// scan for minutes the first time, asks nothing and can run beside other pools'.
+export async function unlockShielded({ provider }) {
+  await signIn(provider, new PublicKey(String(provider.publicKey)))
 }
 
 async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits) {
@@ -184,7 +194,7 @@ export async function captureWithdrawal(run) {
 }
 
 // The wallet's unspent notes of one asset, largest first, in base units.
-async function noteAmounts(privacyCash, common, asset) {
+export async function noteAmounts(privacyCash, common, asset) {
   const utxos = asset === 'SOL' ? await privacyCash.getUtxos(common) : await privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset] })
   return utxos.map((utxo) => BigInt(utxo.amount.toString())).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
 }
