@@ -59,6 +59,10 @@ export default Object.freeze({
     inputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
     outputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
     oneSideSol: true,
+    // Only the swapped part is withdrawn into the swap wallet: the rest of a
+    // deposit stays shielded, or the input comes from the shielded balance.
+    keepShielded: true,
+    fromShielded: true,
     // A one-time swap wallet pays the recipient directly (swap.js). inputReserveSol:
     // SOL held back from a SOL input for the swap's fees and the recipient's token
     // account; the rest reaches the recipient as SOL for fees. The other figures

@@ -238,10 +238,12 @@ function fromShieldedReason(entry, asset, amounts, protocol) {
 function normalizeEstimate(item, strategy, inputAsset, outputAsset, bridge, delayed = false, shield = null) {
   const protocol = providerKey(item)
   const configured = PROVIDER_CAPABILITIES[protocol] || {}
-  const send = PROTOCOLS[protocol]?.send || {}
+  // A swap keeps part shielded or pays from shielded funds by its own route's rules.
+  const swapping = !bridge && inputAsset !== outputAsset
+  const shielding = (swapping ? PROTOCOLS[protocol]?.swap : PROTOCOLS[protocol]?.send) || {}
   const shieldBlocked = !shield ? null
-    : shield.mode === 'keep' ? (send.keepShielded ? null : 'Keeping part of a send shielded is not supported by this provider.')
-      : send.fromShielded ? fromShieldedReason(shield.pools[protocol], inputAsset, shield.amounts, protocol) : 'Paying from shielded funds is not supported by this provider.'
+    : shield.mode === 'keep' ? (shielding.keepShielded ? null : `Keeping part of a ${swapping ? 'swap' : 'send'} shielded is not supported by this provider.`)
+      : shielding.fromShielded ? fromShieldedReason(shield.pools[protocol], inputAsset, shield.amounts, protocol) : `Paying ${swapping ? 'a swap ' : ''}from shielded funds is not supported by this provider.`
   const poolMetrics = item?.poolMetrics || {}
   const capabilities = { ...configured, ...(item?.capabilities || {}) }
   // A server response must not widen a protocol past what its manifest declares.
@@ -557,8 +559,8 @@ function PrivacyHome({ walletSession, settings }) {
   const isSwap = !isBridge && asset !== destinationAsset
   const selectedBridgeChain = bridgeChain(bridgeChainId)
   const bridgeRoute = isBridge ? bridgeEligibility(BRIDGE_PROTOCOL_ID, asset, bridgeChainId, bridgeToken) : null
-  // Shielding applies to a plain send; a swap or bridge always sends everything.
-  const activeShield = !isSwap && !isBridge ? shieldMode : 'off'
+  // Shielding applies to a send or a swap (which has nothing to shield only); a bridge always sends everything.
+  const activeShield = isBridge || (isSwap && shieldMode === 'shield') ? 'off' : shieldMode
   const keeping = activeShield === 'keep'
   const shieldOnly = activeShield === 'shield'
   const payingShielded = activeShield === 'use'
@@ -830,8 +832,9 @@ function PrivacyHome({ walletSession, settings }) {
     const shieldedSol = payingShielded ? shielded.pools.privacycash : null
     const quote = (net) => {
       const units = withdrawalFor(net, withdrawal.fee, withdrawal.minimum)
-      const source = kind === 'swap' ? 'swap' : shieldedSol?.plan?.('SOL', indexes.map(() => units)) ? 'shielded' : 'wallet'
-      const needs = source === 'shielded' ? 0n : units * count + (kind === 'swap' ? activeValidation.total.baseUnits : 0n) + reserve
+      // A swap paid from shielded SOL takes the SOL for fees from the same notes.
+      const source = kind === 'swap' ? (payingShielded ? 'swapShielded' : 'swap') : shieldedSol?.plan?.('SOL', indexes.map(() => units)) ? 'shielded' : 'wallet'
+      const needs = ['shielded', 'swapShielded'].includes(source) ? 0n : units * count + (kind === 'swap' ? (keeping ? totalRaw : activeValidation.total.baseUnits) : 0n) + reserve
       return { units, total: units * count, fee: withdrawal.fee(units) * count, source, needs }
     }
     return new Promise((resolve) => setGasOffer({
@@ -1084,7 +1087,7 @@ function PrivacyHome({ walletSession, settings }) {
   // deposits its output too.
   const scheduledBlocks = Boolean(scheduled) && scheduled.status !== 'sent' && scheduled.protocol === recommended?.protocol
     && (scheduled.asset === asset || (isSwap && scheduled.asset === destinationAsset))
-  const actionVerb = isBridge ? 'Bridge' : isSwap ? 'Swap' : payingShielded ? 'Send from shielded' : shieldOnly ? 'Shield' : 'Send'
+  const actionVerb = isBridge ? 'Bridge' : isSwap ? (payingShielded ? 'Swap from shielded' : 'Swap') : payingShielded ? 'Send from shielded' : shieldOnly ? 'Shield' : 'Send'
   // The button names what happens and through which pool: "Send 100 USDC via Privacy Cash".
   const plainSend = !isSwap && !isBridge && (activeShield === 'off' || keeping) && sentAmount
   const actionLabel = !recommended ? actionVerb
@@ -1107,10 +1110,11 @@ function PrivacyHome({ walletSession, settings }) {
   const keepsLocally = chosenOption ? localNotes(chosenOption.protocol) && (chosenOption.kept > 0n || chosenOption.kind === 'later')
     : keeping && localNotes(recommended?.protocol)
   const shieldLabel = payingShielded ? 'Paying from shielded funds' : shieldOnly ? 'Shielding only' : keeping ? (keepRaw ? `Keeping ${rawTokenText(keepRaw, asset)} ${asset} shielded` : 'Keeping part shielded') : 'Shielding'
+  const verb = isSwap ? 'swap' : 'send'
   const shieldOptions = [
-    ['off', 'Send everything', 'Deposit and send the full amount'],
-    ['keep', 'Keep part shielded', 'Send some, leave the rest in your private balance'],
-    ['shield', 'Shield only', 'Deposit it all into your private balance, send nothing'],
+    ['off', `${isSwap ? 'Swap' : 'Send'} everything`, `Deposit and ${verb} the full amount`],
+    ['keep', 'Keep part shielded', `${isSwap ? 'Swap' : 'Send'} some, leave the rest in your private balance`],
+    ...isSwap ? [] : [['shield', 'Shield only', 'Deposit it all into your private balance, send nothing']],
     ['use', 'Use shielded funds', !wallet ? 'Pay from your private balance'
       : shieldedReading && payingShielded ? 'Reading your private balance…'
         : shieldedSpendable > 0n ? `${rawTokenText(shieldedSpendable, asset)} ${asset} available${shieldedLocked ? ' · sign to read more' : ''}`
@@ -1161,14 +1165,14 @@ function PrivacyHome({ walletSession, settings }) {
         <div className="recipientHead">
           <span id="shieldPoolLabel">{shieldOnly ? 'Shield into' : ''}</span>
           {shieldOnly && <PoolSort sort={shieldSort} onSort={setShieldSort} />}
-          {!isSwap && !isBridge && <>
+          {!isBridge && <>
             <button type="button" className={`shieldControl${activeShield !== 'off' ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={shieldMenuOpen} aria-label={shieldLabel} data-tooltip={shieldLabel}
               onClick={() => setShieldMenuOpen(!shieldMenuOpen)}><Shield /></button>
             {shieldMenuOpen && <div className="shieldMenu" role="menu" aria-label="Shielding">{shieldOptions.map(([mode, label, detail]) =>
               <button type="button" role="menuitemradio" aria-checked={shieldMode === mode} key={mode} onClick={() => chooseShield(mode)}>
                 <span><b>{label}</b><small>{detail}</small></span>{shieldMode === mode && <Check className="shieldOptionCheck" aria-hidden="true" />}
               </button>)}</div>}
-            {!shieldOnly && <><button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button></>}
+            {!shieldOnly && !isSwap && <><button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button></>}
           </>}
         </div>
         {shieldOnly && <PoolPicker pools={shieldPools.pools} value={shieldPool} onChange={setShieldPool} asset={asset} amountValid={totalRaw > 0n} sort={shieldSort} summary={summary} disabled={sending} labelledBy="shieldPoolLabel" />}
@@ -1188,7 +1192,7 @@ function PrivacyHome({ walletSession, settings }) {
         {!shieldViaLinks && !PROTOCOLS[shieldPool].send.fromShielded && ` ${poolLabel(shieldPool)} keeps it in its own private balance; DarkSol cannot pay from it yet.`}</p>}
       {(sendAttempted || amount) && (keepError || (!activeValidation.valid && activeValidation.error !== 'Enter an address')) && <div className="splitStatus">{keepError || (!isBridge && !shieldOnly && !receiversValid && remaining !== null ? `${compact(Math.abs(remaining), 9)} ${asset} ${remaining > 0 ? 'left' : 'over'}` : activeValidation.error)}
         {keeping && sentRaw === 0n && <> · <button type="button" onClick={() => chooseShield('shield')}>Shield it all instead</button></>}</div>}
-      {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>Send <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
+      {keeping && !keepError && sentRaw > 0n && <div className="keepSummary"><span>{isSwap ? 'Swap' : 'Send'} <b>{rawTokenText(sentRaw, asset)} {asset}</b></span><span><ShieldCheck />Keep <b>{rawTokenText(keepRaw, asset)} {asset}</b> shielded</span></div>}
       {shieldedSplit && shieldedSplit.withdrawals > receiverCount && <div className="keepSummary">
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
@@ -1206,13 +1210,13 @@ function PrivacyHome({ walletSession, settings }) {
           ? <button type="button" onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
           : revealFirst
           ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
-          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : submitted ? 'Submitted' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
+          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
       </div>
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
     {!chosenOption && !measured && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}
       onDelay={null} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
-    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? 'Swap submitted' : receipt?.pending ? `Deposited · ${tokenText(BigInt(receipt.pending.baseUnits), receipt.pending.asset)} ${receipt.pending.asset} is ready to send ${new Date(receipt.pending.readyAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}` : receipt?.shielded ? `${receipt.shielded} ${receipt.viaLinks ? 'shielded · collect it from Payment links' : 'is now in your private balance'}` : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded`
+    {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? `Swap submitted${receipt?.kept ? ` · ${receipt.kept} kept shielded` : ''}` : receipt?.pending ? `Deposited · ${tokenText(BigInt(receipt.pending.baseUnits), receipt.pending.asset)} ${receipt.pending.asset} is ready to send ${new Date(receipt.pending.readyAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}` : receipt?.shielded ? `${receipt.shielded} ${receipt.viaLinks ? 'shielded · collect it from Payment links' : 'is now in your private balance'}` : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded`
         : !receipt?.depositSignature && receipt?.withdrawals?.length > 1 ? `Transfer complete · sent in ${receipt.withdrawals.length} private withdrawals` : 'Transfer complete')}{!sendError && receipt?.gas && ` · ${receipt.gasText} for fees sent`}</span>{(receipt?.withdrawals?.at(-1)?.tx || receipt?.depositSignature) && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
     {receipt?.gasError && <section className="notice error"><CircleAlert /><span>The SOL for fees was not sent: {receipt.gasError}</span></section>}
     {scheduled && <section className="transferResult delivery">{scheduled.status === 'sent' ? <Check /> : <Clock3 />}<span>{scheduled.status === 'pending' ? `Deposit confirmed · arrives by ${new Date(scheduled.sendBy).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} · you can close this page` : DELIVERY_TEXT[scheduled.status]}</span>
@@ -1236,6 +1240,7 @@ const GAS_SOURCE = {
   shielded: 'Your shielded SOL · no approval',
   wallet: 'Your wallet · one more approval',
   swap: 'This swap’s deposit · no second deposit',
+  swapShielded: 'Your shielded SOL, after the swap',
 }
 
 // Asked before paying a recipient that holds too little SOL to move what it gets.

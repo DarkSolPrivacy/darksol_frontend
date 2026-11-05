@@ -17,9 +17,13 @@
 // to the recipient, or only the withdrawal when it pays from that balance. The
 // wallet signs the unlock message (once per tab), the one-time registration and
 // the deposit; Umbra's relayer submits the withdrawal.
+import { Connection, Keypair, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { MINTS } from '../addresses.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
+import { SWAP_MINIMUM, finishSwap, ultraSwap } from '../shared/swap-wallet.js'
+import { swapEligibility } from '../../src/swap-routes.js'
+import manifest from './manifest.js'
 import { createReceipt, throwWithReceipt } from '../shared/receipts.js'
 
 // How long to wait for the indexer to see a registration or a deposit: three minutes.
@@ -167,6 +171,52 @@ export async function sendFromBalance({ nimbus, session, asset, mint, payout, re
   return withdrawTo(nimbus, session, { asset, mint, amount: payout, recipient }, createReceipt({ provider: 'umbrav2', asset }))
 }
 
+// Registers the wallet the first time, then deposits `amount` of `mint` into
+// its own private balance and returns the deposit's receipt. Registering may
+// open a new session, which replaces `state.session`.
+async function depositToSelf(opened, state, { asset, mint, amount, onStatus, receipt = {} }) {
+  const { nimbus, sdk, signer, transactionVersion } = opened
+  if (state.session.registration.kind === 'unregistered') {
+    onStatus('Approve the one-time Umbra v2 registration…')
+    const register = async () => nimbus.register(await nimbus.createRegistrationContext(state.session), {}, { transactionVersion })
+    let registration = await register()
+    // A registration that stopped after preparing (a failed request, a rejected
+    // signature) left the note store a birthday, and the next one, from a later
+    // slot, is refused for good. The identity is not registered, so its store
+    // holds nothing: start it over and try once more.
+    if (registration.kind === 'store-refused' && registration.refusal?.kind === 'refused-later-birthday') {
+      state.session = await restartNoteStore(nimbus, sdk, state.session, signer)
+      registration = await register()
+    }
+    if (registration.kind !== 'complete' && !landed(registration)) throw new Error(`Umbra v2 registration did not land (${outcomeName(registration)}${registration.refusal?.kind ? `: ${registration.refusal.kind}` : ''})`)
+    // A deposit is refused until the context API has indexed the registration.
+    onStatus('Waiting for Umbra v2 to confirm the registration…')
+    await waitFor('registration', async () => (await nimbus.readRegistration(state.session)).kind === 'registered')
+  }
+  onStatus('Approve the Umbra v2 deposit…')
+  const deposited = await nimbus.deposit(await nimbus.createDepositContext(state.session),
+    { mint, amount, recipient: state.session.walletAddress }, { transactionVersion })
+  if (!landed(deposited)) throw new Error(`The Umbra v2 deposit did not land (${outcomeName(deposited)})`)
+  return createReceipt({ provider: 'umbrav2', asset, ...receipt, depositSignature: bs58.encode(deposited.submission.submission.signature) })
+}
+
+// Waits until the deposit just made is spendable and returns what the balance
+// can spend of `mint`. The deposit synced the store before it ran, so what is
+// available at first was already there; the new note reads as pending until it
+// is final.
+async function settledBalance(nimbus, session, mint, onStatus) {
+  const before = (await mintBalance(nimbus, session, mint)).available
+  onStatus('Waiting for the deposit to settle…')
+  let available = 0n
+  await waitFor('deposit', async () => {
+    await syncNotes(nimbus, session)
+    const now = await mintBalance(nimbus, session, mint)
+    available = now.available
+    return available > before && !now.pending
+  })
+  return available
+}
+
 // `source: 'shielded'` pays from the private balance; otherwise a deposit of
 // `totalBaseUnits` goes in first and the recipient is paid from it: all of it,
 // less when part stays shielded, nothing when shielding only.
@@ -179,55 +229,107 @@ async function send({ provider, asset, totalBaseUnits, recipient, recipients, so
   if (source === 'shielded' ? !payout : payout > amount) throw new Error(source === 'shielded' ? 'Nothing to pay' : 'The recipient gets more than the deposit')
 
   const opened = await openSession(provider, onStatus)
-  const { nimbus, sdk, signer, transactionVersion } = opened
-  let { session } = opened
+  const { nimbus } = opened
+  const state = { session: opened.session }
   try {
-    if (source === 'shielded') return await sendFromBalance({ nimbus, session, asset, mint, payout, recipient, onStatus })
-    if (session.registration.kind === 'unregistered') {
-      onStatus('Approve the one-time Umbra v2 registration…')
-      const register = async () => nimbus.register(await nimbus.createRegistrationContext(session), {}, { transactionVersion })
-      let registration = await register()
-      // A registration that stopped after preparing (a failed request, a rejected
-      // signature) left the note store a birthday, and the next one, from a later
-      // slot, is refused for good. The identity is not registered, so its store
-      // holds nothing: start it over and try once more.
-      if (registration.kind === 'store-refused' && registration.refusal?.kind === 'refused-later-birthday') {
-        session = await restartNoteStore(nimbus, sdk, session, signer)
-        registration = await register()
-      }
-      if (registration.kind !== 'complete' && !landed(registration)) throw new Error(`Umbra v2 registration did not land (${outcomeName(registration)}${registration.refusal?.kind ? `: ${registration.refusal.kind}` : ''})`)
-      // A deposit is refused until the context API has indexed the registration.
-      onStatus('Waiting for Umbra v2 to confirm the registration…')
-      await waitFor('registration', async () => (await nimbus.readRegistration(session)).kind === 'registered')
-    }
-
-    onStatus('Approve the Umbra v2 deposit…')
-    const deposited = await nimbus.deposit(await nimbus.createDepositContext(session),
-      { mint, amount, recipient: session.walletAddress }, { transactionVersion })
-    if (!landed(deposited)) throw new Error(`The Umbra v2 deposit did not land (${outcomeName(deposited)})`)
-    const receipt = createReceipt({ provider: 'umbrav2', asset, depositSignature: bs58.encode(deposited.submission.submission.signature) })
+    if (source === 'shielded') return await sendFromBalance({ nimbus, session: state.session, asset, mint, payout, recipient, onStatus })
+    const receipt = await depositToSelf(opened, state, { asset, mint, amount, onStatus })
     if (!payout) return receipt
-
     try {
-      // The deposit synced the store before it ran, so this is what was already there.
-      const before = (await mintBalance(nimbus, session, mint)).available
-      // The new note reads as pending until it is final; only then can it be spent.
-      onStatus('Waiting for the deposit to settle…')
-      let available = 0n
-      await waitFor('deposit', async () => {
-        await syncNotes(nimbus, session)
-        const now = await mintBalance(nimbus, session, mint)
-        available = now.available
-        return available > before && !now.pending
-      })
+      const available = await settledBalance(nimbus, state.session, mint, onStatus)
       // Never more than this send, even when an earlier balance sits beside it.
       onStatus('Sending privately…')
-      return await withdrawTo(nimbus, session, { asset, mint, amount: available < payout ? available : payout, recipient }, receipt)
+      return await withdrawTo(nimbus, state.session, { asset, mint, amount: available < payout ? available : payout, recipient }, receipt)
     } catch (error) {
       return throwWithReceipt(receipt, 'The deposit landed, but the private send failed. The funds stay in your Umbra v2 private balance: pay from it with Use shielded funds', error)
     }
   } finally {
-    nimbus.closeNimbusSession(session)
+    nimbus.closeNimbusSession(state.session)
+  }
+}
+
+// SOL held back from the input for the swap's and the payout's network fees and
+// the recipient's token account; what is left reaches the recipient as SOL.
+const INPUT_RESERVE = BigInt(Math.round(manifest.swap.swapWallet.inputReserveSol * 1e9))
+const swapTaskKey = (address) => `umbrav2-swap-${address}`
+const toBase64 = (bytes) => { let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary) }
+const fromBase64 = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
+const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
+
+// Umbra v2 publishes no swap, so this runs one in a one-time wallet
+// (shared/swap-wallet.js): the SOL is withdrawn privately from the wallet's
+// Umbra v2 balance to it, swapped there through Jupiter Ultra, and the one-time
+// wallet pays the recipient everything it holds. From the wallet,
+// `totalBaseUnits` is deposited first and what is not swapped (`recipients`'
+// total) stays shielded; `source: 'shielded'` pays from the balance. SOL input
+// only: Jupiter covers a token-only wallet's fees for some fills but not all,
+// and a one-time wallet holding a token and no SOL could not move it. The
+// one-time wallet's key stays in this browser until the payout, so a swap cut
+// short is finished by the next Umbra v2 swap here.
+async function swap({ provider, inputAsset, outputAsset, totalBaseUnits, recipient, recipients, source = 'wallet', onStatus }) {
+  const route = swapEligibility('umbrav2', inputAsset, outputAsset)
+  if (!route.available || route.kind !== 'swap') throw new Error(route.reason || `Umbra v2 cannot swap ${inputAsset} to ${outputAsset}`)
+  const fromShielded = source === 'shielded'
+  const deposited = BigInt(totalBaseUnits)
+  const units = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : deposited
+  if (!fromShielded && units > deposited) throw new Error('The swap takes more than the deposit')
+  if (units <= INPUT_RESERVE + SWAP_MINIMUM) throw new Error(`Swap more than ${unitsText(INPUT_RESERVE + SWAP_MINIMUM, inputAsset)}: ${unitsText(INPUT_RESERVE, inputAsset)} of it pays the swap's network fees`)
+  const recipientKey = new PublicKey(String(recipient))
+  const owner = provider?.walletStandard?.account?.address
+  const connection = rpcConnection()
+  const forget = () => localStorage.removeItem(swapTaskKey(owner))
+
+  // Finished alone, never followed by this new swap: the user retrying a swap
+  // that stopped means that swap, not a second one.
+  let pending = null
+  try { pending = JSON.parse(localStorage.getItem(swapTaskKey(owner))) } catch {}
+  if (pending?.secret) {
+    onStatus('Finishing your earlier swap…')
+    const paid = await finishSwap({ connection, burner: Keypair.fromSecretKey(fromBase64(pending.secret)), task: pending, swap: ultraSwap, forget, onStatus })
+    if (paid) throw new Error(`Finished your earlier interrupted swap: ${paid.tokens ? unitsText(paid.tokens, pending.outputAsset) : unitsText(paid.lamports, 'SOL')} went to ${pending.recipient}. Nothing new was sent; swap again to start this one.`)
+  }
+
+  const mint = MINTS[inputAsset]
+  const opened = await openSession(provider, onStatus)
+  const { nimbus } = opened
+  const state = { session: opened.session }
+  let receipt = createReceipt({ provider: 'umbrav2', asset: inputAsset, inputAsset, outputAsset })
+  // Where the input is when something stops: still in the wallet, shielded, or in the one-time wallet.
+  let stage = 'wallet'
+  try {
+    if (fromShielded) {
+      if (state.session.registration.kind === 'unregistered') throw new Error('This wallet has no Umbra v2 private balance yet')
+      onStatus('Reading your Umbra v2 balance…')
+      await syncNotes(nimbus, state.session, { onStatus })
+      const { available } = await mintBalance(nimbus, state.session, mint)
+      if (available < units) throw new Error(`Your Umbra v2 private balance can pay ${unitsText(available, inputAsset)}, less than ${unitsText(units, inputAsset)}`)
+    } else {
+      receipt = await depositToSelf(opened, state, { asset: inputAsset, mint, amount: deposited, onStatus, receipt: { inputAsset, outputAsset } })
+      stage = 'shielded'
+      await settledBalance(nimbus, state.session, mint, onStatus)
+    }
+    stage = 'shielded'
+    const burner = Keypair.generate()
+    const task = { secret: toBase64(burner.secretKey), inputAsset, outputAsset, recipient: recipientKey.toBase58(), keep: String(INPUT_RESERVE) }
+    // Saved before the withdrawal, so a swap cut short anywhere after it is found again.
+    localStorage.setItem(swapTaskKey(owner), JSON.stringify(task))
+    onStatus(`Moving the ${inputAsset} to a one-time swap wallet…`)
+    await withdrawTo(nimbus, state.session, { asset: inputAsset, mint, amount: units, recipient: burner.publicKey.toBase58() }, {})
+    stage = 'swap'
+    const paid = await finishSwap({ connection, burner, task, wait: true, swap: ultraSwap, forget, onStatus })
+    if (!paid) throw new Error('the swap wallet received nothing to swap')
+    receipt.swapSignature = paid.swapSignature
+    receipt.withdrawals = [{ tx: paid.signature }]
+    return receipt
+  } catch (error) {
+    if (stage === 'wallet') throw error
+    const where = stage === 'shielded' ? `the ${inputAsset} is in your Umbra v2 private balance`
+      : 'what reached it waits in a one-time swap wallet whose key is saved in this browser, and your next Umbra v2 swap here pays it to the recipient'
+    const reason = error instanceof Error ? error.message : String(error)
+    throw Object.assign(new Error(`${fromShielded ? 'The swap stopped' : 'Deposit succeeded, but the swap stopped'}: ${reason}. Nothing is lost: ${where}.`),
+      receipt.depositSignature ? { receipt } : {})
+  } finally {
+    nimbus.closeNimbusSession(state.session)
   }
 }
 
@@ -271,6 +373,7 @@ export async function shieldedBalances({ provider, prompt = true, signal, onStat
 }
 
 export async function execute({ kind, ...options }) {
-  if (kind !== 'send') throw new Error(`Umbra v2 has no browser ${kind} flow`)
-  return exclusive(() => send(options))
+  if (kind === 'send') return exclusive(() => send(options))
+  if (kind === 'swap') return exclusive(() => swap(options))
+  throw new Error(`Umbra v2 has no browser ${kind} flow`)
 }

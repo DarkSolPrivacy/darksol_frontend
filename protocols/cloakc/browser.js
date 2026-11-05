@@ -69,13 +69,13 @@ function relayOptions(sdk, provider, connection, onStatus) {
   }
 }
 
-// Pays `amount` from `notes` (same mint) to `recipient`, keeping the rest as a
-// change note. A transaction spends at most two notes, so more are merged two
-// at a time first: a private send to a new note of the same owner, free of
-// pool fees, one wallet message each. The SDK's partialWithdraw merges too, but
-// keeps each merged note only in memory, so a failure after a merge would lose
-// it; here each is saved before the next step.
-export async function withdrawNotes({ sdk, options, wallet, notes, amount, recipient, onStatus = () => {} }) {
+// Brings `notes` (same mint) down to the two a transaction can spend: merged two
+// at a time, the smallest first, by a private send to a new note of the same
+// owner, free of pool fees, one wallet message each. The SDK's partialWithdraw
+// merges too, but keeps each merged note only in memory, so a failure after a
+// merge would lose it; here each is saved before the next step. Returns the
+// notes to spend and the Merkle tree to spend them with.
+async function mergeNotes({ sdk, options, wallet, notes, onStatus }) {
   let inputs = [...notes]
   let tree = options.cachedMerkleTree
   for (let merge = 1, merges = inputs.length - 2; inputs.length > 2; merge++) {
@@ -89,10 +89,30 @@ export async function withdrawNotes({ sdk, options, wallet, notes, amount, recip
     tree = result.merkleTree
     inputs = [merged, ...rest]
   }
+  return { inputs, tree }
+}
+
+// Pays `amount` from `notes` (same mint) to `recipient`, keeping the rest as a
+// change note, after merging them down to two (mergeNotes).
+export async function withdrawNotes({ sdk, options, wallet, notes, amount, recipient, onStatus = () => {} }) {
+  const { inputs, tree } = await mergeNotes({ sdk, options, wallet, notes, onStatus })
   onStatus('Sending privately...')
   const withdrawal = await sdk.partialWithdraw(inputs, recipient, amount, { ...options, cachedMerkleTree: tree })
   saveUtxos(wallet, sdk, withdrawal.outputUtxos, inputs)
   return withdrawal
+}
+
+// The unspent notes of `asset` this browser saved that cover `amount`, fewest
+// and largest first, or an error saying what there is.
+async function pickSaved(sdk, connection, wallet, asset, amount) {
+  const mint = asset === 'SOL' ? sdk.NATIVE_SOL_MINT : new PublicKey(MINTS[asset])
+  const { unspent } = await sdk.verifyUtxos(await savedNotes(sdk, wallet), connection, sdk.CLOAK_PROGRAM_ID)
+  const notes = unspent.filter((utxo) => utxo.mintAddress.equals(mint) && utxo.amount > 0n)
+  const picked = sdk.selectUtxos(notes, amount)
+  if (picked) return picked
+  const held = sdk.sumUtxoAmounts(notes)
+  throw new Error(held ? `Your shielded Cloak ${asset} in this browser is ${Number(held) / 10 ** TOKEN_DECIMALS[asset]} ${asset}, less than this payment`
+    : `No shielded Cloak ${asset} is saved in this browser`)
 }
 
 // Pays one recipient from the notes this browser saved, with no deposit.
@@ -103,17 +123,8 @@ async function sendFromSaved({ provider, asset, amount, recipient, onStatus }) {
   const sdk = await import('@cloak.dev/sdk')
   const connection = rpcConnection()
   const wallet = String(provider.publicKey)
-  const mint = asset === 'SOL' ? sdk.NATIVE_SOL_MINT : new PublicKey(MINTS[asset])
-  const { unspent } = await sdk.verifyUtxos(await savedNotes(sdk, wallet), connection, sdk.CLOAK_PROGRAM_ID)
-  const notes = unspent.filter((utxo) => utxo.mintAddress.equals(mint) && utxo.amount > 0n)
-  // The fewest, largest notes that cover it, so as few merges as possible.
-  const picked = sdk.selectUtxos(notes, amount)
-  if (!picked) {
-    const held = sdk.sumUtxoAmounts(notes)
-    throw new Error(held ? `Your shielded Cloak ${asset} in this browser is ${Number(held) / 10 ** TOKEN_DECIMALS[asset]} ${asset}, less than this payment`
-      : `No shielded Cloak ${asset} is saved in this browser`)
-  }
-  const withdrawal = await withdrawNotes({ sdk, options: relayOptions(sdk, provider, connection, onStatus), wallet, notes: picked, amount, recipient, onStatus })
+  const notes = await pickSaved(sdk, connection, wallet, asset, amount)
+  const withdrawal = await withdrawNotes({ sdk, options: relayOptions(sdk, provider, connection, onStatus), wallet, notes, amount, recipient, onStatus })
   return { provider: 'cloakc', asset, depositSignature: null, withdrawals: [{ tx: withdrawal.signature }] }
 }
 
@@ -199,39 +210,63 @@ export async function executeCloakSend({ provider, asset, totalBaseUnits, recipi
   }
 }
 
-// `gasBaseUnits` ride the same deposit: the swap leaves them as its change note,
-// which then goes to the recipient as SOL for network fees.
-export async function executeCloakSwap({ provider, inputAsset, outputAsset, totalBaseUnits, gasBaseUnits = 0n, recipient, onStatus = () => {} }) {
+// Swaps what the recipient is paid for (`recipients`' total, else all of
+// `totalBaseUnits`) to a public token account. From the wallet it first
+// deposits `totalBaseUnits` plus `gasBaseUnits`; `source: 'shielded'` spends the
+// SOL notes saved in this browser instead (merged down to two first). The swap
+// leaves the rest as its change note: `gasBaseUnits` of it then go to the
+// recipient as SOL for network fees, and anything beyond stays shielded.
+export async function executeCloakSwap({ provider, inputAsset, outputAsset, totalBaseUnits, gasBaseUnits = 0n, recipient, recipients, source = 'wallet', onStatus = () => {} }) {
   if (inputAsset !== 'SOL' || !OUTPUT_MINTS[outputAsset]) throw new Error('CLOAKC supports SOL to USDC or USDT swaps only')
   const recipientWallet = new PublicKey(String(recipient))
   const outputMint = new PublicKey(OUTPUT_MINTS[outputAsset])
   const recipientAta = getAssociatedTokenAddressSync(outputMint, recipientWallet)
   const gas = BigInt(gasBaseUnits)
-  const { sdk, options, deposit, wallet } = await depositNote({ provider, asset: 'SOL', totalBaseUnits: totalBaseUnits + gas, onStatus })
+  const swapUnits = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : BigInt(totalBaseUnits)
+  const fromShielded = source === 'shielded'
+  if (!fromShielded && swapUnits > BigInt(totalBaseUnits)) throw new Error('The swap takes more than the deposit')
+
+  let sdk, options, wallet, inputs, tree, depositSignature = null
+  if (fromShielded) {
+    if (!provider?.publicKey || typeof provider.signMessage !== 'function') throw new Error('Connect a Solana wallet that supports message signing')
+    onStatus('Reading your Cloak notes...')
+    sdk = await import('@cloak.dev/sdk')
+    const connection = rpcConnection()
+    wallet = String(provider.publicKey)
+    options = relayOptions(sdk, provider, connection, onStatus)
+    const notes = await pickSaved(sdk, connection, wallet, 'SOL', swapUnits + gas)
+    ;({ inputs, tree } = await mergeNotes({ sdk, options, wallet, notes, onStatus }))
+  } else {
+    let deposit
+    ;({ sdk, options, deposit, wallet } = await depositNote({ provider, asset: 'SOL', totalBaseUnits: BigInt(totalBaseUnits) + gas, onStatus }))
+    inputs = deposit.outputUtxos
+    tree = deposit.merkleTree
+    depositSignature = deposit.signature
+  }
 
   let swap
   let receipt
   try {
-    const fee = 5_000_000n + totalBaseUnits * 3n / 1000n
-    const quotedInput = totalBaseUnits - fee
+    const fee = 5_000_000n + swapUnits * 3n / 1000n
+    const quotedInput = swapUnits - fee
     if (quotedInput <= 0n) throw new Error('Swap amount does not exceed the CLOAKC protocol fee')
     onStatus('Getting a fresh Jupiter quote...')
     const quote = await quoteSwap(quotedInput, outputAsset)
     onStatus('Approve the private swap...')
     swap = await sdk.swapWithChange(
-      deposit.outputUtxos,
-      totalBaseUnits,
+      inputs,
+      swapUnits,
       outputMint,
       recipientAta,
       BigInt(quote.minimumOutputBaseUnits),
-      { ...options, cachedMerkleTree: deposit.merkleTree, swapSlippageBps: 100, maxWalletApprovals: 3 },
+      { ...options, cachedMerkleTree: tree, swapSlippageBps: 100, maxWalletApprovals: 3 },
       recipientWallet,
     )
     saveRecovery(wallet, swap)
-    saveUtxos(wallet, sdk, swap.outputUtxos, deposit.outputUtxos)
+    saveUtxos(wallet, sdk, swap.outputUtxos, inputs)
     receipt = {
       provider: 'cloakc', inputAsset, outputAsset,
-      depositSignature: deposit.signature,
+      depositSignature,
       swapSignature: swap.signature,
       requestId: swap.requestId,
       swapStatePda: swap.swapStatePda,
@@ -241,16 +276,19 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
       withdrawals: [{ tx: swap.signature }],
     }
   } catch (error) {
-    const wrapped = new Error(`Deposit succeeded, but swap failed: ${error instanceof Error ? error.message : String(error)}. Your private CLOAKC note was saved in this browser for recovery.`)
-    wrapped.receipt = { provider: 'cloakc', inputAsset, outputAsset, depositSignature: deposit.signature, withdrawals: [] }
+    const reason = error instanceof Error ? error.message : String(error)
+    if (fromShielded) throw new Error(`The swap failed: ${reason}. Your Cloak notes stay saved in this browser.`)
+    const wrapped = new Error(`Deposit succeeded, but swap failed: ${reason}. Your private CLOAKC note was saved in this browser: pay from it with Use shielded funds.`)
+    wrapped.receipt = { provider: 'cloakc', inputAsset, outputAsset, depositSignature, withdrawals: [] }
     throw wrapped
   }
-  // After the swap, so this SOL failing never undoes it.
+  // After the swap, so this SOL failing never undoes it. Only the gas leaves;
+  // the rest of the change stays shielded.
   if (gas) {
     const change = swap.outputUtxos.filter((utxo) => utxo.amount > 0n)
     try {
       onStatus('Sending SOL for fees...')
-      const withdrawal = await sdk.fullWithdraw(change, recipientWallet, { ...options, cachedMerkleTree: swap.merkleTree })
+      const withdrawal = await sdk.partialWithdraw(change, recipientWallet, gas, { ...options, cachedMerkleTree: swap.merkleTree })
       saveUtxos(wallet, sdk, withdrawal.outputUtxos, change)
       receipt.gas = { tx: withdrawal.signature }
     } catch (error) {

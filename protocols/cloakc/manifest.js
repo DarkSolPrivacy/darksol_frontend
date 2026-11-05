@@ -52,6 +52,10 @@ export default Object.freeze({
     outputAssets: Object.freeze(['USDC', 'USDT']),
     // Cloak's relay routes through Jupiter's swap API, which added no fee on chain.
     routingFee: 0,
+    // The swap leaves its change as a note: a deposit can be larger than the
+    // swap (the rest stays shielded), or the swap can spend saved notes.
+    keepShielded: true,
+    fromShielded: true,
     note: 'Cloak swaps private SOL to a public SPL-token recipient through Jupiter.',
   }),
   bridge: Object.freeze({

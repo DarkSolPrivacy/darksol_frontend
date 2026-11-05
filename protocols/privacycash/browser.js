@@ -194,7 +194,7 @@ export async function captureWithdrawal(run) {
 }
 
 // The wallet's unspent notes of one asset, largest first, in base units.
-async function noteAmounts(privacyCash, common, asset) {
+export async function noteAmounts(privacyCash, common, asset) {
   const utxos = asset === 'SOL' ? await privacyCash.getUtxos(common) : await privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset] })
   return utxos.map((utxo) => BigInt(utxo.amount.toString())).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
 }

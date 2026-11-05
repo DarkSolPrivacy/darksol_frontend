@@ -59,12 +59,26 @@ export default Object.freeze({
   // the SDK merges notes first when the largest three fall short. The balance is
   // found again from the wallet's unlock signature on any device.
   send: Object.freeze({ execution: 'sdk', keepShielded: true, fromShielded: true }),
+  // The SDK publishes no swap (@umbra-privacy/nimbus-solana-web 0.1.1), so
+  // browser.js runs one: a private withdrawal of SOL to a one-time swap wallet,
+  // a Jupiter Ultra swap there, and a payout of everything it holds to the
+  // recipient (shared/swap-wallet.js). SOL input only: the swap wallet's network
+  // fees come out of it (swapWallet, the same measured figures as Privacy
+  // Cash's), and a wallet holding only a token could be left unable to move it.
+  // keepShielded / fromShielded: as for a send, the swap can deposit more than it
+  // swaps, or take its SOL from the private balance with no deposit.
   swap: Object.freeze({
-    execution: 'unsupported',
-    aggregator: null,
-    inputAssets: Object.freeze([]),
-    outputAssets: Object.freeze([]),
-    note: 'Umbra v2 publishes no swap in @umbra-privacy/nimbus-solana-web 0.1.1.',
+    execution: 'sdk',
+    aggregator: 'Jupiter',
+    inputAssets: Object.freeze(['SOL']),
+    outputAssets: Object.freeze(['USDC', 'USDT']),
+    keepShielded: true,
+    fromShielded: true,
+    swapWallet: Object.freeze({ inputReserveSol: 0.006, swapFeeSol: 0.0000062, payoutFeeSol: 0.000013, tokenAccountRentSol: 0.00148844 }),
+    // Jupiter Ultra charged 0.02% on SOL-stable fills in dry orders of 2026-11-05;
+    // the figure Privacy Cash's swaps measured through Ultra is kept as the bound.
+    routingFee: 0.0004,
+    note: 'Umbra v2 swaps SOL to USDC or USDT in a one-time wallet through Jupiter, after a private withdrawal.',
   }),
   bridge: Object.freeze({
     execution: 'unsupported',

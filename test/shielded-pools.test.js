@@ -108,3 +108,32 @@ test('reading the Umbra v2 balance asks nothing of the wallet until this tab has
   const provider = { walletStandard: { wallet: {}, account: { address: 'Wallet111' } } }
   assert.equal(await shieldedBalances({ provider, prompt: false }), null)
 })
+
+test('a one-time wallet swaps through Jupiter Ultra: order for it as taker, signed by it, executed by request id', async () => {
+  const { Keypair, TransactionMessage, VersionedTransaction } = await import('@solana/web3.js')
+  const { ultraSwap } = await import('../protocols/shared/swap-wallet.js')
+  const burner = Keypair.generate()
+  const order = new VersionedTransaction(new TransactionMessage({ payerKey: burner.publicKey, recentBlockhash: '11111111111111111111111111111111', instructions: [] }).compileToV0Message())
+  const calls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: init?.body && JSON.parse(init.body) })
+    if (String(url).includes('/order?')) return Response.json({ transaction: Buffer.from(order.serialize()).toString('base64'), requestId: 'req-1' })
+    return Response.json({ status: 'Success', signature: 'swap-sig' })
+  }
+  try {
+    assert.equal(await ultraSwap(burner, 'SOL', 'USDC', 40_000_000n), 'swap-sig')
+    const query = new URL(calls[0].url).searchParams
+    assert.deepEqual([query.get('inputMint'), query.get('outputMint'), query.get('amount'), query.get('taker')], [MINTS.SOL, MINTS.USDC, '40000000', burner.publicKey.toBase58()])
+    assert.equal(calls[1].body.requestId, 'req-1')
+    const signed = VersionedTransaction.deserialize(Buffer.from(calls[1].body.signedTransaction, 'base64'))
+    assert.ok(signed.signatures[0].some((byte) => byte !== 0))
+    // No transaction (Jupiter checks what the wallet holds) or a failed fill stops it.
+    globalThis.fetch = async () => Response.json({ error: 'Missing associated token account', errorMessage: 'Missing associated token account' })
+    await assert.rejects(ultraSwap(burner, 'SOL', 'USDC', 1n), /no swap transaction: Missing associated token account/)
+    globalThis.fetch = async (url) => String(url).includes('/order?') ? Response.json({ transaction: Buffer.from(order.serialize()).toString('base64'), requestId: 'r' }) : Response.json({ status: 'Failed', error: 'slippage' })
+    await assert.rejects(ultraSwap(burner, 'SOL', 'USDC', 1n), /Jupiter swap failed: slippage/)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})

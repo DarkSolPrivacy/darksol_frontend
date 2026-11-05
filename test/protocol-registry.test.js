@@ -210,9 +210,10 @@ test('listProtocols answers the questions that were hardcoded arrays', () => {
   // server/index.js selected its EVM lane with includes('curvy').
   assert.deepEqual(ids({ lane: 'evm' }), ['curvy'])
   assert.deepEqual(ids({ lane: 'solana' }), ['cloakc', 'privacycash', 'umbra', 'umbrav2'])
-  // Only protocols whose capability actually executes. Umbra documents swaps
-  // but ships no swap module, so it must not appear here.
-  assert.deepEqual(ids({ capability: 'swap' }), ['cloakc', 'privacycash', 'curvy'])
+  // Only protocols whose capability actually executes. Umbra v1 documents swaps
+  // but ships no swap module, so it must not appear here; Umbra v2 swaps in a
+  // one-time wallet through Jupiter.
+  assert.deepEqual(ids({ capability: 'swap' }), ['cloakc', 'privacycash', 'curvy', 'umbrav2'])
   assert.deepEqual(ids({ capability: 'bridge' }), ['privacycash'])
   for (const id of ['umbra', 'umbrav2']) assert.ok(ids({ capability: 'send' }).includes(id))
 })
