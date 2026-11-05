@@ -829,12 +829,16 @@ function PrivacyHome({ walletSession, settings }) {
     } catch { return {} } // the check never holds up the payment
     finally { setSendStatus('') }
     const count = BigInt(indexes.length)
-    const shieldedSol = payingShielded ? shielded.pools.privacycash : null
+    // Privacy Cash sends it. While its deposits are paused, only its shielded SOL can.
+    const pcSol = shielded.pools.privacycash
+    const pcPaused = kind === 'send' && Boolean(PAUSED.privacycash)
+    if (pcPaused && !(pcSol?.state === 'ready' && BigInt(pcSol.spendable?.SOL ?? 0n) > 0n)) return {}
+    const shieldedSol = payingShielded || pcPaused ? pcSol : null
     const quote = (net) => {
       const units = withdrawalFor(net, withdrawal.fee, withdrawal.minimum)
       // A swap paid from shielded SOL takes the SOL for fees from the same notes.
-      const source = kind === 'swap' ? (payingShielded ? 'swapShielded' : 'swap') : shieldedSol?.plan?.('SOL', indexes.map(() => units)) ? 'shielded' : 'wallet'
-      const needs = ['shielded', 'swapShielded'].includes(source) ? 0n : units * count + (kind === 'swap' ? (keeping ? totalRaw : activeValidation.total.baseUnits) : 0n) + reserve
+      const source = kind === 'swap' ? (payingShielded ? 'swapShielded' : 'swap') : shieldedSol?.plan?.('SOL', indexes.map(() => units)) ? 'shielded' : pcPaused ? 'paused' : 'wallet'
+      const needs = ['shielded', 'swapShielded', 'paused'].includes(source) ? 0n : units * count + (kind === 'swap' ? (keeping ? totalRaw : activeValidation.total.baseUnits) : 0n) + reserve
       return { units, total: units * count, fee: withdrawal.fee(units) * count, source, needs }
     }
     return new Promise((resolve) => setGasOffer({
@@ -1241,6 +1245,7 @@ const GAS_SOURCE = {
   wallet: 'Your wallet · one more approval',
   swap: 'This swap’s deposit · no second deposit',
   swapShielded: 'Your shielded SOL, after the swap',
+  paused: 'Privacy Cash deposits are paused',
 }
 
 // Asked before paying a recipient that holds too little SOL to move what it gets.
@@ -1268,11 +1273,12 @@ function GasDialog({ offer }) {
         <div><dt>Pool fee</dt><dd>{rawTokenText(quote.fee, 'SOL')} SOL</dd></div>
         <div><dt>From</dt><dd>{GAS_SOURCE[quote.source]}</dd></div>
       </dl>}
-      {lacking ? <p className="paymentError">Your wallet holds {rawTokenText(offer.walletLamports, 'SOL')} SOL; this needs about {rawTokenText(quote.needs, 'SOL')} SOL with network fees.</p>
+      {quote?.source === 'paused' ? <p className="paymentError">Privacy Cash deposits are paused, and your shielded Privacy Cash SOL can’t cover this amount.</p>
+        : lacking ? <p className="paymentError">Your wallet holds {rawTokenText(offer.walletLamports, 'SOL')} SOL; this needs about {rawTokenText(quote.needs, 'SOL')} SOL with network fees.</p>
         : quote?.source === 'wallet' && <p className="gasNote">A fresh SOL deposit withdrawn seconds later makes this payment easier to trace back to your wallet. Shielded SOL leaves no such trail.</p>}
       <div className="paymentDialogActions">
         <button className="ghost" type="button" onClick={() => offer.resolve({})}>{offer.verb} without SOL</button>
-        <button className="paymentPrimary gasConfirm" type="button" disabled={!quote || lacking} onClick={() => offer.resolve({ ...quote, net })}>Add SOL</button>
+        <button className="paymentPrimary gasConfirm" type="button" disabled={!quote || lacking || quote.source === 'paused'} onClick={() => offer.resolve({ ...quote, net })}>Add SOL</button>
       </div>
     </>}
   </dialog>
