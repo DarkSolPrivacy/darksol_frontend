@@ -137,3 +137,10 @@ test('a one-time wallet swaps through Jupiter Ultra: order for it as taker, sign
     globalThis.fetch = realFetch
   }
 })
+
+test('the page offers Umbra v2 swaps only above what its swap wallet can run', async () => {
+  const { SWAP_MINIMUM } = await import('../protocols/shared/swap-wallet.js')
+  const { default: manifest } = await import('../protocols/umbrav2/manifest.js')
+  const lamports = (sol) => BigInt(Math.round(sol * 1e9))
+  assert.equal(lamports(manifest.swap.minimumInput), lamports(manifest.swap.swapWallet.inputReserveSol) + SWAP_MINIMUM)
+})

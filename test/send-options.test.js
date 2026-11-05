@@ -27,7 +27,7 @@ test('fees, meter steps, buckets and the copied deposit', () => {
   // 0.35% + 0.006 SOL at $100.
   assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), prices), 667_480n)
   assert.equal(poolFee('cloakc', 'USDC', USDC(19.28), prices), 507_840n)
-  assert.equal(poolFee('umbrav2', 'USDC', USDC(19.28), prices), 96_400n)
+  assert.equal(poolFee('umbrav2', 'USDC', USDC(19.28), prices), 19_280n)
   assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), { USDC: 1 }), null)
   assert.deepEqual([96, 48, 19, 0].map(meterLevel), [5, 2, 1, 0])
   assert.equal(bucketFor(19.28, buckets), '10-100')

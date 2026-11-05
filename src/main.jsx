@@ -1012,6 +1012,12 @@ function PrivacyHome({ walletSession, settings }) {
     const amounts = receiverAmounts.map((value) => rawTokenAmount(value, asset))
     const shield = activeShield === 'off' ? null : { mode: activeShield, pools: shielded.pools, amounts: amounts.every((value) => value !== null && value > 0n) ? amounts : null }
     const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0, shield))
+      // A swap smaller than its route can run (Umbra v2 holds part of the SOL back for its swap wallet's fees) is not offered.
+      .map((item) => {
+        const minimum = isSwap && PROTOCOLS[item.protocol]?.swap?.minimumInput
+        return minimum && item.available && !(Number(comparison.amount) > minimum)
+          ? { ...item, available: false, unavailableReason: `${poolLabel(item.protocol)} swaps more than ${minimum} ${asset}.` } : item
+      })
     if (strategy === 'multiple') {
       for (const id of SINGLE_RECIPIENT_IDS) {
         if (normalized.some((item) => item.protocol === id)) continue
@@ -1019,7 +1025,7 @@ function PrivacyHome({ walletSession, settings }) {
       }
     }
     return normalized
-  }, [comparison, strategy, asset, destinationAsset, isBridge, bridgeChainId, bridgeToken, deadlineMinutes, activeShield, shielded.pools, receiverAmounts])
+  }, [comparison, strategy, asset, destinationAsset, isSwap, isBridge, bridgeChainId, bridgeToken, deadlineMinutes, activeShield, shielded.pools, receiverAmounts])
   const suggestedProtocol = rankings.find((item) => item.available)?.protocol
   const selectedIsAvailable = rankings.some((item) => item.available && item.protocol === selectedProtocol)
   const activeProtocol = selectedIsAvailable ? selectedProtocol : suggestedProtocol
