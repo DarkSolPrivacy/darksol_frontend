@@ -35,21 +35,24 @@ export default Object.freeze({
   // migration across pool_flows, pool_snapshots, token_prices and flow_baselines.
   assets: Object.freeze(['SOL', 'USDC', 'USDT']),
 
-  // From the pool's fee policy account UMBRAV2.feePolicy, read 2026-10-23:
-  // deposit 0 bps, private transfer 35 bps, withdraw 50 bps, pass-through 50
-  // bps, a same-owner exemption on transfers only, and a zero fee-tree root (no
-  // per-user overrides). A DarkSol send is a deposit then a withdraw: 0 + 50 bps.
+  // From the pool's fee policy account UMBRAV2.feePolicy (decoded as the SDK's
+  // decodeFeePolicy does), read 2026-11-05 at slot 465782823: deposit 0 bps,
+  // private transfer 5 bps, withdraw 10 bps, pass-through 10 bps, same-owner
+  // exemption on deposits and transfers, and a zero fee-tree root (no per-user
+  // overrides). It was 0 / 35 / 50 / 50 bps on 2026-10-23. A DarkSol send is a
+  // deposit then a withdraw: 0 + 10 bps. Two withdrawals that day paid exactly
+  // that (10,000,000 lamports arrived as 9,990,009).
   // The fee stays in the pool as a fee note; it never leaves custody on chain.
   fees: Object.freeze({
-    variableRate: 0.005,
+    variableRate: 0.001,
     // The relayer's own fee is published behind the gateway token, and is zero
     // when the relayer sponsors the spend, so it is not modelled here.
     fixedAmount: 0,
     fixedToken: null,
     fixedBasis: 'transaction',
-    label: '0.5% plus any relayer fee',
-    policyLabel: '0.5% protocol fee',
-    policyDetail: 'Deposits are free; withdrawals pay 0.5% and private transfers 0.35%',
+    label: '0.1% plus any relayer fee',
+    policyLabel: '0.1% protocol fee',
+    policyDetail: 'Deposits are free; withdrawals pay 0.1% and private transfers 0.05%',
   }),
   recipients: Object.freeze({ multi: false, max: 1 }),
 
@@ -75,6 +78,9 @@ export default Object.freeze({
     keepShielded: true,
     fromShielded: true,
     swapWallet: Object.freeze({ inputReserveSol: 0.006, swapFeeSol: 0.0000062, payoutFeeSol: 0.000013, tokenAccountRentSol: 0.00148844 }),
+    // browser.js swaps only more than this: the reserve plus the swap wallet's
+    // 0.01 SOL minimum (shared/swap-wallet.js), so the page offers no smaller swap.
+    minimumInput: 0.016,
     // Jupiter Ultra charged 0.02% on SOL-stable fills in dry orders of 2026-11-05;
     // the figure Privacy Cash's swaps measured through Ultra is kept as the bound.
     routingFee: 0.0004,
