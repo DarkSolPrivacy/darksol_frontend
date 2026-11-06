@@ -1960,7 +1960,7 @@ function App() {
     <Sidebar open={sidebarOpen} view={view} onToggle={() => setSidebarOpen(!sidebarOpen)} onHome={openHome} onPaymentLinks={openPaymentLinks} onTrace={openTrace} onAnalytics={openAnalyticsPage} onClose={closeDrawer} />
     {drawerOpen && <button className="drawerScrim" type="button" aria-label="Close navigation" onClick={closeDrawer} />}
   </>
-  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}</footer></main>{walletPicker}</div>
+  if (view === 'analytics') return <div className={`analyticsApp${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main className="analyticsMain"><ProtocolDashboard protocol={protocol} selectedEstimate={selectedEstimate} onSelectProtocol={openAnalytics} onLaunchApp={launchApp} /><footer className="socialFoot">{xLink}{telegramLink}</footer></main>{walletPicker}</div>
   if (view === 'checkout') return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main><PaymentCheckout key={path} paymentId={path.split('/')[2] || ''} walletSession={walletSession} /></main>{walletMenu}{walletPicker}</div>
   return <div className={`app ${sidebarOpen ? 'sidebarOpen' : 'sidebarClosed'}${drawerOpen ? ' drawerOpen' : ''}`}>{mobileNav}<main>{view === 'payments' ? <PaymentLinksPage walletSession={walletSession} />
     // Not decoded: a hash is plain base58, and a malformed escape would throw. TracePage parses it before any request.
