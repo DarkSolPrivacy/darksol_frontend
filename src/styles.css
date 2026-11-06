@@ -459,12 +459,11 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .assetMenu .bridgeMark { background: rgba(255, 255, 255, .07); color: var(--text-secondary); }
 .assetMenu .bridgeMark svg { width: 13px; height: 13px; }
 
-.swapDestination { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px 8px 8px 16px; color: var(--text-secondary); }
-.swapDestination > span { font-size: 12px; font-weight: 500; }
-.swapDestination > svg { width: 14px; height: 14px; color: var(--text-tertiary); }
-.swapDestination .assetPicker { margin-left: auto; }
+/* From and to tokens share the amount row: amounts rarely need the width. */
+.amountAssets { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.amountAssetsArrow { width: 14px; height: 14px; color: var(--text-tertiary); }
 
-.bridgePanel { margin: 0 0 6px; padding: 10px; border-radius: var(--radius-sm); background: var(--bg-input); }
+.bridgePanel { margin: 6px 0; padding: 10px; border-radius: var(--radius-sm); background: var(--bg-input); }
 .bridgeChains { display: flex; flex-wrap: wrap; gap: 4px; }
 .bridgeChains button {
   height: 26px;
@@ -498,7 +497,9 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .bridgeTokens .assetLogo { width: 22px; height: 22px; flex-basis: 22px; font-size: 11px; }
 
 /* Recipients: one well, one line per recipient, hairlines between. */
-.recipientRows { position: relative; border-radius: var(--radius-sm); background: var(--bg-input); container-type: inline-size; }
+.recipientRows { position: relative; margin-top: 6px; border-radius: var(--radius-sm); background: var(--bg-input); container-type: inline-size; }
+.recipientActions { display: flex; align-items: center; gap: 2px; flex: none; }
+.recipientRows > .recipientRow:first-child { border-top: 0; }
 .recipientHead { display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 6px 0 16px; }
 .recipientHead > span { margin-right: auto; color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 .recipientRow {
@@ -558,12 +559,10 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .delayControl[aria-disabled=true] { opacity: .4; cursor: not-allowed; }
 .shieldControl.on { background: var(--accent-tint); color: var(--accent); }
 .shieldControl[aria-expanded=true], .delayControl[aria-expanded=true] { background: var(--bg-selected); color: var(--text-primary); }
-.recipientHead :is(.shieldControl, .delayControl)[data-tooltip]::after { left: auto; right: 0; transform: translateY(3px); }
-.recipientHead :is(.shieldControl, .delayControl)[data-tooltip]:is(:hover, :focus-visible)::after { transform: none; }
-.recipientHead .addReceiver[data-tooltip]::after { left: auto; right: 0; transform: translateY(3px); }
-.recipientHead .addReceiver[data-tooltip]:is(:hover, :focus-visible)::after { transform: none; }
+.recipientActions :is(.shieldControl, .delayControl, .addReceiver)[data-tooltip]::after { left: auto; right: 0; transform: translateY(3px); }
+.recipientActions :is(.shieldControl, .delayControl, .addReceiver)[data-tooltip]:is(:hover, :focus-visible)::after { transform: none; }
 
-.shieldMenu { top: 40px; right: 6px; width: min(292px, calc(100vw - 48px)); }
+.shieldMenu { top: 46px; right: 6px; width: min(292px, calc(100vw - 48px)); }
 .shieldMenu button {
   width: 100%;
   display: flex;
@@ -651,6 +650,8 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privGroupHead[aria-expanded="true"] > svg { transform: rotate(180deg); }
 .privGroupHead .privOptionLabel small.chosen { margin-left: 0; color: var(--text-secondary); }
 .privGroupHead .privOptionLabel b.privPoolName { font-weight: 600; white-space: nowrap; }
+/* The fee is per pool, not per wait: it sits by the name, not pushed right. */
+.privGroupHead .privOptionLabel small.privPoolFee { margin-left: 0; }
 .privOption { min-height: 48px; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 12px; padding: 0 14px; border-top: 1px solid var(--border-subtle); cursor: pointer; }
 .privGroup:last-child .privOption:last-child { border-radius: 0 0 var(--radius-md) var(--radius-md); }
 .privOption.chosen { background: var(--bg-elevated); }
@@ -1638,6 +1639,8 @@ label.privRow { cursor: pointer; }
   .sendCard::before, .paymentCheckoutBody::before { inset: -40px -24px -48px; }
   .amountRow { min-height: 92px; }
   .amountRow > input { font-size: 28px; }
+  .amountAssets .assetPicker > button { gap: 6px; padding-right: 6px; }
+  .amountAssets .assetPicker > button > svg { display: none; }
   .routeDetailsHead { flex-direction: column; gap: 12px; }
   .routeDetailsHead .privacy { justify-items: start; text-align: left; }
   .routeSummary { gap: 6px 12px; }
@@ -1896,5 +1899,11 @@ label.privRow { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
-.privMore { min-height: 0; padding: 4px 4px 0; }
-.privMore > span { flex: 1; }
+/* Shield more: grey until switched on. */
+.privMore { cursor: pointer; gap: 12px; }
+.privMore > span { flex: 1; color: var(--text-tertiary); font-size: 13px; transition: color .15s; }
+.privMoreArrow { width: 18px; height: 18px; color: var(--text-tertiary); }
+.privMoreWait { color: var(--text-primary); font-size: 14px; font-weight: 500; white-space: nowrap; }
+.privMore:not(.on) .privMoreArrow ~ .privMoreWait { color: var(--text-tertiary); }
+.privMore:not(.on) .privMeter:not(:first-child) i.on { background: var(--text-disabled); }
+.privMore.on > span { color: var(--text-primary); }

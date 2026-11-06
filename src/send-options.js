@@ -38,7 +38,13 @@ export function effectiveSettings(settings = DEFAULT_SETTINGS) {
   return base.mode === 'custom' ? base : { ...base, priority: 'auto', maxWait: '24h', pools: { ...DEFAULT_SETTINGS.pools } }
 }
 
-export const meterLevel = (score) => Math.max(0, Math.min(5, Math.round(score / 20)))
+// Never below 1: even a send the red team traced every time leaves no proof that
+// the money is the same, which the pool alone provides. 0 is kept for the one
+// case with no cover at all (overwhelmed below).
+export const meterLevel = (score) => Math.max(1, Math.min(5, Math.round(score / 20)))
+// Withdrawn at once and larger than all the pool holds of the token: most of it
+// can only be the sender's own deposit. `balance` is the quote's, in token units.
+const overwhelmed = (pool, amount, wait) => wait === 'now' && Number.isFinite(pool?.balance) && amount > pool.balance
 
 const units = (value, asset) => BigInt(Math.round(value * 10 ** TOKEN_DECIMALS[asset]))
 const toNumber = (raw, asset) => Number(raw) / 10 ** TOKEN_DECIMALS[asset]
@@ -117,7 +123,7 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
   const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
   const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
   const privacy = privacyOf(pool, kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact', 'now', bucket)
-  return privacy && { ...privacy, bucket, level: meterLevel(privacy.score) }
+  return privacy && { ...privacy, bucket, level: overwhelmed(pool, toNumber(raw, asset), 'now') ? 0 : meterLevel(privacy.score) }
 }
 
 // Which cells measure a send: from the balance, to several recipients, a
@@ -174,7 +180,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       const paused = kind !== 'balance' && stopped[protocol] ? stopped[protocol] : null
       options.push({
         id: `${protocol}:${kind}:${wait}`, protocol, kind, wait, waitSeconds: WAITS[wait],
-        score: privacy.score, sends: privacy.sends, simulated: privacy.simulated, level: meterLevel(privacy.score),
+        score: privacy.score, sends: privacy.sends, simulated: privacy.simulated, level: overwhelmed(pool, amount, wait) ? 0 : meterLevel(privacy.score),
         fee, feeUsd: cost, feePct: 100 * cost / usd, receives: raw > fee ? raw - fee : 0n,
         deposit, kept: deposit - raw, executable: runs && !paused, paused, ...extra,
       })
@@ -223,6 +229,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
 function compare(priority) {
   if (priority === 'fees') return (a, b) => a.feeUsd - b.feeUsd || b.score - a.score || a.waitSeconds - b.waitSeconds
   const k = WEIGHT[priority] ?? WEIGHT.auto
-  const step = (option) => meterLevel(option.score - k * option.feePct)
+  // Not meterLevel: its floor of 1 would hide how far a fee drags a weak option down.
+  const step = (option) => Math.max(0, Math.min(5, Math.round((option.score - k * option.feePct) / 20)))
   return (a, b) => step(b) - step(a) || a.feeUsd - b.feeUsd || a.waitSeconds - b.waitSeconds || b.score - a.score
 }

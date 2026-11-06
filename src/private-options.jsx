@@ -3,7 +3,7 @@
 // shielded before and after, the settings,
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
-import { Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'lucide-react'
 import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
@@ -23,16 +23,8 @@ const meterTone = (level) => level >= 4 ? 'high' : level >= 2 ? 'mid' : 'low'
 
 // How likely a send like this is traced, in words: about 30 sends per measurement
 // is good to roughly ±10 points, too coarse to quote as a percentage.
-const TRACE_WORDS = ['Most likely traced', 'Most likely traced', 'Often traced', 'Sometimes traced', 'Rarely traced', 'Very rarely traced']
-
-// What a privacy figure rests on, when it is the quote's size bucket ("10-100").
-const dollars = (value) => `$${Number(value).toLocaleString('en-US')}`
-function Basis({ privacy, bucket }) {
-  const [from, to] = String(bucket ?? '').split('-')
-  // A simulation of this exact amount needs no note.
-  const text = !privacy?.simulated && to ? `Measured on DarkSol sends of ${dollars(from)}–${dollars(to)}` : null
-  return text && <small className="privBasis">{text}</small>
-}
+// 0 only when the send is larger than the whole pool and goes out at once.
+const TRACE_WORDS = ['Larger than the pool: traced', 'Most likely traced', 'Often traced', 'Sometimes traced', 'Rarely traced', 'Very rarely traced']
 
 /** Privacy as 5 steps; how likely it is traced is in the label for screen readers and on hover. */
 export function Meter({ option, large = false }) {
@@ -57,7 +49,8 @@ function BestBadge({ reason }) {
 // `shielded` holds the balance of each pool DarkSol reads: undefined while
 // unread (Show reads it). A pool missing from it shows no balance. `reading`:
 // a read is already running, which Show cannot speed up; `status` says how far it got.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal }) {
+// `more`: the shield-more offer ({ option, base, on, onToggle }), shown beside the meter.
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal, more }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -80,7 +73,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     || b.options.some((option) => option.executable) - a.options.some((option) => option.executable) || b.best.score - a.best.score)
   const row = (option) => <label className={`privOption${option.id === chosen.id ? ' chosen' : ''}${option.executable ? '' : ' off'}`} key={option.id}>
     <input type="radio" name="privOption" checked={option.id === chosen.id} disabled={!option.executable} onChange={() => onChoose(option.id)} />
-    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <BestBadge reason={result.reason} />}{option === result.fastest && <em className="private">Private</em>}<small>{option.paused ? 'Paused' : `Fee ${usd(option.feeUsd)}`}</small></span>
+    <span className="privOptionLabel"><b>{optionLabel(option)}</b>{option.id === result.suggested.id && <BestBadge reason={result.reason} />}{option === result.fastest && <em className="private">Private</em>}{option.paused && <small>Paused</small>}</span>
     <Meter option={option} />
   </label>
   const group = ({ protocol, options, best }) => {
@@ -89,7 +82,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     return <div className={`privGroup${options.includes(result.suggested) ? ' best' : ''}`} key={protocol}>
       <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
         <img src={LOGOS[protocol]?.src} alt="" />
-        <span className="privOptionLabel"><b className="privPoolName">{name}</b>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}{options.every((option) => option.paused) && <small>{options[0].paused}</small>}</span>
+        <span className="privOptionLabel"><b className="privPoolName">{name}</b><small className="privPoolFee">(Fee {usd(best.feeUsd)})</small>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}{options.every((option) => option.paused) && <small>{options[0].paused}</small>}</span>
         <Meter option={best} />
         <ChevronDown aria-hidden="true" />
       </button>
@@ -98,14 +91,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
   }
 
   return <section className="privOptions" aria-label="How to send">
-    <div className="privHero">
-      <Meter option={chosen} large />
-      <div>
-        <b>{chosen.waitSeconds ? `Sends ${WAIT_LABEL[chosen.wait].toLowerCase()}` : 'Sends now'}</b>
-        <span>Fee {usd(chosen.feeUsd)}{chosen.feePct >= 5 ? ` (${Math.round(chosen.feePct)}%)` : ''} · {POOL_NAMES[chosen.protocol]}</span>
-        <Basis privacy={chosen} bucket={result.bucket} />
-      </div>
-    </div>
+    {more && <ShieldMore {...more} base={more.on ? more.base : chosen} asset={asset} />}
     <div className="privList" role="radiogroup" aria-label="How to send">
       {groups.map(group)}
     </div>
@@ -119,11 +105,15 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
 }
 
 /** Optional: deposit a common amount, send what was typed and keep the rest shielded, for more privacy. */
-export function ShieldMore({ option, asset, on, onToggle }) {
-  return <label className="privRow privMore">
-    <span>Shield {tokenText(option.kept, asset)} {asset} more for more privacy<small>Deposit {tokenText(option.deposit, asset)}, they still get what you typed, the rest stays yours, shielded</small></span>
-    <Meter option={option} />
-    <input type="checkbox" role="switch" className="privSwitch" checked={on} onChange={(event) => onToggle(event.target.checked)} />
+// Grey until switched on: today's meter, an arrow, the meter with the extra shielded.
+export function ShieldMore({ option, base, asset, on, onToggle }) {
+  const detail = `Deposit ${tokenText(option.deposit, asset)}: they still get what you typed, the rest stays yours, shielded`
+  return <label className={`privHero privMore${on ? ' on' : ''}`} title={detail}>
+    {base && <><Meter option={base} large /><b className="privMoreWait">{optionLabel(base)}</b></>}
+    <ArrowRight className="privMoreArrow" aria-hidden="true" />
+    <Meter option={option} large /><b className="privMoreWait">{optionLabel(option)}</b>
+    <span>More private shielding {tokenText(option.kept, asset)} {asset}</span>
+    <input type="checkbox" role="switch" className="privSwitch" aria-label={`More private shielding ${tokenText(option.kept, asset)} ${asset}. ${detail}`} checked={on} onChange={(event) => onToggle(event.target.checked)} />
   </label>
 }
 
@@ -140,7 +130,7 @@ export function MeasuredSummary({ privacy, title, detail, hint, action, onAction
   return <section className="privOptions privMeasured" aria-label="How private this send is">
     <div className="privHero">
       {privacy && <Meter option={privacy} large />}
-      <div><b>{title}</b><span>{detail}</span>{privacy && <Basis privacy={privacy} bucket={privacy.bucket} />}</div>
+      <div><b>{title}</b><span>{detail}</span></div>
     </div>
     {hint && <p className="privHint">{hint}{action && <button type="button" onClick={onAction}>{action}</button>}</p>}
   </section>

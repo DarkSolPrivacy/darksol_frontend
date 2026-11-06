@@ -29,7 +29,8 @@ test('fees, meter steps, buckets and the copied deposit', () => {
   assert.equal(poolFee('cloakc', 'USDC', USDC(19.28), prices), 507_840n)
   assert.equal(poolFee('umbrav2', 'USDC', USDC(19.28), prices), 19_280n)
   assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), { USDC: 1 }), null)
-  assert.deepEqual([96, 48, 19, 0].map(meterLevel), [5, 2, 1, 0])
+  // Never 0 from a measurement: the pool alone leaves no proof it is the same money.
+  assert.deepEqual([96, 48, 19, 0].map(meterLevel), [5, 2, 1, 1])
   assert.equal(bucketFor(19.28, buckets), '10-100')
   assert.equal(bucketFor(0.5, buckets), '1-10')
   assert.equal(bucketFor(50_000, buckets), '1000-10000')
@@ -134,10 +135,16 @@ test('a send set up by hand gets the measured privacy of what it does', () => {
   const measure = (kind, extra = {}) => measuredPrivacy({ quote: { ...quote, pools }, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind, ...extra })
   // Keeping part of a common deposit and sending now: the keep cell. Of any other deposit: an exact send's.
   const bucket = '10-100'
-  assert.deepEqual(measure('keep', { deposit: USDC(25) }), { score: 3, sends: 30, bucket, level: 0 })
-  assert.deepEqual(measure('keep', { deposit: USDC(23.4) }), { score: 0, sends: 30, bucket, level: 0 })
+  assert.deepEqual(measure('keep', { deposit: USDC(25) }), { score: 3, sends: 30, bucket, level: 1 })
+  assert.deepEqual(measure('keep', { deposit: USDC(23.4) }), { score: 0, sends: 30, bucket, level: 1 })
   assert.deepEqual(measure('balance'), { score: 100, sends: 30, bucket, level: 5 })
-  assert.deepEqual(measure('split'), { score: 0, sends: 30, bucket, level: 0 })
+  assert.deepEqual(measure('split'), { score: 0, sends: 30, bucket, level: 1 })
+  // Sent now and larger than all the pool holds: 0.
+  const small = { ...quote, pools: { ...pools, privacycash: { ...pools.privacycash, balance: 10 } } }
+  assert.equal(measuredPrivacy({ quote: small, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind: 'split' }).level, 0)
+  assert.equal(measuredPrivacy({ quote: small, protocol: 'privacycash', asset: 'USDC', raw: USDC(9), prices, kind: 'split' }), null)
+  assert.equal(measuredPrivacy({ quote: { ...quote, pools: { ...pools, privacycash: { ...pools.privacycash, balance: 10 } } }, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind: 'keep', deposit: USDC(25) }).level, 0)
+  assert.equal(measuredPrivacy({ quote: { ...quote, pools: { ...pools, privacycash: { ...pools.privacycash, balance: 1000 } } }, protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind: 'keep', deposit: USDC(25) }).level, 1)
   assert.equal(measuredPrivacy({ quote, protocol: 'curvy', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }), null)
   assert.equal(measuredPrivacy({ quote, protocol: 'cloakc', asset: 'USDC', raw: USDC(19.28), prices, kind: 'split' }), null)
 })
@@ -174,7 +181,7 @@ test('with no common amount to copy, the waits still show, measured as an exact 
   const result = timedOptions(4)
   const later = result.options.filter((option) => option.protocol === 'privacycash' && option.kind === 'later')
   assert.deepEqual(later.map((option) => option.wait).sort(), ['24h', '6h'])
-  assert.ok(later.every((option) => option.deposit === USDC(4) && option.kept === 0n && option.level === 0))
+  assert.ok(later.every((option) => option.deposit === USDC(4) && option.kept === 0n && option.level === 1))
   // Nothing reaches 4 of 5, so the page says what a shielded balance would score.
   assert.equal(result.fastest, null)
   assert.deepEqual(result.balanceHint, { protocol: 'privacycash', score: 100, sends: 30, level: 5, known: false })
