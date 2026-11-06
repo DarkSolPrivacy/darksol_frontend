@@ -16,3 +16,15 @@ export function recordPageView(pathname) {
     }).catch(() => {})
   } catch { /* Collection is best effort. */ }
 }
+
+// The edge counted the campaign tags with this page load. Dropping them from the
+// address keeps a reload or a shared link from counting the campaign again.
+export function dropCampaignTags() {
+  try {
+    const url = new URL(globalThis.location.href)
+    const tags = [...url.searchParams.keys()].filter((key) => key.startsWith('utm_'))
+    if (!tags.length) return
+    for (const key of tags) url.searchParams.delete(key)
+    globalThis.history.replaceState(globalThis.history.state, '', url)
+  } catch { /* The address keeps its tags. */ }
+}
