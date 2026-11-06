@@ -30,6 +30,17 @@ import { createReceipt, throwWithReceipt } from '../shared/receipts.js'
 const POLL_MS = 4000
 const POLLS = 45
 
+// The priority fee, in lamports for the whole transaction, on the registration,
+// the deposit's funding (the wallet signs both) and the deposit. The SDK's default
+// is none, and Solflare then appends a SetComputeUnitPrice of its own, which
+// pushes the transaction past the compute limit the SDK measured: Solflare's
+// simulation fails ("Simulation failed") and the SDK refuses the changed
+// message. With a price already set Solflare keeps it; the guards it still adds
+// are accepted by wallet-additions.js. The SDK spreads this total over the
+// compute limit, so it stays small: Solflare's guards raise the limit, and the
+// fee with it.
+const PRIORITY_FEE_LAMPORTS = 100n
+
 let loading = null
 
 function loadSdk() {
@@ -143,6 +154,13 @@ async function mintBalance(nimbus, session, mint) {
   }
 }
 
+function isFeeRemainderRefusal(error) {
+  for (let cause = error, depth = 0; cause && depth < 5; cause = cause.cause, depth++) {
+    if (/fee is not the ceiling of its numerator/.test(String(cause.message ?? cause))) return true
+  }
+  return false
+}
+
 // Withdraws `amount` to `recipient` through Umbra's relayer, the fees coming out
 // of it, and records the payout on `receipt`. A pending settlement (the relayer
 // took it but stopped reporting before it landed) still lands, so it counts as
@@ -150,9 +168,25 @@ async function mintBalance(nimbus, session, mint) {
 async function withdrawTo(nimbus, session, { asset, mint, amount, recipient }, receipt) {
   // Native SOL is paid to the wallet itself. Left to the SDK, it names the wallet's
   // wrapped-SOL token account, which the payout refuses: no key signs for lamports there.
-  const withdrawn = await nimbus.withdraw(await nimbus.createWithdrawalContext(session),
-    { mint, amount, recipient: String(recipient) },
+  const withdraw = async (units) => nimbus.withdraw(await nimbus.createWithdrawalContext(session),
+    { mint, amount: units, recipient: String(recipient) },
     asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {})
+  // The SDK (nimbus-solana 0.1.1) refuses an amount that no payout plus its fee
+  // adds up to: at 10 bps, every amount ≡ 1 mod 1001, 1 USDC and 1 USDT among
+  // them. It puts the unit left over on the fee, and its own statement check,
+  // which wants each fee to be exactly its ceiling, rejects that before anything
+  // is proved or relayed, and frees the notes. A unit less adds up (a fee split
+  // over several receipts can skip a few units, hence the retries), pays the
+  // recipient the same, and leaves the unit in the private balance.
+  let withdrawn
+  for (let less = 0n; ; less++) {
+    try {
+      withdrawn = await withdraw(amount - less)
+      break
+    } catch (error) {
+      if (!isFeeRemainderRefusal(error) || less === 4n || amount - less <= 1n) throw error
+    }
+  }
   if (withdrawn.kind !== 'relayed') throw new Error(`the relayer did not take the withdrawal (${spendFailure(withdrawn)})`)
   const { settlement } = withdrawn
   if (settlement.kind === 'failed') throw new Error(`the withdrawal ${settlement.state}${settlement.failureCode ? ` (${settlement.failureCode})` : ''}`)
@@ -171,6 +205,22 @@ export async function sendFromBalance({ nimbus, session, asset, mint, payout, re
   return withdrawTo(nimbus, session, { asset, mint, amount: payout, recipient }, createReceipt({ provider: 'umbrav2', asset }))
 }
 
+// Status lines for the deposit's stages. The wallet is asked only once the
+// deposit is endorsed and proved, up to a minute in: until then "Approve" would
+// send the user looking for a wallet prompt that is not there. At transaction
+// version 0 (every wallet today) the wallet signs one funding transaction, and
+// the SDK's platform wallet alone signs the deposit that follows it.
+function depositProgress(onStatus) {
+  const done = new Set()
+  return ({ stage }) => {
+    done.add(stage)
+    if (stage === 'synced') onStatus('Preparing the Umbra v2 deposit…')
+    else if (stage === 'prepared') onStatus('Proving the Umbra v2 deposit, up to a minute…')
+    else if ((stage === 'endorsed' || stage === 'proved') && done.has('endorsed') && done.has('proved')) onStatus('Approve the Umbra v2 deposit in your wallet…')
+    else if (stage === 'funding-signed' || stage === 'signed') onStatus('Sending the Umbra v2 deposit…')
+  }
+}
+
 // Registers the wallet the first time, then deposits `amount` of `mint` into
 // its own private balance and returns the deposit's receipt. Registering may
 // open a new session, which replaces `state.session`.
@@ -178,7 +228,7 @@ async function depositToSelf(opened, state, { asset, mint, amount, onStatus, rec
   const { nimbus, sdk, signer, transactionVersion } = opened
   if (state.session.registration.kind === 'unregistered') {
     onStatus('Approve the one-time Umbra v2 registration…')
-    const register = async () => nimbus.register(await nimbus.createRegistrationContext(state.session), {}, { transactionVersion })
+    const register = async () => nimbus.register(await nimbus.createRegistrationContext(state.session), {}, { transactionVersion, priorityFeeLamports: PRIORITY_FEE_LAMPORTS })
     let registration = await register()
     // A registration that stopped after preparing (a failed request, a rejected
     // signature) left the note store a birthday, and the next one, from a later
@@ -193,9 +243,10 @@ async function depositToSelf(opened, state, { asset, mint, amount, onStatus, rec
     onStatus('Waiting for Umbra v2 to confirm the registration…')
     await waitFor('registration', async () => (await nimbus.readRegistration(state.session)).kind === 'registered')
   }
-  onStatus('Approve the Umbra v2 deposit…')
+  onStatus('Reading your Umbra v2 balance…')
   const deposited = await nimbus.deposit(await nimbus.createDepositContext(state.session),
-    { mint, amount, recipient: state.session.walletAddress }, { transactionVersion })
+    { mint, amount, recipient: state.session.walletAddress },
+    { transactionVersion, priorityFeeLamports: PRIORITY_FEE_LAMPORTS, onProgress: depositProgress(onStatus) })
   if (!landed(deposited)) throw new Error(`The Umbra v2 deposit did not land (${outcomeName(deposited)})`)
   return createReceipt({ provider: 'umbrav2', asset, ...receipt, depositSignature: bs58.encode(deposited.submission.submission.signature) })
 }

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
+import { nimbusWalletAdditions } from './protocols/umbrav2/sdk-patch.js'
 
 const api = process.env.DARKSOL_API_URL
 // Umbra v2's prover needs shared memory, which only a cross-origin isolated page
@@ -8,7 +9,9 @@ const api = process.env.DARKSOL_API_URL
 const isolated = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' }
 
 export default defineConfig({
-  plugins: [react(), nodePolyfills({ include: ['buffer', 'crypto', 'events', 'process', 'stream', 'util'] })],
+  plugins: [react(), nodePolyfills({ include: ['buffer', 'crypto', 'events', 'process', 'stream', 'util'] }), nimbusWalletAdditions()],
+  // `npm run dev` pre-bundles the SDK, which the plugins above do not see.
+  optimizeDeps: { rolldownOptions: { plugins: [nimbusWalletAdditions()] } },
   server: {
     headers: isolated,
     proxy: {
