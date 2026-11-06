@@ -194,6 +194,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
 .xLink:hover { color: var(--text-primary); }
 .xLink svg { width: 12px; height: 12px; }
 .xLink + .xLink { margin-top: 8px; }
+.telegramLink svg { width: 16px; height: 16px; }
 
 /* Collapsed rail */
 .sidebarClosed aside { width: var(--rail); }
@@ -1503,7 +1504,7 @@ label.privRow { cursor: pointer; }
 
 .protocolPage > footer { margin-top: 22px; color: var(--text-tertiary); font-size: 11px; line-height: 1.6; text-align: center; }
 .protocolPage > footer span { margin: 0 8px; color: var(--text-disabled); }
-.socialFoot { margin-top: 20px; display: flex; justify-content: center; }
+.socialFoot { margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 16px; }
 .socialFoot .xLink { margin-top: 0; }
 
 /* Planning estimate, shown on analytics when a route estimate is handed over. */
