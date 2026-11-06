@@ -22,11 +22,6 @@ export default Object.freeze({
 
   assets: Object.freeze(['SOL', 'USDC', 'USDT']),
 
-  // Privacy Cash paused deposits on 2026-11-05 while it tightens wallet
-  // screening; withdrawals still work. Set: anything that deposits is shown but
-  // cannot be picked, and paying from a shielded balance stays open.
-  depositsPaused: 'Deposits temporarily paused',
-
   fees: Object.freeze({
     variableRate: 0.0035,
     fixedAmount: 0.006,
