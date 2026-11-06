@@ -84,6 +84,7 @@ export const PROVIDER_CAPABILITIES = Object.freeze(Object.fromEntries(manifests.
     protocolExecution: Object.freeze({ label: 'historical p50 / p95 when available' }),
     withdrawalFee: Object.freeze({
       variableRate: manifest.fees.variableRate,
+      ...(manifest.fees.variableByToken ? { variableByToken: manifest.fees.variableByToken } : {}),
       fixedAmount: manifest.fees.fixedAmount,
       fixedToken: manifest.fees.fixedToken,
       fixedBasis: manifest.fees.fixedBasis,

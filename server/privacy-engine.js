@@ -546,11 +546,14 @@ export function estimateProviderFee({ provider, token, amount, recipientCount = 
   if (!model || !finite(amount) || Number(amount) < 0) return { available: false, reason: 'Fee model or amount is unavailable.' }
   const normalizedToken = String(token || '').toUpperCase()
   const count = Math.max(1, Math.floor(Number(recipientCount) || 1))
-  const variableFee = Number(amount) * model.variableRate
+  const variableRate = model.variableByToken?.[normalizedToken] ?? model.variableRate
+  const variableFee = Number(amount) * variableRate
   const fixedApplies = !model.fixedAppliesToTokens || model.fixedAppliesToTokens.includes(normalizedToken)
   const fixedUnits = fixedApplies ? (model.fixedBasis === 'recipient' ? count : 1) : 0
   let fixedFee = 0
-  if (fixedUnits && model.fixedAmount) {
+  // A fixed fee set per pool token (Cloak) needs no conversion.
+  if (fixedUnits && model.fixedByToken) fixedFee = (model.fixedByToken[normalizedToken] ?? 0) * fixedUnits
+  else if (fixedUnits && model.fixedAmount) {
     if (model.fixedToken === normalizedToken) fixedFee = model.fixedAmount * fixedUnits
     else {
       const fixedPrice = Number(tokenPrices[model.fixedToken])
@@ -571,7 +574,7 @@ export function estimateProviderFee({ provider, token, amount, recipientCount = 
     total: variableFee + fixedFee,
     components: {
       variableFee,
-      variableRate: model.variableRate,
+      variableRate,
       fixedFee,
       fixedAmount: model.fixedAmount,
       fixedToken: model.fixedToken,

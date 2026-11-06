@@ -20,20 +20,25 @@ export default Object.freeze({
 
   assets: Object.freeze(['SOL', 'USDC', 'USDT']),
 
-  // Each pool's PoolConfig charges an exit (withdrawal or swap) 0.3% plus a fixed
-  // fee in its own token (docs.cloak.ag/guide/fees, confirmed on chain 2026-09-27:
-  // a 0.03 SOL swap paid 0.00509 SOL). Deposits are free; the wallet pays the
-  // network fee and rent for three accounts (depositCostSol, measured on a SOL deposit).
+  // Each pool's PoolConfig charges an exit (withdrawal or swap) a variable rate plus
+  // a fixed fee in its own token (confirmed on chain 2026-09-27: a 0.03 SOL swap
+  // paid 0.00509 SOL). On 2026-11-05 Cloak's multisig cut the USDC and USDT pools
+  // to 1/800 (0.125%) + 0.45; SOL stays 0.3% + 0.005 (read from the PoolConfig
+  // PDAs 2026-11-06; docs.cloak.ag/guide/fees still says 0.3%). variableRate is
+  // SOL's rate and the fallback; variableByToken overrides it per pool. Deposits
+  // are free; the wallet pays the network fee and rent for three accounts
+  // (depositCostSol, measured on a SOL deposit).
   fees: Object.freeze({
     variableRate: 0.003,
+    variableByToken: Object.freeze({ SOL: 0.003, USDC: 0.00125, USDT: 0.00125 }),
     fixedAmount: 0.005,
     fixedToken: 'SOL',
     fixedBasis: 'transaction',
     fixedByToken: Object.freeze({ SOL: 0.005, USDC: 0.45, USDT: 0.45 }),
     depositCostSol: 0.00197088,
-    label: '0.3% + 0.005 SOL or 0.45 USDC/USDT per exit',
-    policyLabel: '0.3% protocol fee',
-    policyDetail: 'Exits add 0.005 SOL or 0.45 USDC/USDT',
+    label: '0.3% + 0.005 SOL, or 0.125% + 0.45 USDC/USDT per exit',
+    policyLabel: '0.125–0.3% protocol fee',
+    policyDetail: 'SOL exits: 0.3% + 0.005 SOL · USDC/USDT exits: 0.125% + 0.45',
   }),
   recipients: Object.freeze({ multi: false, max: 1 }),
   capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
