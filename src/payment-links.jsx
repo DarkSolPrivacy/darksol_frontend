@@ -86,10 +86,12 @@ export async function shieldToSelf({ wallet, protocol, asset, amount, onStatus =
 // A collection is recorded in this browser only: telling the server would link it to the deposit.
 const withdrawnKey = (address, id) => `darksol:withdrawn:${address}:${id}`
 
-// Cloak's token pools take their fixed fee in the token; every other exit pays it in SOL.
+// A pool's fees for `asset`. Rates set per token (Cloak's pools) replace the
+// defaults; a fixed fee set per token is paid in that token, any other in SOL.
 function poolFees(protocol, asset) {
-  const fees = PROTOCOLS[protocol].fees
-  return asset !== 'SOL' && protocol === 'cloakc' ? { ...fees, fixedAmount: 0.45, fixedToken: asset } : { ...fees, fixedToken: 'SOL' }
+  const base = PROTOCOLS[protocol].fees
+  const fees = { ...base, variableRate: base.variableByToken?.[asset] ?? base.variableRate }
+  return asset !== 'SOL' && base.fixedByToken?.[asset] !== undefined ? { ...fees, fixedAmount: base.fixedByToken[asset], fixedToken: asset } : { ...fees, fixedToken: 'SOL' }
 }
 
 // One withdrawal's estimated fee in the asset withdrawn; NaN while a needed price is unknown.

@@ -84,6 +84,7 @@ export function validateManifest(manifest) {
   if (!fees || typeof fees !== 'object') fail('fees block is required')
   else {
     if (!Number.isFinite(fees.variableRate) || fees.variableRate < 0) fail('fees.variableRate must be a non-negative number')
+    if (fees.variableByToken && !Object.values(fees.variableByToken).every((rate) => Number.isFinite(rate) && rate >= 0)) fail('fees.variableByToken rates must be non-negative numbers')
     if (fees.fixedAmount !== null && !(Number.isFinite(fees.fixedAmount) && fees.fixedAmount >= 0)) {
       fail('fees.fixedAmount must be a non-negative number or null')
     }

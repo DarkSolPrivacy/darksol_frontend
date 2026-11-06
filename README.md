@@ -116,7 +116,7 @@ The asset is resolved from the account layout and token-balance metadata against
 
 PrivacyCash decodes through its published SOL and SPL `transact` discriminators and signed `extAmount`, keeping only canonical SOL, USDC and USDT flows. Its private swaps are multi-transaction operations, so the indexer conservatively infers one by linking a withdrawal to a different-asset deposit from the same ephemeral wallet within 120 seconds — one-to-one, closest-time-first, and labelled as inferred in the dashboard. Fees decode from the instruction's unsigned `fee` field, so withdrawal volume represents the full pool outflow.
 
-The dashboard never presents fee revenue, only the published charge policy and an estimated charge for a proposed transfer: CLOAKC `0.3%` with `0.005 SOL` added on SOL exits; PrivacyCash `0.35% + 0.006 SOL equivalent`, private swaps `0.008 SOL equivalent + 0.35% + Jupiter fees`; Curvy `0.1%` aggregation plus `0.2%` unshielding for an already shielded transfer, with a separate `0.1%` shielding charge.
+The dashboard never presents fee revenue, only the published charge policy and an estimated charge for a proposed transfer: CLOAKC `0.3% + 0.005 SOL` on SOL exits and `0.125% + 0.45` on USDC/USDT exits; PrivacyCash `0.35% + 0.006 SOL equivalent`, private swaps `0.008 SOL equivalent + 0.35% + Jupiter fees`; Curvy `0.1%` aggregation plus `0.2%` unshielding for an already shielded transfer, with a separate `0.1%` shielding charge.
 
 ### Storage and cursors
 

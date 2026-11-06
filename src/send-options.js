@@ -51,12 +51,13 @@ const toNumber = (raw, asset) => Number(raw) / 10 ** TOKEN_DECIMALS[asset]
 
 /**
  * The pool's fee on a withdrawal of `raw` (base units), from its manifest: the
- * variable rate plus the fixed part, which Privacy Cash prices in SOL. Null
- * when a price it needs is missing.
+ * variable rate (per token where the pool sets one, as Cloak does) plus the
+ * fixed part, which Privacy Cash prices in SOL. Null when a price it needs is
+ * missing.
  */
 export function poolFee(protocol, asset, raw, prices) {
   const fees = PROTOCOLS[protocol].fees
-  const variable = BigInt(Math.ceil(Number(raw) * fees.variableRate))
+  const variable = BigInt(Math.ceil(Number(raw) * (fees.variableByToken?.[asset] ?? fees.variableRate)))
   let fixed = 0n
   if (fees.fixedByToken?.[asset] !== undefined) fixed = units(fees.fixedByToken[asset], asset)
   else if (fees.fixedAmount) {

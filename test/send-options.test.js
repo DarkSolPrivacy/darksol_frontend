@@ -26,7 +26,9 @@ const options = (amount, extra = {}) => sendOptions({ quote, asset: 'USDC', raw:
 test('fees, meter steps, buckets and the copied deposit', () => {
   // 0.35% + 0.006 SOL at $100.
   assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), prices), 667_480n)
-  assert.equal(poolFee('cloakc', 'USDC', USDC(19.28), prices), 507_840n)
+  // Cloak's USDC pool: 0.125% + 0.45 USDC since 2026-11-05.
+  assert.equal(poolFee('cloakc', 'USDC', USDC(19.28), prices), 474_100n)
+  assert.equal(poolFee('cloakc', 'SOL', 10n ** 9n, prices), 8_000_000n)
   assert.equal(poolFee('umbrav2', 'USDC', USDC(19.28), prices), 19_280n)
   assert.equal(poolFee('privacycash', 'USDC', USDC(19.28), { USDC: 1 }), null)
   // Never 0 from a measurement: the pool alone leaves no proof it is the same money.

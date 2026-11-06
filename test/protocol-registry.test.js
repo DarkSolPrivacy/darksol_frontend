@@ -74,8 +74,9 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
       capabilityNote: 'Current mainnet 0.2.x integration is treated as single-recipient.',
       protocolExecution: { label: 'historical p50 / p95 when available' },
       withdrawalFee: {
-        variableRate: 0.003, fixedAmount: 0.005, fixedToken: 'SOL', fixedBasis: 'transaction',
-        fixedByToken: { SOL: 0.005, USDC: 0.45, USDT: 0.45 }, label: '0.3% + 0.005 SOL or 0.45 USDC/USDT per exit',
+        variableRate: 0.003, variableByToken: { SOL: 0.003, USDC: 0.00125, USDT: 0.00125 },
+        fixedAmount: 0.005, fixedToken: 'SOL', fixedBasis: 'transaction',
+        fixedByToken: { SOL: 0.005, USDC: 0.45, USDT: 0.45 }, label: '0.3% + 0.005 SOL, or 0.125% + 0.45 USDC/USDT per exit',
       },
     },
     curvy: {
@@ -136,7 +137,7 @@ test('PROTOCOLS carries every field server/app.js and server/index.js read', () 
   assert.deepEqual(fields(PROTOCOLS.cloakc), {
     id: 'cloakc', name: 'CLOAKC', programId: 'zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
     docs: 'https://docs.cloak.ag/sdk/introduction',
-    feePolicy: { label: '0.3% protocol fee', detail: 'Exits add 0.005 SOL or 0.45 USDC/USDT' },
+    feePolicy: { label: '0.125–0.3% protocol fee', detail: 'SOL exits: 0.3% + 0.005 SOL · USDC/USDT exits: 0.125% + 0.45' },
     chain: 'solana', chainId: null,
     // app.js built this by concatenating solscan onto programId.
     explorerAccount: 'https://solscan.io/account/zh1eLd6rSphLejbFfJEneUwzHRfMKxgzrgkfwA6qRkW',
