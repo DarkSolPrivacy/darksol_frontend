@@ -17,11 +17,11 @@
 // to the recipient, or only the withdrawal when it pays from that balance. The
 // wallet signs the unlock message (once per tab), the one-time registration and
 // the deposit; Umbra's relayer submits the withdrawal.
-import { Connection, Keypair, PublicKey } from '@solana/web3.js'
+import { Connection, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { MINTS } from '../addresses.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
-import { SWAP_MINIMUM, finishSwap, ultraSwap } from '../shared/swap-wallet.js'
+import { finishSavedSwap, finishSwap, startSwapTask, ultraSwap } from '../shared/swap-wallet.js'
 import { swapEligibility } from '../../src/swap-routes.js'
 import manifest from './manifest.js'
 import { createReceipt, throwWithReceipt } from '../shared/receipts.js'
@@ -248,24 +248,24 @@ async function send({ provider, asset, totalBaseUnits, recipient, recipients, so
   }
 }
 
-// SOL held back from the input for the swap's and the payout's network fees and
-// the recipient's token account; what is left reaches the recipient as SOL.
+// SOL held back from a SOL input for the swap's and the payout's network fees
+// and the recipient's token account; what is left reaches the recipient as SOL.
 const INPUT_RESERVE = BigInt(Math.round(manifest.swap.swapWallet.inputReserveSol * 1e9))
 const swapTaskKey = (address) => `umbrav2-swap-${address}`
-const toBase64 = (bytes) => { let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary) }
-const fromBase64 = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
 const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
+// The least a swap takes, in the input's base units (manifest swap.minimumInput).
+const swapMinimum = (asset) => BigInt(Math.round(manifest.swap.minimumInput[asset] * 10 ** TOKEN_DECIMALS[asset]))
 
 // Umbra v2 publishes no swap, so this runs one in a one-time wallet
-// (shared/swap-wallet.js): the SOL is withdrawn privately from the wallet's
-// Umbra v2 balance to it, swapped there through Jupiter Ultra, and the one-time
+// (shared/swap-wallet.js): the input is withdrawn privately from the wallet's
+// Umbra v2 balance to it and swapped there through Jupiter Ultra. Between two
+// tokens the output goes straight to the recipient; otherwise the one-time
 // wallet pays the recipient everything it holds. From the wallet,
 // `totalBaseUnits` is deposited first and what is not swapped (`recipients`'
-// total) stays shielded; `source: 'shielded'` pays from the balance. SOL input
-// only: Jupiter covers a token-only wallet's fees for some fills but not all,
-// and a one-time wallet holding a token and no SOL could not move it. The
-// one-time wallet's key stays in this browser until the payout, so a swap cut
-// short is finished by the next Umbra v2 swap here.
+// total) stays shielded; `source: 'shielded'` pays from the balance. A token
+// input reaches a wallet with no SOL, so Jupiter must pay its network fee. The
+// one-time wallet's key stays in this browser until the swap is done, so a
+// swap cut short is finished by the next Umbra v2 swap here.
 async function swap({ provider, inputAsset, outputAsset, totalBaseUnits, recipient, recipients, source = 'wallet', onStatus }) {
   const route = swapEligibility('umbrav2', inputAsset, outputAsset)
   if (!route.available || route.kind !== 'swap') throw new Error(route.reason || `Umbra v2 cannot swap ${inputAsset} to ${outputAsset}`)
@@ -273,21 +273,15 @@ async function swap({ provider, inputAsset, outputAsset, totalBaseUnits, recipie
   const deposited = BigInt(totalBaseUnits)
   const units = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : deposited
   if (!fromShielded && units > deposited) throw new Error('The swap takes more than the deposit')
-  if (units <= INPUT_RESERVE + SWAP_MINIMUM) throw new Error(`Swap more than ${unitsText(INPUT_RESERVE + SWAP_MINIMUM, inputAsset)}: ${unitsText(INPUT_RESERVE, inputAsset)} of it pays the swap's network fees`)
+  if (units <= swapMinimum(inputAsset)) throw new Error(`Swap more than ${unitsText(swapMinimum(inputAsset), inputAsset)}${inputAsset === 'SOL' ? `: ${unitsText(INPUT_RESERVE, inputAsset)} of it pays the swap's network fees` : ''}`)
   const recipientKey = new PublicKey(String(recipient))
-  const owner = provider?.walletStandard?.account?.address
+  const key = swapTaskKey(provider?.walletStandard?.account?.address)
   const connection = rpcConnection()
-  const forget = () => localStorage.removeItem(swapTaskKey(owner))
 
   // Finished alone, never followed by this new swap: the user retrying a swap
   // that stopped means that swap, not a second one.
-  let pending = null
-  try { pending = JSON.parse(localStorage.getItem(swapTaskKey(owner))) } catch {}
-  if (pending?.secret) {
-    onStatus('Finishing your earlier swap…')
-    const paid = await finishSwap({ connection, burner: Keypair.fromSecretKey(fromBase64(pending.secret)), task: pending, swap: ultraSwap, forget, onStatus })
-    if (paid) throw new Error(`Finished your earlier interrupted swap: ${paid.tokens ? unitsText(paid.tokens, pending.outputAsset) : unitsText(paid.lamports, 'SOL')} went to ${pending.recipient}. Nothing new was sent; swap again to start this one.`)
-  }
+  const earlier = await finishSavedSwap({ key, connection, swap: ultraSwap, onStatus })
+  if (earlier) throw new Error(`Finished your earlier interrupted swap: ${earlier.tokens ? unitsText(earlier.tokens, earlier.task.outputAsset) : earlier.lamports ? unitsText(earlier.lamports, 'SOL') : `the ${earlier.task.outputAsset}`} went to ${earlier.task.recipient}. Nothing new was sent; swap again to start this one.`)
 
   const mint = MINTS[inputAsset]
   const opened = await openSession(provider, onStatus)
@@ -309,14 +303,11 @@ async function swap({ provider, inputAsset, outputAsset, totalBaseUnits, recipie
       await settledBalance(nimbus, state.session, mint, onStatus)
     }
     stage = 'shielded'
-    const burner = Keypair.generate()
-    const task = { secret: toBase64(burner.secretKey), inputAsset, outputAsset, recipient: recipientKey.toBase58(), keep: String(INPUT_RESERVE) }
-    // Saved before the withdrawal, so a swap cut short anywhere after it is found again.
-    localStorage.setItem(swapTaskKey(owner), JSON.stringify(task))
+    const { burner, task } = startSwapTask(key, { inputAsset, outputAsset, recipient: recipientKey.toBase58(), keep: inputAsset === 'SOL' ? INPUT_RESERVE : 0n })
     onStatus(`Moving the ${inputAsset} to a one-time swap wallet…`)
     await withdrawTo(nimbus, state.session, { asset: inputAsset, mint, amount: units, recipient: burner.publicKey.toBase58() }, {})
     stage = 'swap'
-    const paid = await finishSwap({ connection, burner, task, wait: true, swap: ultraSwap, forget, onStatus })
+    const paid = await finishSwap({ connection, burner, task, wait: true, swap: ultraSwap, forget: () => localStorage.removeItem(key), onStatus })
     if (!paid) throw new Error('the swap wallet received nothing to swap')
     receipt.swapSignature = paid.swapSignature
     receipt.withdrawals = [{ tx: paid.signature }]

@@ -63,28 +63,32 @@ export default Object.freeze({
   // found again from the wallet's unlock signature on any device.
   send: Object.freeze({ execution: 'sdk', keepShielded: true, fromShielded: true }),
   // The SDK publishes no swap (@umbra-privacy/nimbus-solana-web 0.1.1), so
-  // browser.js runs one: a private withdrawal of SOL to a one-time swap wallet,
-  // a Jupiter Ultra swap there, and a payout of everything it holds to the
-  // recipient (shared/swap-wallet.js). SOL input only: the swap wallet's network
-  // fees come out of it (swapWallet, the same measured figures as Privacy
-  // Cash's), and a wallet holding only a token could be left unable to move it.
+  // browser.js runs one: a private withdrawal of the input to a one-time swap
+  // wallet and a Jupiter Ultra swap there (shared/swap-wallet.js). Between two
+  // tokens the output goes straight to the recipient; otherwise the wallet pays
+  // the recipient everything it holds. A SOL input pays the wallet's network
+  // fees from a reserve (swapWallet, the same measured figures as Privacy
+  // Cash's); a token input reaches a wallet with no SOL, so Jupiter must pay
+  // them (a gasless order, refused before sending when it will not).
   // keepShielded / fromShielded: as for a send, the swap can deposit more than it
-  // swaps, or take its SOL from the private balance with no deposit.
+  // swaps, or take its input from the private balance with no deposit.
   swap: Object.freeze({
     execution: 'sdk',
     aggregator: 'Jupiter',
-    inputAssets: Object.freeze(['SOL']),
-    outputAssets: Object.freeze(['USDC', 'USDT']),
+    inputAssets: Object.freeze(['SOL', 'USDC', 'USDT']),
+    outputAssets: Object.freeze(['SOL', 'USDC', 'USDT']),
     keepShielded: true,
     fromShielded: true,
     swapWallet: Object.freeze({ inputReserveSol: 0.006, swapFeeSol: 0.0000062, payoutFeeSol: 0.000013, tokenAccountRentSol: 0.00148844 }),
-    // browser.js swaps only more than this: the reserve plus the swap wallet's
-    // 0.01 SOL minimum (shared/swap-wallet.js), so the page offers no smaller swap.
-    minimumInput: 0.016,
+    // The least browser.js swaps, per input, and so the least the page offers:
+    // SOL more than the reserve plus the swap wallet's 0.01 SOL minimum
+    // (shared/swap-wallet.js); a token at least what Jupiter filled gasless for
+    // a wallet with no SOL (4 USDC, 2026-11-06).
+    minimumInput: Object.freeze({ SOL: 0.016, USDC: 4, USDT: 4 }),
     // Jupiter Ultra charged 0.02% on SOL-stable fills in dry orders of 2026-11-05;
     // the figure Privacy Cash's swaps measured through Ultra is kept as the bound.
     routingFee: 0.0004,
-    note: 'Umbra v2 swaps SOL to USDC or USDT in a one-time wallet through Jupiter, after a private withdrawal.',
+    note: 'Umbra v2 swaps in a one-time wallet through Jupiter, after a private withdrawal.',
   }),
   bridge: Object.freeze({
     execution: 'unsupported',

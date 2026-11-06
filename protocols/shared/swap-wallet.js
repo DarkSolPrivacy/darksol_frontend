@@ -2,13 +2,19 @@
 // 1. the pool withdraws the input privately to the wallet, 2. the wallet swaps
 // it through Jupiter, 3. it pays the recipient everything it holds and is left
 // empty. The pool withdrawal is what hides the payer. Privacy Cash (swap.js)
-// reaches Jupiter through its relayer; Umbra v2 calls Jupiter Ultra itself
-// (ultraSwap below).
+// reaches Jupiter through its relayer; Umbra v2 and Cloak call Jupiter Ultra
+// themselves (ultraSwap below).
+//
+// The wallet holds no SOL when the input is a token, so Jupiter must pay the
+// swap's network fee (a gasless order; measured 2026-11-06: 4 USDC to USDT in a
+// wallet with no SOL was filled gasless, Jupiter keeping about 0.13 USDT for it).
+// Between two tokens the output goes straight to the recipient (Ultra's
+// `receiver`), so the wallet never needs SOL for a payout either.
 import {
   createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction,
   createTransferCheckedInstruction, getAssociatedTokenAddressSync,
 } from '@solana/spl-token'
-import { ComputeBudgetProgram, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
+import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
 import { ENDPOINTS, MINTS } from '../addresses.js'
 import { TOKEN_DECIMALS } from './units.js'
 
@@ -58,13 +64,14 @@ async function confirmed(connection, signature) {
 }
 
 // Jupiter Ultra builds the order for the swap wallet, which signs it, and
-// Jupiter sends it. A fill by Jupiter's market makers pays its own network fee;
-// any other is paid from the wallet's SOL, which is why a pool that calls this
-// swaps only from SOL and holds part of it back.
-export async function ultraSwap(burner, inputAsset, outputAsset, units) {
-  const query = new URLSearchParams({ inputMint: MINTS[inputAsset], outputMint: MINTS[outputAsset], amount: String(units), taker: burner.publicKey.toBase58() })
+// Jupiter sends it. `receiver` takes the output instead of the wallet. With
+// `gasless` (a wallet holding no SOL) only an order whose network fee Jupiter
+// pays is sent; any other would fail on chain, so it is refused here first.
+export async function ultraSwap(burner, inputAsset, outputAsset, units, { receiver, gasless = false } = {}) {
+  const query = new URLSearchParams({ inputMint: MINTS[inputAsset], outputMint: MINTS[outputAsset], amount: String(units), taker: burner.publicKey.toBase58(), ...(receiver ? { receiver: String(receiver) } : {}) })
   const order = await fetch(`${ENDPOINTS.jupiterUltra}/order?${query}`).then((response) => response.json())
   if (!order?.transaction) throw new Error(`Jupiter returned no swap transaction${order?.errorMessage || order?.error ? `: ${order.errorMessage || order.error}` : ''}`)
+  if (gasless && !order.gasless) throw new Error('Jupiter would not pay this swap\'s network fee')
   const transaction = VersionedTransaction.deserialize(fromBase64(order.transaction))
   transaction.sign([burner])
   const result = await fetch(`${ENDPOINTS.jupiterUltra}/execute`, {
@@ -116,10 +123,12 @@ async function payout({ connection, burner, recipient, inputAsset, outputAsset }
 
 // Carries a swap to the recipient from wherever it stopped, reading only what
 // the swap wallet holds: swaps the input still there with `swap(burner, input,
-// output, units)`, then pays out. `task.keep` is the SOL of a SOL input not to
-// swap. With `wait`, the input is still on its way in. `forget` drops the saved
-// task once nothing is left to do. Returns the payout, or null when the wallet
-// was already empty.
+// output, units, { gasless })`, then pays out. Between two tokens it swaps
+// straight to the recipient through Jupiter Ultra, whatever `swap` is, and
+// there is nothing to pay out. `task.keep` is the SOL of a SOL input not to
+// swap. With `wait`, the input is still on its way in. `forget` drops the
+// saved task once nothing is left to do. Returns the payout, or null when the
+// wallet was already empty.
 export async function finishSwap({ connection, burner, task, wait = false, swap, forget, onStatus }) {
   const { inputAsset, outputAsset } = task
   const wallet = burner.publicKey
@@ -128,9 +137,17 @@ export async function finishSwap({ connection, burner, task, wait = false, swap,
   const swappable = input - (inputAsset === 'SOL' ? BigInt(task.keep) : 0n)
   let swapSignature = null
   if (swappable > (inputAsset === 'SOL' ? SWAP_MINIMUM : 0n)) {
+    // A token input arrives with no SOL beside it: only a gasless order can run.
+    const gasless = inputAsset !== 'SOL' && !await holdings(connection, wallet, 'SOL')
+    if (inputAsset !== 'SOL' && outputAsset !== 'SOL') {
+      onStatus(`Swapping ${inputAsset} to ${outputAsset} for the recipient…`)
+      swapSignature = await ultraSwap(burner, inputAsset, outputAsset, swappable, { receiver: task.recipient, gasless })
+      forget()
+      return { swapSignature, signature: swapSignature, tokens: null, lamports: 0n }
+    }
     const before = await holdings(connection, wallet, outputAsset)
     onStatus(`Swapping ${inputAsset} to ${outputAsset}…`)
-    swapSignature = await swap(burner, inputAsset, outputAsset, swappable)
+    swapSignature = await swap(burner, inputAsset, outputAsset, swappable, { gasless })
     await arrival(connection, wallet, outputAsset, before, () => onStatus('Waiting for the swap to settle…'))
   }
   if (!await holdings(connection, wallet, outputAsset) && !await holdings(connection, wallet, 'SOL')) {
@@ -141,4 +158,24 @@ export async function finishSwap({ connection, burner, task, wait = false, swap,
   const paid = await payout({ connection, burner, recipient: new PublicKey(task.recipient), inputAsset, outputAsset })
   forget()
   return { swapSignature, ...paid }
+}
+
+// The one-time wallet a swap runs in, saved in this browser under `key` before
+// any input moves to it, so a swap cut short anywhere after is found again.
+export function startSwapTask(key, { inputAsset, outputAsset, recipient, keep = 0n }) {
+  const burner = Keypair.generate()
+  const task = { secret: toBase64(burner.secretKey), inputAsset, outputAsset, recipient: String(recipient), keep: String(keep) }
+  localStorage.setItem(key, JSON.stringify(task))
+  return { burner, task }
+}
+
+// Finishes the swap an earlier run left under `key`: the payout with its task,
+// or null when there was none or its wallet was already empty.
+export async function finishSavedSwap({ key, connection, swap, onStatus }) {
+  let task = null
+  try { task = JSON.parse(localStorage.getItem(key)) } catch { task = null }
+  if (!task?.secret) return null
+  onStatus('Finishing your earlier swap…')
+  const paid = await finishSwap({ connection, burner: Keypair.fromSecretKey(fromBase64(task.secret)), task, swap, forget: () => localStorage.removeItem(key), onStatus })
+  return paid && { ...paid, task }
 }

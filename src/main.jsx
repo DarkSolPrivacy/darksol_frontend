@@ -1035,11 +1035,12 @@ function PrivacyHome({ walletSession, settings }) {
     const shield = activeShield === 'off' ? null : { mode: activeShield, pools: shielded.pools, amounts: amounts.every((value) => value !== null && value > 0n) ? amounts : null }
     const normalized = (comparison.rankings || []).filter((item) => ROUTE_POOL_IDS.includes(providerKey(item)))
       .map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0, shield))
-      // A swap smaller than its route can run (Umbra v2 holds part of the SOL back for its swap wallet's fees) is not offered.
+      // A swap smaller than its route can run is not offered: Umbra v2 holds part of
+      // a SOL input back for fees, and a token input needs Jupiter to pay its fee.
       .map((item) => {
-        const minimum = isSwap && PROTOCOLS[item.protocol]?.swap?.minimumInput
-        return minimum && item.available && !(Number(comparison.amount) > minimum)
-          ? { ...item, available: false, unavailableReason: `${poolLabel(item.protocol)} swaps more than ${minimum} ${asset}.` } : item
+        const minimum = isSwap && PROTOCOLS[item.protocol]?.swap?.minimumInput?.[asset]
+        return minimum && item.available && (asset === 'SOL' ? !(Number(comparison.amount) > minimum) : Number(comparison.amount) < minimum)
+          ? { ...item, available: false, unavailableReason: `${poolLabel(item.protocol)} swaps ${asset === 'SOL' ? 'more than' : 'at least'} ${minimum} ${asset}.` } : item
       })
     if (strategy === 'multiple') {
       for (const id of SINGLE_RECIPIENT_IDS) {

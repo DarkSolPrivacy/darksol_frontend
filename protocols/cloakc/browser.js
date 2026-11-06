@@ -2,6 +2,8 @@ import { getAssociatedTokenAddressSync } from '@solana/spl-token'
 import { Connection, PublicKey } from '@solana/web3.js'
 import { MINTS } from '../addresses.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
+import { finishSavedSwap, finishSwap, startSwapTask, ultraSwap } from '../shared/swap-wallet.js'
+import manifest from './manifest.js'
 
 // Cloak settles into a public SPL recipient; the mints come from the registry.
 const OUTPUT_MINTS = Object.freeze({ USDC: MINTS.USDC, USDT: MINTS.USDT })
@@ -298,6 +300,69 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
   return receipt
 }
 
+const swapTaskKey = (wallet) => `cloakc-swap-${wallet}`
+
+// Swaps a USDC or USDT input, which Cloak's own swap (SOL only) cannot, in a
+// one-time wallet (shared/swap-wallet.js): Cloak withdraws it privately to the
+// wallet, which swaps it through Jupiter Ultra, Jupiter paying the network fee,
+// and pays the recipient (straight from the swap between two tokens). From the
+// wallet `totalBaseUnits` is deposited first and what is not swapped
+// (`recipients`' total) stays as a change note; `source: 'shielded'` spends the
+// notes saved in this browser. The one-time wallet's key stays in this browser
+// until the swap is done, so the next Cloak swap here finishes one cut short.
+async function swapThroughWallet({ provider, inputAsset, outputAsset, totalBaseUnits, recipient, recipients, source = 'wallet', onStatus = () => {} }) {
+  if (!MINTS[inputAsset] || !manifest.swap.outputAssets.includes(outputAsset) || inputAsset === outputAsset) throw new Error(`CLOAKC cannot swap ${inputAsset} to ${outputAsset}`)
+  if (!provider?.publicKey || typeof provider.signMessage !== 'function') throw new Error('Connect a Solana wallet that supports message signing')
+  const fromShielded = source === 'shielded'
+  const units = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : BigInt(totalBaseUnits)
+  if (!fromShielded && units > BigInt(totalBaseUnits)) throw new Error('The swap takes more than the deposit')
+  const minimum = manifest.swap.minimumInput[inputAsset]
+  if (Number(units) / 10 ** TOKEN_DECIMALS[inputAsset] < minimum) throw new Error(`Swap at least ${minimum} ${inputAsset} through Cloak: Jupiter pays the network fee only for a large enough swap`)
+  const recipientKey = new PublicKey(String(recipient))
+  const wallet = String(provider.publicKey)
+  const key = swapTaskKey(wallet)
+  const connection = rpcConnection()
+
+  // Finished alone, never followed by this new swap: the user retrying a swap
+  // that stopped means that swap, not a second one.
+  const earlier = await finishSavedSwap({ key, connection, swap: ultraSwap, onStatus })
+  if (earlier) throw new Error(`Finished your earlier interrupted swap: ${earlier.tokens ? `${Number(earlier.tokens) / 10 ** TOKEN_DECIMALS[earlier.task.outputAsset]} ${earlier.task.outputAsset}` : earlier.lamports ? `${Number(earlier.lamports) / 1e9} SOL` : `the ${earlier.task.outputAsset}`} went to ${earlier.task.recipient}. Nothing new was sent; swap again to start this one.`)
+
+  let sdk, options, notes, depositSignature = null
+  if (fromShielded) {
+    onStatus('Reading your Cloak notes...')
+    sdk = await import('@cloak.dev/sdk')
+    options = relayOptions(sdk, provider, connection, onStatus)
+    notes = await pickSaved(sdk, connection, wallet, inputAsset, units)
+  } else {
+    const made = await depositNote({ provider, asset: inputAsset, totalBaseUnits: BigInt(totalBaseUnits), onStatus })
+    sdk = made.sdk
+    // The relay rejects a withdrawal without exactly one compact chain note.
+    options = { ...made.options, disableChainNotes: false, cachedMerkleTree: made.deposit.merkleTree }
+    notes = made.deposit.outputUtxos.filter((utxo) => utxo.amount > 0n)
+    depositSignature = made.deposit.signature
+  }
+  const receipt = { provider: 'cloakc', inputAsset, outputAsset, depositSignature, withdrawals: [] }
+  let stage = 'shielded'
+  try {
+    const { burner, task } = startSwapTask(key, { inputAsset, outputAsset, recipient: recipientKey.toBase58() })
+    onStatus(`Moving the ${inputAsset} to a one-time swap wallet...`)
+    await withdrawNotes({ sdk, options, wallet, notes, amount: units, recipient: burner.publicKey, onStatus })
+    stage = 'swap'
+    const paid = await finishSwap({ connection, burner, task, wait: true, swap: ultraSwap, forget: () => localStorage.removeItem(key), onStatus })
+    if (!paid) throw new Error('the swap wallet received nothing to swap')
+    receipt.swapSignature = paid.swapSignature
+    receipt.withdrawals = [{ tx: paid.signature }]
+    return receipt
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    if (fromShielded && stage === 'shielded') throw new Error(`The swap failed: ${reason}. Your Cloak notes stay saved in this browser.`)
+    const where = stage === 'shielded' ? 'your private CLOAKC note is saved in this browser: pay from it with Use shielded funds'
+      : 'what reached it waits in a one-time swap wallet whose key is saved in this browser, and your next Cloak swap here pays it to the recipient'
+    throw Object.assign(new Error(`${fromShielded ? 'The swap stopped' : 'Deposit succeeded, but the swap stopped'}: ${reason}. Nothing is lost: ${where}.`), depositSignature ? { receipt } : {})
+  }
+}
+
 // A SOL withdrawal's fee and minimum, in lamports: what sending a recipient SOL
 // for network fees costs (see withdrawalFor in shared/units.js).
 export async function solWithdrawalFee() {
@@ -335,6 +400,7 @@ export async function shieldedBalances({ provider }) {
 // silently doing the wrong thing.
 export async function execute({ kind, ...options }) {
   if (kind === 'send') return executeCloakSend(options)
-  if (kind === 'swap') return executeCloakSwap(options)
+  // Cloak's own swap spends SOL; a token input goes through a one-time wallet.
+  if (kind === 'swap') return options.inputAsset === 'SOL' ? executeCloakSwap(options) : swapThroughWallet(options)
   throw new Error(`CLOAKC has no browser ${kind} flow`)
 }

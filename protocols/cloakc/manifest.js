@@ -48,15 +48,21 @@ export default Object.freeze({
   swap: Object.freeze({
     execution: 'sdk',
     aggregator: 'Jupiter',
-    inputAssets: Object.freeze(['SOL']),
-    outputAssets: Object.freeze(['USDC', 'USDT']),
+    // Cloak's own swap spends SOL. A USDC or USDT input is withdrawn privately to
+    // a one-time wallet that swaps it through Jupiter Ultra, Jupiter paying the
+    // network fee (browser.js, shared/swap-wallet.js).
+    inputAssets: Object.freeze(['SOL', 'USDC', 'USDT']),
+    outputAssets: Object.freeze(['SOL', 'USDC', 'USDT']),
     // Cloak's relay routes through Jupiter's swap API, which added no fee on chain.
     routingFee: 0,
     // The swap leaves its change as a note: a deposit can be larger than the
     // swap (the rest stays shielded), or the swap can spend saved notes.
     keepShielded: true,
     fromShielded: true,
-    note: 'Cloak swaps private SOL to a public SPL-token recipient through Jupiter.',
+    // The least a token input swaps through the one-time wallet: what reaches it
+    // after Cloak's 0.45 + 0.3% exit fee must still be filled gasless (4 USDC was).
+    minimumInput: Object.freeze({ USDC: 5, USDT: 5 }),
+    note: 'Cloak swaps private SOL through Jupiter, and USDC or USDT in a one-time wallet through Jupiter.',
   }),
   bridge: Object.freeze({
     execution: 'unsupported',

@@ -46,14 +46,18 @@ export default Object.freeze({
   send: Object.freeze({ execution: 'sdk', deadline: true, keepShielded: true, fromShielded: true }),
   // The SDK has no swap; swap.js withdraws privately to a one-time swap wallet
   // derived from the wallet signature, swaps there through Jupiter via the
-  // relayer, and pays the recipient from that wallet. oneSideSol: a stable-to-
-  // stable swap would leave the swap wallet no SOL for its payout's fee.
+  // relayer, and pays the recipient from that wallet; between two stablecoins
+  // Jupiter Ultra pays the recipient directly (see minimumInput below).
   swap: Object.freeze({
     execution: 'sdk',
     aggregator: 'Jupiter',
     inputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
     outputAssets: Object.freeze(['USDC', 'SOL', 'USDT']),
-    oneSideSol: true,
+    // Between two tokens the swap wallet would hold no SOL for its payout, so
+    // the output goes straight to the recipient from a gasless Jupiter Ultra
+    // order instead (shared/swap-wallet.js); hence no SOL needed on either side.
+    // A token input must still be large enough for Jupiter to pay its fee.
+    minimumInput: Object.freeze({ USDC: 5, USDT: 5 }),
     // Only the swapped part is withdrawn into the swap wallet: the rest of a
     // deposit stays shielded, or the input comes from the shielded balance.
     keepShielded: true,

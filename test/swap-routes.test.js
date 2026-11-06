@@ -2,18 +2,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { swapEligibility } from '../src/swap-routes.js'
 
-test('Cloak supports only SOL to stablecoin swaps', () => {
-  assert.equal(swapEligibility('cloakc', 'SOL', 'USDC').available, true)
-  assert.equal(swapEligibility('cloakc', 'SOL', 'USDT').available, true)
-  assert.match(swapEligibility('cloakc', 'USDC', 'SOL').reason, /only from SOL/)
-})
-
-// Its swap wallet pays the re-deposit's fee from SOL, so SOL is on one side.
-test('PrivacyCash swaps between SOL and a stablecoin in both directions', () => {
-  for (const [input, output] of [['USDC', 'SOL'], ['USDT', 'SOL'], ['SOL', 'USDC'], ['SOL', 'USDT']]) {
-    assert.equal(swapEligibility('privacycash', input, output).available, true, `${input} -> ${output}`)
+// Cloak's own swap spends SOL; Privacy Cash and Umbra v2 swap in a one-time
+// wallet, and between two tokens Jupiter pays the recipient directly. So every
+// Solana pool swaps every pair of SOL, USDC and USDT.
+test('every Solana pool swaps every pair of SOL, USDC and USDT', () => {
+  const pairs = [['SOL', 'USDC'], ['SOL', 'USDT'], ['USDC', 'SOL'], ['USDT', 'SOL'], ['USDC', 'USDT'], ['USDT', 'USDC']]
+  for (const protocol of ['privacycash', 'cloakc', 'umbrav2']) {
+    for (const [input, output] of pairs) {
+      const route = swapEligibility(protocol, input, output)
+      assert.equal(route.available, true, `${protocol} ${input} -> ${output}: ${route.reason}`)
+      assert.equal(route.kind, 'swap')
+    }
   }
-  assert.match(swapEligibility('privacycash', 'USDC', 'USDT').reason, /to or from SOL/)
 })
 
 test('Curvy supports both directions for configured vault assets', () => {
