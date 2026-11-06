@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getWallets } from '@wallet-standard/app'
 import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js'
+import { failureReason, track, walletKind } from './product-events.js'
 
 const CHAIN = 'solana:mainnet'
 const REQUIRED = ['standard:connect', 'solana:signMessage', 'solana:signTransaction']
@@ -126,7 +127,7 @@ export function useWalletSession() {
       const options = walletChoices()
       if (!options.length) throw new Error('Install a Solana wallet such as Phantom or Solflare')
       const choice = options.length === 1 ? options[0] : await new Promise((resolve) => setPicker({ options, resolve }))
-      if (!choice) return null
+      if (!choice) { track('wallet_connect_failed', { reason: 'cancelled' }); return null }
       const { provider } = choice
       const connected = await provider.connect()
       const address = String(connected?.publicKey || provider.publicKey || '')
@@ -137,8 +138,9 @@ export function useWalletSession() {
       remember(choice.name)
       const session = { provider, address, name: choice.name, icon: choice.icon }
       setWallet(session)
+      track('wallet_connected', { wallet: walletKind(choice.name) })
       return session
-    })().finally(() => { pending.current = null; setConnecting(false); setPicker(null) })
+    })().catch((error) => { track('wallet_connect_failed', { reason: failureReason(error) }); throw error }).finally(() => { pending.current = null; setConnecting(false); setPicker(null) })
     return pending.current
   }
 

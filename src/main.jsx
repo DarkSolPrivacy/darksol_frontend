@@ -9,7 +9,8 @@ import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
 import PoolPrivacy from './pool-privacy.jsx'
 import { PRIVACY_POOLS } from './pool-privacy.js'
-import { recordPageView } from './page-views.js'
+import { dropCampaignTags, recordPageView } from './page-views.js'
+import { failureReason, track } from './product-events.js'
 import { useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
@@ -564,6 +565,9 @@ function PrivacyHome({ walletSession, settings }) {
   const keeping = activeShield === 'keep'
   const shieldOnly = activeShield === 'shield'
   const payingShielded = activeShield === 'use'
+  // What the product counters call this action (src/product-events.js).
+  const actionKind = isBridge ? 'bridge' : isSwap ? 'swap' : 'send'
+  const actionMode = { off: 'standard', keep: 'keep', shield: 'shield', use: 'use' }[activeShield]
   // A send, to one recipient or several, keeping part shielded, paying from
   // shielded funds or neither, picks from the measured private options.
   const optionsMode = !isSwap && !isBridge && !shieldOnly
@@ -870,10 +874,12 @@ function PrivacyHome({ walletSession, settings }) {
       return setSendError('This recommended route is not enabled for browser execution yet')
     }
     if (scheduledBlocks) return setSendError('Finish or dismiss the delayed delivery above first.')
+    const stats = { kind, mode: actionMode, protocol: recommended?.protocol }
+    track('send_started', stats)
     setSending(true)
     try {
       const gas = await askForGas(kind)
-      if (!gas) return
+      if (!gas) return track('send_failed', { ...stats, stage: 'deposit', reason: 'cancelled' })
       // One dispatch for every protocol and every capability. The adapter is
       // still a lazy chunk, so no privacy SDK reaches the entry bundle.
       const { execute } = shieldOnly && shieldViaLinks
@@ -904,7 +910,9 @@ function PrivacyHome({ walletSession, settings }) {
       // The shielded balance changed; the next read must not start from the old figure.
       if (keeping || shieldOnly || payingShielded || kind === 'swap' || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
       setReceipt({ ...result, kept: keeping ? `${rawTokenText(keepRaw, asset)} ${asset}` : null, shielded: shieldOnly ? `${rawTokenText(totalRaw, asset)} ${asset}` : null }); setSendStatus(shieldOnly ? 'Shielded' : 'Sent')
+      track('send_completed', { ...stats, recipients: kind === 'send' && !shieldOnly && receiverCount > 1 ? 'many' : 'one' })
     } catch (transferError) {
+      track('send_failed', { ...stats, stage: payingShielded || transferError?.receipt?.depositSignature ? 'withdrawal' : 'deposit', reason: failureReason(transferError) })
       if (transferError?.receipt) setReceipt(transferError.receipt)
       const message = transferError instanceof Error ? transferError.message : String(transferError)
       setSendError(explainFailure(message)); setSendStatus('')
@@ -920,6 +928,9 @@ function PrivacyHome({ walletSession, settings }) {
     setReceipt(null)
     if (!wallet) return connectWallet()
     if (!activeValidation.valid) return setSendError(activeValidation.error)
+    const stats = { kind: 'send', mode: option.kind === 'later' ? 'later' : option.kind === 'balance' ? 'use' : option.kept > 0n ? 'keep' : 'standard', protocol: option.protocol }
+    const recipients = transferValidation.rows.length > 1 ? 'many' : 'one'
+    track('send_started', stats)
     setSending(true)
     try {
       const rows = transferValidation.rows
@@ -934,10 +945,11 @@ function PrivacyHome({ walletSession, settings }) {
         if (settings.remind && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
         shieldedCache.delete(wallet.address); shielded.refresh()
         setReceipt({ ...result, pending: item }); setSendStatus('')
+        track('send_completed', { ...stats, recipients })
         return
       }
       const gas = await askForGas('send')
-      if (!gas) return
+      if (!gas) return track('send_failed', { ...stats, stage: 'deposit', reason: 'cancelled' })
       const fromBalance = option.kind === 'balance'
       const result = await execute({
         kind: 'send', provider: wallet.provider, asset, recipient: rows[0].address.publicKey,
@@ -950,7 +962,9 @@ function PrivacyHome({ walletSession, settings }) {
       }
       if (fromBalance || option.kept > 0n || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
       setReceipt({ ...result, kept: option.kept > 0n ? `${rawTokenText(option.kept, asset)} ${asset}` : null }); setSendStatus('Sent')
+      track('send_completed', { ...stats, recipients })
     } catch (transferError) {
+      track('send_failed', { ...stats, stage: option.kind === 'balance' || transferError?.receipt?.depositSignature ? 'withdrawal' : 'deposit', reason: failureReason(transferError) })
       if (transferError?.receipt) setReceipt(transferError.receipt)
       setSendError(explainFailure(transferError instanceof Error ? transferError.message : String(transferError))); setSendStatus('')
     } finally { setSending(false) }
@@ -967,6 +981,8 @@ function PrivacyHome({ walletSession, settings }) {
     const text = (units) => rawTokenText(BigInt(units), item.asset)
     const check = validateTransfer({ asset: item.asset, amount: text(item.baseUnits), recipients: parts.map((part) => ({ address: part.address, amount: text(part.baseUnits) })), senderAddress: wallet.address })
     if (!check.valid) return setSendError(check.error)
+    const stats = { kind: 'send', mode: 'later_send', protocol: item.protocol }
+    track('send_started', stats)
     setSending(true)
     try {
       const { execute } = await loadBrowserAdapter(item.protocol)
@@ -975,7 +991,9 @@ function PrivacyHome({ walletSession, settings }) {
       setPending((items) => items.filter((entry) => entry.id !== item.id))
       shieldedCache.delete(wallet.address); shielded.refresh()
       setReceipt(result); setSendStatus('Sent')
+      track('send_completed', { ...stats, recipients: parts.length > 1 ? 'many' : 'one' })
     } catch (error) {
+      track('send_failed', { ...stats, stage: 'withdrawal', reason: failureReason(error) })
       if (error?.receipt) setReceipt(error.receipt)
       setSendError(explainFailure(error instanceof Error ? error.message : String(error))); setSendStatus('')
     } finally { setSending(false) }
@@ -1091,6 +1109,14 @@ function PrivacyHome({ walletSession, settings }) {
   const optionAction = !chosenOption ? '' : chosenOption.kind === 'later' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
     : chosenOption.kind === 'balance' ? `Send ${sentAmount} ${asset} from shielded` : `Send ${sentAmount} ${asset} now`
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
+  // The first route a visitor stays on for two seconds, once per page load: ready, or why not.
+  const quoteResult = !formValid || loading ? null : chosenOption ? 'ready' : !recommended ? 'no_route'
+    : recommended.band === 'NOT PRIVATE' ? 'not_private' : !browserExecutable ? 'unsupported' : 'ready'
+  useEffect(() => {
+    if (!quoteResult) return undefined
+    const timer = setTimeout(() => track('quote_shown', { kind: actionKind, result: quoteResult }, { once: true }), 2000)
+    return () => clearTimeout(timer)
+  }, [quoteResult, actionKind])
   // Any deposit consolidates the wallet's notes, including the one a queued proof
   // spends, and would replace the job whose Send now the user still needs. So the
   // same pool stays off limits until the delivery lands or is dismissed. A swap
@@ -1185,7 +1211,7 @@ function PrivacyHome({ walletSession, settings }) {
             {!shieldOnly && !isSwap && <><button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button></>}
           </>}
         </div>
-        {shieldOnly && <PoolPicker pools={shieldPools.pools} value={shieldPool} onChange={setShieldPool} asset={asset} amountValid={totalRaw > 0n} sort={shieldSort} summary={summary} disabled={sending} labelledBy="shieldPoolLabel" />}
+        {shieldOnly && <PoolPicker pools={shieldPools.pools} value={shieldPool} onChange={(id) => { if (id !== shieldPool) track('protocol_selected', { protocol: id, where: 'shield' }); setShieldPool(id) }} asset={asset} amountValid={totalRaw > 0n} sort={shieldSort} summary={summary} disabled={sending} labelledBy="shieldPoolLabel" />}
         {!shieldOnly && receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives{swapOutput ? ` ≈ ${compact(swapOutput.amount, tokenDigits(swapOutput.amount, swapOutput.asset))}` : ''}</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
         {keeping && <div className="recipientRow keepRow">
           <span aria-hidden="true"><ShieldCheck /></span>
@@ -1207,7 +1233,11 @@ function PrivacyHome({ walletSession, settings }) {
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
       {moreOffer && <ShieldMore option={moreOffer} asset={asset} on={shieldMore} onToggle={(on) => { setShieldMore(on); setChosenOptionId(null) }} />}
-      {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={setChosenOptionId} asset={asset}
+      {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={(id) => {
+        const option = optionResult?.options.find((item) => item.id === id)
+        if (option && option.protocol !== chosenOption?.protocol) track('protocol_selected', { protocol: option.protocol, where: 'send' })
+        setChosenOptionId(id)
+      }} asset={asset}
         shielded={Object.fromEntries(FROM_SHIELDED_IDS.map((id) => [id, !wallet ? 0n : shieldedByPool[id]]))}
         reading={Boolean(wallet) && Boolean(hintPool) && (!shielded.pools[hintPool] || shielded.pools[hintPool].state === 'loading')} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
@@ -1225,7 +1255,7 @@ function PrivacyHome({ walletSession, settings }) {
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
     {!chosenOption && !measured && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}
-      onDelay={null} open={detailsOpen} onToggle={() => setDetailsOpen(!detailsOpen)} />}
+      onDelay={null} open={detailsOpen} onToggle={() => { if (!detailsOpen) track('route_details_opened', {}, { once: true }); setDetailsOpen(!detailsOpen) }} />}
     {(sendError || receipt) && <section className={`transferResult ${sendError ? 'error' : ''}`}>{sendError ? <CircleAlert /> : <Check />}<span>{sendError || (isBridge ? 'Bridge submitted' : isSwap ? `Swap submitted${receipt?.kept ? ` · ${receipt.kept} kept shielded` : ''}` : receipt?.pending ? `Deposited · ${tokenText(BigInt(receipt.pending.baseUnits), receipt.pending.asset)} ${receipt.pending.asset} is ready to send ${new Date(receipt.pending.readyAt).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}` : receipt?.shielded ? `${receipt.shielded} ${receipt.viaLinks ? 'shielded · collect it from Payment links' : 'is now in your private balance'}` : receipt?.kept ? `Transfer complete · ${receipt.kept} kept shielded`
         : !receipt?.depositSignature && receipt?.withdrawals?.length > 1 ? `Transfer complete · sent in ${receipt.withdrawals.length} private withdrawals` : 'Transfer complete')}{!sendError && receipt?.gas && ` · ${receipt.gasText} for fees sent`}</span>{(receipt?.withdrawals?.at(-1)?.tx || receipt?.depositSignature) && <a href={`https://solscan.io/tx/${receipt.withdrawals.at(-1)?.tx || receipt.depositSignature}`} target="_blank" rel="noreferrer">View transaction <ExternalLink /></a>}</section>}
     {receipt?.gasError && <section className="notice error"><CircleAlert /><span>The SOL for fees was not sent: {receipt.gasError}</span></section>}
@@ -1699,7 +1729,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   return <div className="protocolPage">
     <header className="analyticsHeader"><div><h1>Pool privacy</h1><p>How often withdrawals pointed to one wallet in the last 30 days. Most of it comes down to how people use a pool.</p></div><div className="analyticsActions"><a className="ghost launchApp" href="/" onClick={onLaunchApp}>Send privately <ArrowUpRight /></a></div></header>
     <LiquidityUniverse />
-    <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => onSelectProtocol(id)} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}</span></button>)}</div>
+    <div className="analyticsProtocolTabs" aria-label="Analytics project">{sortByTvl(Object.keys(PROTOCOLS), poolSizes.pools).map((id) => <button type="button" className={protocol === id ? 'on' : ''} onClick={() => { if (id !== protocol) track('protocol_selected', { protocol: id, where: 'analytics' }); onSelectProtocol(id) }} key={id}><ProtocolLogo protocol={id} name={poolLabel(id)} /><span>{poolLabel(id)}</span></button>)}</div>
     <div className="analyticsToolbar">
       <div className="viewTabs" role="tablist" aria-label="View">
         <button type="button" role="tab" aria-selected={view === 'privacy'} disabled={!traced} onClick={() => setTab('privacy')}>Privacy{!traced && <em>Soon</em>}</button>
@@ -1906,6 +1936,7 @@ function App() {
     lastViewedPath.current = path
     recordPageView(path)
   }, [path])
+  useEffect(dropCampaignTags, [])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
   // The send settings live here so the top bar can open them beside the wallet.

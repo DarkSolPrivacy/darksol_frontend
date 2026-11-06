@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpDown, Check, ChevronDown, Copy, Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, Wallet, X } from 'lucide-react'
 import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { explainFailure } from '../protocols/shared/network.js'
+import { failureReason, track } from './product-events.js'
 import { parseAmount, sanitizeAmount, sanitizeSolanaAddress, validateSolanaAddress } from './transfer-validation.js'
 import { Connection } from '@solana/web3.js'
 import { prepareMerchantAccess, preparePaymentKeys, preparePaymentNote, readPaymentDrafts, removePaymentDraft } from './payment-notes.js'
@@ -368,16 +369,22 @@ export default function PaymentLinks({ summary, walletSession }) {
     event.preventDefault()
     if (wallet && (!amountResult.valid || amountError)) return
     run(async (signal) => {
-      const identity = await merchantAccess(signal)
-      const keys = await paymentKeys(signal)
-      setStatus('Reserving a payment note...')
-      // Read fresh: a key reused across two invoices would link them and share an IV.
-      const { next_index } = await listPaymentLinks({ access: identity, signal })
-      const record = await preparePaymentNote({ ...wallet, keys, index: usedIndexes(next_index), protocol: pool, asset, amount, reference, signal,
-        onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
-      signal.throwIfAborted()
-      setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
-      await publish(record, signal, identity)
+      try {
+        const identity = await merchantAccess(signal)
+        const keys = await paymentKeys(signal)
+        setStatus('Reserving a payment note...')
+        // Read fresh: a key reused across two invoices would link them and share an IV.
+        const { next_index } = await listPaymentLinks({ access: identity, signal })
+        const record = await preparePaymentNote({ ...wallet, keys, index: usedIndexes(next_index), protocol: pool, asset, amount, reference, signal,
+          onStatus: (message) => { if (!signal.aborted) setStatus(message) } })
+        signal.throwIfAborted()
+        setDraftState((current) => ({ address: wallet.address, records: [record, ...current.records] }))
+        await publish(record, signal, identity)
+        track('payment_link_created', { protocol: record.invoice.protocol, asset: record.invoice.asset })
+      } catch (cause) {
+        if (!signal.aborted) track('payment_link_failed', { reason: failureReason(cause) })
+        throw cause
+      }
     }, setError, 'create')
   }
 
@@ -583,7 +590,7 @@ export default function PaymentLinks({ summary, walletSession }) {
       <label className="paymentFieldLabel" htmlFor="paymentAmount">Request amount</label>
       <div className="amountRow paymentAmountRow">
         <span className="amountUsd">{usdText(amount, prices[asset])}</span>
-        <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => setAmount(sanitizeAmount(event.target.value))} />
+        <input id="paymentAmount" disabled={busy} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" maxLength={30} value={amount} aria-invalid={Boolean(amountError)} aria-describedby={amountError ? 'paymentAmountError' : undefined} onChange={(event) => { track('payment_link_started', {}, { once: true }); setAmount(sanitizeAmount(event.target.value)) }} />
         <div className="assetPicker">
           <button type="button" aria-label="Request asset" aria-haspopup="listbox" aria-expanded={assetMenuOpen} disabled={busy} onClick={() => setAssetMenuOpen(!assetMenuOpen)}>
             <img className="assetLogo" src={assetLogo(asset)} alt="" /><b>{asset}</b><ChevronDown /></button>

@@ -135,3 +135,60 @@ test('in-app page views count once with bounded categories and never proxy or fo
   assert.equal(JSON.stringify(requests).includes('192.0.2.3'), false)
   await Promise.all(pending)
 })
+
+test('product events forward one bounded event without the country, and only from the site itself', async (t) => {
+  t.mock.property(process, 'env', { ...process.env, VERCEL_ENV: 'production', TRAFFIC_INGEST_TOKEN: 'a'.repeat(64) })
+  assert.ok(config.matcher.includes('/api/event'))
+  const requests = [], pending = []
+  const key = Symbol.for('@vercel/request-context'), original = globalThis[key]
+  globalThis[key] = { get: () => ({ waitUntil: promise => pending.push(promise) }) }
+  t.after(() => { if (original) globalThis[key] = original; else delete globalThis[key] })
+  t.mock.method(globalThis, 'fetch', async (url, options) => { requests.push({ url, ...options }); return new Response(null, { status: 204 }) })
+  const request = (query, headers = {}, method = 'POST', host = 'darksol.app') => new Request(`https://${host}/api/event?${query}`, { method, headers: {
+    origin: 'https://darksol.app', 'sec-fetch-site': 'same-origin', 'x-vercel-ip-country': 'ES', 'x-forwarded-for': '192.0.2.3', ...headers,
+  } })
+  const invoke = (req) => { const response = middleware(req); assert.equal(response.status, 204); assert.equal(response.headers.get('x-middleware-next'), null) }
+  invoke(request('e=send_completed&kind=swap&protocol=umbrav2&mode=keep&recipients=one'))
+  assert.equal(requests.at(-1).url, 'https://api.darksol.app/internal/events')
+  assert.deepEqual(JSON.parse(requests.at(-1).body), { event: 'send_completed', props: { kind: 'swap', protocol: 'umbrav2', mode: 'keep', recipients: 'one' } })
+  assert.deepEqual(requests.at(-1).headers, { Authorization: `Bearer ${'a'.repeat(64)}`, 'Content-Type': 'application/json' })
+  invoke(request('e=route_details_opened'))
+  assert.deepEqual(JSON.parse(requests.at(-1).body), { event: 'route_details_opened', props: {} })
+  const counted = requests.length
+  for (const query of ['', 'e=', 'e=Send', 'e=send_completed&e=send_failed', 'e=send_completed&kind=swap&kind=send', 'kind=swap',
+    'e=send_completed&wallet=7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', 'e=send_completed&amount=1.5', 'e=send_completed&Kind=swap',
+    `e=send_completed&${[...'abcdefghi'].map((name) => `${name}=x`).join('&')}`, `e=${'a'.repeat(41)}`]) invoke(request(query))
+  for (const method of ['GET', 'HEAD', 'PUT']) invoke(request('e=send_completed', {}, method))
+  for (const headers of [{ origin: 'https://evil.test' }, { 'sec-fetch-site': 'cross-site' }, { dnt: '1' }, { 'sec-gpc': '1' }, { 'user-agent': 'HeadlessChrome' }]) {
+    invoke(request('e=send_completed', headers))
+  }
+  for (const host of ['docs.darksol.app', 'preview.vercel.app']) invoke(request('e=send_completed', {}, 'POST', host))
+  process.env.VERCEL_ENV = 'preview'; invoke(request('e=send_completed'))
+  assert.equal(requests.length, counted)
+  assert.equal(JSON.stringify(requests).includes('ES'), false)
+  assert.equal(JSON.stringify(requests).includes('192.0.2.3'), false)
+  await Promise.all(pending)
+})
+
+test('campaign tags on a page load are forwarded lowercased, and only in the accepted shape', async (t) => {
+  t.mock.property(process, 'env', { ...process.env, VERCEL_ENV: 'production', TRAFFIC_INGEST_TOKEN: 'a'.repeat(64) })
+  const requests = [], pending = []
+  const key = Symbol.for('@vercel/request-context'), original = globalThis[key]
+  globalThis[key] = { get: () => ({ waitUntil: promise => pending.push(promise) }) }
+  t.after(() => { if (original) globalThis[key] = original; else delete globalThis[key] })
+  t.mock.method(globalThis, 'fetch', async (_url, options) => { requests.push(JSON.parse(options.body)); return new Response(null, { status: 204 }) })
+  const visit = (url) => middleware(new Request(url, { headers: { accept: 'text/html', 'x-vercel-ip-country': 'ES' } }))
+  visit('https://darksol.app/?utm_source=X&utm_campaign=privacy_comparison&utm_medium=social&ref=secret')
+  assert.deepEqual(requests.at(-1), { country: 'ES', page: '/', source: 'x', campaign: 'privacy_comparison' })
+  visit('https://darksol.app/payment-links?utm_source=conference')
+  assert.deepEqual(requests.at(-1), { country: 'ES', page: '/payment-links', source: 'conference' })
+  for (const query of ['utm_campaign=launch', 'utm_source=has%20space&utm_campaign=launch', `utm_source=${'x'.repeat(41)}`, 'utm_source=-x']) {
+    visit(`https://darksol.app/?${query}`)
+    assert.deepEqual(requests.at(-1), { country: 'ES', page: '/' })
+  }
+  visit('https://darksol.app/?utm_source=x&utm_campaign=Has%20Space')
+  assert.deepEqual(requests.at(-1), { country: 'ES', page: '/', source: 'x' })
+  assert.equal(JSON.stringify(requests).includes('secret'), false)
+  assert.equal(JSON.stringify(requests).includes('social'), false)
+  await Promise.all(pending)
+})
