@@ -96,8 +96,8 @@ test('PROVIDER_CAPABILITIES reproduces server/privacy-engine.js', () => {
 test('SWAP_CAPABILITIES reproduces src/swap-routes.js', () => {
   assert.deepEqual(pick(SWAP_CAPABILITIES), {
     cloakc: {
-      inputAssets: ['SOL', 'USDC', 'USDT'], outputAssets: ['SOL', 'USDC', 'USDT'], execution: 'sdk',
-      note: 'Cloak swaps private SOL through Jupiter, and USDC or USDT in a one-time wallet through Jupiter.',
+      inputAssets: ['SOL'], outputAssets: ['USDC', 'USDT'], execution: 'sdk',
+      note: 'Cloak swaps private SOL to a public SPL-token recipient through Jupiter.',
     },
     privacycash: {
       inputAssets: ['USDC', 'SOL', 'USDT'], outputAssets: ['USDC', 'SOL', 'USDT'],

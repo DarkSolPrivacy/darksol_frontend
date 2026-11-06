@@ -1145,7 +1145,7 @@ function PrivacyHome({ walletSession, settings }) {
   const swapOutput = isSwap ? recommended?.settlement?.output : null
   // Paying from shielded funds starts with the signature that reads the balance,
   // unless a pool already read can pay it.
-  const revealFirst = Boolean(wallet) && payingShielded && shieldedLocked && !shieldedReading && !recommended
+  const revealFirst = Boolean(wallet) && payingShielded && shieldedLocked && !shieldedReading && !recommended && !submitted
   // A pool still reading holds the button only while no pool can pay yet.
   const awaitingShielded = payingShielded && shieldedReading && !recommended
   // Every pool scored and none can take it (USDC to USDT, say): say why rather than leave a dead button.

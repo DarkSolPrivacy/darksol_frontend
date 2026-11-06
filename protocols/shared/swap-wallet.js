@@ -2,8 +2,8 @@
 // 1. the pool withdraws the input privately to the wallet, 2. the wallet swaps
 // it through Jupiter, 3. it pays the recipient everything it holds and is left
 // empty. The pool withdrawal is what hides the payer. Privacy Cash (swap.js)
-// reaches Jupiter through its relayer; Umbra v2 and Cloak call Jupiter Ultra
-// themselves (ultraSwap below).
+// reaches Jupiter through its relayer, except between two tokens; Umbra v2
+// calls Jupiter Ultra itself (ultraSwap below).
 //
 // The wallet holds no SOL when the input is a token, so Jupiter must pay the
 // swap's network fee (a gasless order; measured 2026-11-06: 4 USDC to USDT in a
