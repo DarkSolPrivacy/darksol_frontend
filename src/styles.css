@@ -194,6 +194,7 @@ nav .navArrow { width: 12px; height: 12px; margin-left: auto; color: var(--text-
 .xLink:hover { color: var(--text-primary); }
 .xLink svg { width: 12px; height: 12px; }
 .xLink + .xLink { margin-top: 8px; }
+.telegramLink svg { width: 16px; height: 16px; }
 
 /* Collapsed rail */
 .sidebarClosed aside { width: var(--rail); }
