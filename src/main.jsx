@@ -1083,6 +1083,7 @@ function PrivacyHome({ walletSession, settings }) {
   }, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, shielded.pools, receiverAmounts, receiverCount, keeping, payingShielded, totalRaw])
   const moreOffer = moreResult?.suggested && moreResult.suggested.kept > 0n && moreResult.suggested.score > (plainResult?.suggested?.score ?? -1) ? moreResult.suggested : null
   const optionResult = shieldMore && moreOffer ? moreResult : plainResult
+  const toggleMore = (on) => { setShieldMore(on); setChosenOptionId(null) }
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
   // The pool whose shielded balance the hint below the options scores.
   const hintPool = optionResult?.balanceHint?.protocol
@@ -1158,6 +1159,17 @@ function PrivacyHome({ walletSession, settings }) {
             : `0 ${asset} available`],
   ]
 
+  // Shield and add-recipient sit at the end of the first address row.
+  const recipientActions = !isBridge && <div className="recipientActions">
+    <button type="button" className={`shieldControl${activeShield !== 'off' ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={shieldMenuOpen} aria-label={shieldLabel} data-tooltip={shieldLabel}
+      onClick={() => setShieldMenuOpen(!shieldMenuOpen)}><Shield /></button>
+    {shieldMenuOpen && <div className="shieldMenu" role="menu" aria-label="Shielding">{shieldOptions.map(([mode, label, detail]) =>
+      <button type="button" role="menuitemradio" aria-checked={shieldMode === mode} key={mode} onClick={() => chooseShield(mode)}>
+        <span><b>{label}</b><small>{detail}</small></span>{shieldMode === mode && <Check className="shieldOptionCheck" aria-hidden="true" />}
+      </button>)}</div>}
+    {!shieldOnly && !isSwap && <button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button>}
+  </div>
+
   return <div className="homePage">
     <header><h1>{isBridge ? 'Bridge privately' : isSwap ? 'Swap privately' : shieldOnly ? 'Shield privately' : 'Send privately'}</h1></header>
     <PendingPayments items={pending} now={clock} onSend={sendPending} onKeep={keepPending} sending={sending} />
@@ -1170,21 +1182,21 @@ function PrivacyHome({ walletSession, settings }) {
             title={shieldedLocked ? 'Sign a message to read your shielded balance' : 'The most your shielded balance can pay'}>
             <ShieldCheck />{shieldedReading ? 'Shielded …' : shieldedLocked ? 'Reveal shielded' : `Shielded ${rawTokenText(shieldedSpendable, asset)}`}</button>
           : <button type="button" className="walletMax" onClick={() => useMaximum(walletBalance?.spendableRaw)} disabled={balanceLoading || !walletBalance?.spendableRaw} title={asset === 'SOL' ? 'Network fee reserve already deducted' : 'Use wallet balance'}>MAX {balanceLoading ? '…' : walletBalance ? rawTokenText(walletBalance.spendableRaw, asset) : '—'}</button>)}
-        <div className="assetPicker">
-          <button type="button" aria-haspopup="listbox" aria-expanded={assetMenuOpen} onClick={() => setAssetMenuOpen(!assetMenuOpen)}><AssetLogo asset={asset} /><b>{asset}</b><ChevronDown /></button>
-          {assetMenuOpen && <div className="assetMenu" role="listbox">{ASSETS.map((item) => <button type="button" role="option" aria-selected={asset === item} onClick={() => { setAsset(item); setAssetMenuOpen(false); if (item !== destinationAsset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } setDirty(true); setReceipt(null) }} key={item}><AssetLogo asset={item} />{item}</button>)}</div>}
+        <div className="amountAssets">
+          <div className="assetPicker">
+            <button type="button" aria-haspopup="listbox" aria-expanded={assetMenuOpen} onClick={() => setAssetMenuOpen(!assetMenuOpen)}><AssetLogo asset={asset} /><b>{asset}</b><ChevronDown /></button>
+            {assetMenuOpen && <div className="assetMenu" role="listbox">{ASSETS.map((item) => <button type="button" role="option" aria-selected={asset === item} onClick={() => { setAsset(item); setAssetMenuOpen(false); if (item !== destinationAsset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } setDirty(true); setReceipt(null) }} key={item}><AssetLogo asset={item} />{item}</button>)}</div>}
+          </div>
+          <ArrowRight className="amountAssetsArrow" aria-hidden="true" />
+          <div className="assetPicker">
+            <button type="button" aria-label="Destination asset" aria-haspopup="listbox" aria-expanded={destinationMenuOpen} onClick={() => setDestinationMenuOpen(!destinationMenuOpen)}>
+              <AssetLogo asset={isBridge ? bridgeToken : destinationAsset} /><b>{isBridge ? bridgeToken : destinationAsset}</b>
+              {isBridge && <small className="chainTag">{selectedBridgeChain?.label}</small>}<ChevronDown />
+            </button>
+            {destinationMenuOpen && <div className="assetMenu destinationAssetMenu" role="listbox">{DESTINATION_OPTIONS.map((item) => <button type="button" role="option" aria-selected={item === BRIDGE_OPTION ? isBridge : destinationAsset === item} onClick={() => { setDestinationAsset(item); setDestinationMenuOpen(false); if (item !== asset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } if (item === BRIDGE_OPTION || isBridge) { setReceiverAmounts([amount]); setRecipientAddresses(['']) } setDirty(true); setReceipt(null) }} key={item}>{item === BRIDGE_OPTION ? <><span className="assetLogo bridgeMark" aria-hidden="true"><ArrowUpRight /></span>Bridge</> : <><AssetLogo asset={item} />{item}</>}</button>)}</div>}
+          </div>
+          {!isBridge && <button type="button" className="flipAssets" aria-label="Reverse swap assets" onClick={() => { setAsset(destinationAsset); setDestinationAsset(asset); setAssetMenuOpen(false); setDestinationMenuOpen(false); setDirty(true); setReceipt(null) }}><ArrowLeftRight /></button>}
         </div>
-      </div>
-      <div className="swapDestination">
-        <span>{isBridge ? 'Bridge to' : isSwap ? 'Swap to' : 'Receive'}</span><ArrowRight />
-        <div className="assetPicker">
-          <button type="button" aria-label="Destination asset" aria-haspopup="listbox" aria-expanded={destinationMenuOpen} onClick={() => setDestinationMenuOpen(!destinationMenuOpen)}>
-            <AssetLogo asset={isBridge ? bridgeToken : destinationAsset} /><b>{isBridge ? bridgeToken : destinationAsset}</b>
-            {isBridge && <small className="chainTag">{selectedBridgeChain?.label}</small>}<ChevronDown />
-          </button>
-          {destinationMenuOpen && <div className="assetMenu destinationAssetMenu" role="listbox">{DESTINATION_OPTIONS.map((item) => <button type="button" role="option" aria-selected={item === BRIDGE_OPTION ? isBridge : destinationAsset === item} onClick={() => { setDestinationAsset(item); setDestinationMenuOpen(false); if (item !== asset && receiverCount > 1) { setReceiverAmounts([amount]); setRecipientAddresses([recipientAddresses[0] || '']) } if (item === BRIDGE_OPTION || isBridge) { setReceiverAmounts([amount]); setRecipientAddresses(['']) } setDirty(true); setReceipt(null) }} key={item}>{item === BRIDGE_OPTION ? <><span className="assetLogo bridgeMark" aria-hidden="true"><ArrowUpRight /></span>Bridge</> : <><AssetLogo asset={item} />{item}</>}</button>)}</div>}
-        </div>
-        {!isBridge && <button type="button" className="flipAssets" aria-label="Reverse swap assets" onClick={() => { setAsset(destinationAsset); setDestinationAsset(asset); setAssetMenuOpen(false); setDestinationMenuOpen(false); setDirty(true); setReceipt(null) }}><ArrowLeftRight /></button>}
       </div>
       {isBridge && <div className="bridgePanel">
         <div className="bridgeChains" role="tablist" aria-label="Destination chain">
@@ -1197,22 +1209,13 @@ function PrivacyHome({ walletSession, settings }) {
         </div>
       </div>}
       <div className="recipientRows">
-        {/* The header carries the recipient-level actions, so each row stays one line. */}
-        <div className="recipientHead">
-          <span id="shieldPoolLabel">{shieldOnly ? 'Shield into' : ''}</span>
-          {shieldOnly && <PoolSort sort={shieldSort} onSort={setShieldSort} />}
-          {!isBridge && <>
-            <button type="button" className={`shieldControl${activeShield !== 'off' ? ' on' : ''}`} aria-haspopup="menu" aria-expanded={shieldMenuOpen} aria-label={shieldLabel} data-tooltip={shieldLabel}
-              onClick={() => setShieldMenuOpen(!shieldMenuOpen)}><Shield /></button>
-            {shieldMenuOpen && <div className="shieldMenu" role="menu" aria-label="Shielding">{shieldOptions.map(([mode, label, detail]) =>
-              <button type="button" role="menuitemradio" aria-checked={shieldMode === mode} key={mode} onClick={() => chooseShield(mode)}>
-                <span><b>{label}</b><small>{detail}</small></span>{shieldMode === mode && <Check className="shieldOptionCheck" aria-hidden="true" />}
-              </button>)}</div>}
-            {!shieldOnly && !isSwap && <><button type="button" className="addReceiver" aria-label="Add receiver" data-tooltip="Add recipient" onClick={addReceiver}><Plus /></button></>}
-          </>}
-        </div>
+        {shieldOnly && <div className="recipientHead">
+          <span id="shieldPoolLabel">Shield into</span>
+          <PoolSort sort={shieldSort} onSort={setShieldSort} />
+          {recipientActions}
+        </div>}
         {shieldOnly && <PoolPicker pools={shieldPools.pools} value={shieldPool} onChange={(id) => { if (id !== shieldPool) track('protocol_selected', { protocol: id, where: 'shield' }); setShieldPool(id) }} asset={asset} amountValid={totalRaw > 0n} sort={shieldSort} summary={summary} disabled={sending} labelledBy="shieldPoolLabel" />}
-        {!shieldOnly && receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} address` : isSwap ? `${destinationAsset} recipient address` : 'Address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives{swapOutput ? ` ≈ ${compact(swapOutput.amount, tokenDigits(swapOutput.amount, swapOutput.asset))}` : ''}</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
+        {!shieldOnly && receiverAmounts.map((value, index) => <div className={`recipientRow ${totalRaw > 0n && !(recipientAddresses[index] || '').trim() ? 'needsAddress' : ''}`} key={index}><div className="recipientFields"><input className="recipientAddress" aria-label={`Receiver ${index + 1} address`} autoComplete="off" spellCheck="false" placeholder={isBridge ? `${selectedBridgeChain?.name} ${bridgeToken} receiving address` : isSwap ? `${destinationAsset} receiving address` : 'Receiving address'} value={recipientAddresses[index] || ''} onChange={(event) => { const next = [...recipientAddresses]; next[index] = isBridge ? sanitizeBridgeAddress(event.target.value) : sanitizeSolanaAddress(event.target.value); setRecipientAddresses(next); setReceipt(null) }} />{isBridge ? <div className="recipientSwapAsset"><small>{selectedBridgeChain?.name}</small><AssetLogo asset={bridgeToken} /><b>{bridgeToken}</b></div> : isSwap ? <div className="recipientSwapAsset"><small>Receives{swapOutput ? ` ≈ ${compact(swapOutput.amount, tokenDigits(swapOutput.amount, swapOutput.asset))}` : ''}</small><AssetLogo asset={destinationAsset} /><b>{destinationAsset}</b></div> : <div><input className="recipientAmount" aria-label={`Receiver ${index + 1} amount`} type="text" inputMode="decimal" autoComplete="off" placeholder="0.00" value={value} onChange={(event) => { const next = [...receiverAmounts]; next[index] = sanitizeAmount(event.target.value); setReceiverAmounts(next); setDirty(true); setReceipt(null) }} /><b>{asset}</b></div>}</div>{index === 0 && recipientActions}{receiverCount > 1 && <button type="button" aria-label={`Remove receiver ${index + 1}`} onClick={() => removeReceiver(index)}><X /></button>}</div>)}
         {keeping && <div className="recipientRow keepRow">
           <span aria-hidden="true"><ShieldCheck /></span>
           <div className="recipientFields">
@@ -1232,12 +1235,13 @@ function PrivacyHome({ walletSession, settings }) {
       {shieldedSplit && shieldedSplit.withdrawals > receiverCount && <div className="keepSummary">
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
-      {moreOffer && <ShieldMore option={moreOffer} asset={asset} on={shieldMore} onToggle={(on) => { setShieldMore(on); setChosenOptionId(null) }} />}
+      {moreOffer && !chosenOption && <ShieldMore option={moreOffer} asset={asset} on={shieldMore} onToggle={toggleMore} />}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={(id) => {
         const option = optionResult?.options.find((item) => item.id === id)
         if (option && option.protocol !== chosenOption?.protocol) track('protocol_selected', { protocol: option.protocol, where: 'send' })
         setChosenOptionId(id)
       }} asset={asset}
+        more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: shieldMore, onToggle: toggleMore }}
         shielded={Object.fromEntries(FROM_SHIELDED_IDS.map((id) => [id, !wallet ? 0n : shieldedByPool[id]]))}
         reading={Boolean(wallet) && Boolean(hintPool) && (!shielded.pools[hintPool] || shielded.pools[hintPool].state === 'loading')} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />

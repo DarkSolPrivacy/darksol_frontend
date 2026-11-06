@@ -152,6 +152,29 @@ PrivacyCash is configured for multiple receivers and charges its fixed component
 
 The planner reads only stored metrics. Missing prices, snapshots or flow watermarks produce an unavailable result, and stale or incomplete history lowers confidence; it never substitutes a `$1` stablecoin price or hardcodes production activity. Run the deterministic scoring scenarios with `npm test`.
 
+### Privacy meter
+
+The send page does not score privacy with the planner's heuristics. It shows how often DarkSol's red team traced
+sends like this one in a simulation: synthetic sends added to each pool's real history, then attacked by the same
+linker as the trace page plus a timing analyst who knows DarkSol's rules. The method, the strategies, the waits and
+the limits are in darksol-backend's [`docs/PRIVACY_QUOTE.md`](https://github.com/DarkSolPrivacy/darksol-backend/blob/main/docs/PRIVACY_QUOTE.md);
+the page reads the result from `GET /api/privacy-quote`.
+
+[`src/send-options.js`](src/send-options.js) turns each measured cell (pool, token, size bucket, strategy, wait)
+into bars with as few rules of its own as possible:
+
+| Step | Rule |
+| --- | --- |
+| Score | `100 × (1 − traced / sends)`, from the cell matching the send. A cell with fewer than 10 sends is not shown. |
+| Bars | The score divided by 20 and rounded, from 1 to 5. |
+| 1 of 5 | The lowest a measurement can give. Even a send traced every time leaves no proof that the money is the same, and that cover comes from the pool alone. |
+| 0 of 5 | Only when the send goes out now and is larger than everything the pool holds of the token (the quote's `balance`): most of the withdrawal can only be the sender's own deposit. |
+| 4 of 5 | The threshold for calling an option private. |
+
+About 30 sends per cell make a score good to roughly ±10 points, so the page shows bars and words, never a percentage.
+To rank options, the score is lowered by the fee as a share of the payment, so a fee that eats most of a small
+payment can outweigh a longer wait.
+
 ### Swaps
 
 Selecting a different receive asset switches the home screen into private-swap mode. Route eligibility follows the supported production interfaces: Cloak only for SOL -> USDC/USDT, Curvy for configured Vault-asset pairs, and PrivacyCash swaps visible but disabled because `privacycash@1.2.2` does not expose the documented swap/recovery flow. Cloak SOL -> stablecoin swaps run from a compatible browser wallet; the app takes a fresh Jupiter quote and stores the private note and refund data locally for recovery.
