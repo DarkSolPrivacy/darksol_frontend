@@ -32,7 +32,11 @@ import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSett
 const SOLANA_POOL_IDS = listProtocols({ chain: 'solana' }).map(({ id }) => id)
 const OTHER_POOL_IDS = listProtocols().filter(({ chain }) => chain !== 'solana').map(({ id }) => id)
 const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || null
-const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
+// The pools a send or swap here can go through: Solana's, without the legacy
+// ones the planner still scores (Umbra v1). Others (Curvy, on Arbitrum) are
+// left out of the route and its list.
+const ROUTE_POOL_IDS = listProtocols({ chain: 'solana' }).filter((manifest) => !manifest.legacy).map(({ id }) => id)
+const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ id, recipients }) => !recipients.multi && ROUTE_POOL_IDS.includes(id)).map(({ id }) => id)
 const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
 // Shield only offers the payment-link pools and Umbra v2, which deposits into the
@@ -1029,7 +1033,8 @@ function PrivacyHome({ walletSession, settings }) {
     const bridge = isBridge ? { chainId: bridgeChainId, token: bridgeToken } : null
     const amounts = receiverAmounts.map((value) => rawTokenAmount(value, asset))
     const shield = activeShield === 'off' ? null : { mode: activeShield, pools: shielded.pools, amounts: amounts.every((value) => value !== null && value > 0n) ? amounts : null }
-    const normalized = (comparison.rankings || []).map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0, shield))
+    const normalized = (comparison.rankings || []).filter((item) => ROUTE_POOL_IDS.includes(providerKey(item)))
+      .map((item) => normalizeEstimate(item, strategy, asset, destinationAsset, bridge, deadlineMinutes > 0, shield))
       // A swap smaller than its route can run (Umbra v2 holds part of the SOL back for its swap wallet's fees) is not offered.
       .map((item) => {
         const minimum = isSwap && PROTOCOLS[item.protocol]?.swap?.minimumInput
@@ -1142,6 +1147,9 @@ function PrivacyHome({ walletSession, settings }) {
   const revealFirst = Boolean(wallet) && payingShielded && shieldedLocked && !shieldedReading && !recommended
   // A pool still reading holds the button only while no pool can pay yet.
   const awaitingShielded = payingShielded && shieldedReading && !recommended
+  // Every pool scored and none can take it (USDC to USDT, say): say why rather than leave a dead button.
+  const noRoute = !shieldOnly && !loading && formValid && rankings.length > 0 && !recommended && !awaitingShielded && !revealFirst
+  const noRouteReasons = [...new Set(rankings.map((item) => item.unavailableReason).filter(Boolean))]
   // Cloak's kept notes are saved in this browser only (its manifest's localNotes).
   const localNotes = (protocol) => Boolean(PROTOCOLS[protocol]?.send.localNotes)
   const keepsLocally = chosenOption ? localNotes(chosenOption.protocol) && (chosenOption.kept > 0n || chosenOption.kind === 'later')
@@ -1245,7 +1253,8 @@ function PrivacyHome({ walletSession, settings }) {
         shielded={Object.fromEntries(FROM_SHIELDED_IDS.map((id) => [id, !wallet ? 0n : shieldedByPool[id]]))}
         reading={Boolean(wallet) && Boolean(hintPool) && (!shielded.pools[hintPool] || shielded.pools[hintPool].state === 'loading')} onReveal={shielded.reveal} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
-        : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
+        : recommended && !shieldOnly ? <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />
+        : noRoute && <p className="privHint noRoute">No pool here can {isBridge ? 'bridge' : isSwap ? 'swap' : 'send'} this privately. {noRouteReasons.join(' ')}</p>}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
       {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && ['locked', 'error'].includes(shielded.pools[hintPool]?.state)} onReveal={shielded.reveal} />}
       {keepsLocally && <p className="privHint">Cloak saves what stays shielded in this browser only. Pay from it here before clearing this site’s data.</p>}
@@ -1254,7 +1263,7 @@ function PrivacyHome({ walletSession, settings }) {
           ? <button type="button" onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
           : revealFirst
           ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
-          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
+          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : noRoute ? 'No private route' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
       </div>
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}

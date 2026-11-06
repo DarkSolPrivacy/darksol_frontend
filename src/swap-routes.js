@@ -35,7 +35,7 @@ export function swapEligibility(protocol, inputAsset, outputAsset) {
       available: false,
       kind: 'swap',
       capability,
-      reason: 'SOON',
+      reason: `${name} documents private swaps, but DarkSol cannot run them.`,
     }
   }
   return { available: true, kind: 'swap', capability }

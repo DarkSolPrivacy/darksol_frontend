@@ -20,7 +20,7 @@ test('only PrivacyCash exposes an executable bridge', () => {
   assert.equal(bridgeEligibility('cloakc', 'USDC', 'ethereum', 'USDC').available, false)
   assert.match(bridgeEligibility('cloakc', 'USDC', 'ethereum', 'USDC').reason, /Solana-only/)
   // Curvy bridges through LI.FI but has no browser path in this app.
-  assert.equal(bridgeEligibility('curvy', 'USDC', 'ethereum', 'USDC').reason, 'SOON')
+  assert.equal(bridgeEligibility('curvy', 'USDC', 'ethereum', 'USDC').reason, 'Curvy documents bridging, but DarkSol cannot run it.')
 })
 
 test('destination tokens are constrained per chain', () => {

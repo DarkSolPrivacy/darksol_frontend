@@ -93,7 +93,7 @@ export function bridgeEligibility(protocol, inputAsset, chainId, outputToken) {
   const capability = BRIDGE_CAPABILITIES[protocol]
   if (!capability) return { available: false, reason: 'This provider has no configured bridge integration.' }
   if (capability.execution === 'unsupported') return { available: false, kind: 'bridge', capability, reason: capability.note }
-  if (capability.execution === 'documented-only') return { available: false, kind: 'bridge', capability, reason: 'SOON' }
+  if (capability.execution === 'documented-only') return { available: false, kind: 'bridge', capability, reason: `${PROTOCOLS[protocol]?.name ?? protocol} documents bridging, but DarkSol cannot run it.` }
   if (!BRIDGE_INPUT_ASSETS.includes(input)) {
     return { available: false, kind: 'bridge', capability, reason: `Bridging is supported from ${BRIDGE_INPUT_ASSETS.join(', ')} only.` }
   }
