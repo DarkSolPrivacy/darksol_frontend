@@ -32,7 +32,7 @@ export function failureReason(error) {
   // An RPC refusing access reads "denied" too; it is not the user saying no.
   if (/\b403\b|forbidden|rpc access/i.test(message)) return 'network'
   if (/reject|denied|declined|cancel+ed|user abort/i.test(message)) return 'rejected'
-  if (/insufficient|not enough|no record of a prior credit|exceeds (?:the )?balance/i.test(message)) return 'insufficient_funds'
+  if (/insufficient|not enough|no record of a prior credit|exceeds (?:the )?balance|AccountNotFound|\d+ lamports|no SOL/i.test(message)) return 'insufficient_funds'
   if (/slippage|0x1771|price (?:moved|impact)/i.test(message)) return 'slippage'
   if (/failed to fetch|networkerror|load failed|no answer|timed? ?out|timeout|not confirmed|block ?height exceeded|blockhash|429|50[234]|rpc|network/i.test(message)) return 'network'
   return 'other'

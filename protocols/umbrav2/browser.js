@@ -144,9 +144,16 @@ async function openSession(provider, onStatus) {
 // store busy, a service down) leaves what it read and the next call goes on,
 // so it is tried again; a partial sync must never read as a smaller balance.
 // The first sync on a device reads the pool from the start, minutes of it.
+// A sync's pages as status lines whose bar mark (its own 0 to 1) creeps on with
+// each page. Past a few pages it is a first read on this device, which scans
+// the pool's notes here (about 3.5 minutes measured) and is kept for next time.
+const COLD_PAGES = 3
+const syncLine = (round) => round > COLD_PAGES
+  ? `First Umbra v2 read on this device, a few minutes, only once… (page ${round})`
+  : `Reading your private balance… (page ${round})`
 async function syncNotes(nimbus, session, { signal, onStatus = () => {} } = {}) {
   for (let attempt = 1; ; attempt++) {
-    const result = await nimbus.syncNoteStore(session, {}, { signal, onProgress: ({ round }) => onStatus(`Reading your private balance… (page ${round})`) })
+    const result = await nimbus.syncNoteStore(session, {}, { signal, onProgress: ({ round }) => onStatus(syncLine(round), at(1 - 0.85 ** round, 30)) })
     if (result?.kind !== 'unavailable') return result
     if (attempt === 3) throw new Error(`Umbra v2 could not finish reading your notes (${result.step})`)
   }
@@ -214,7 +221,7 @@ async function withdrawTo(nimbus, session, { asset, mint, amount, recipient, onS
 export async function sendFromBalance({ nimbus, session, asset, mint, payout, recipient, onStatus = () => {} }) {
   if (session.registration.kind === 'unregistered') throw new Error('This wallet has no Umbra v2 private balance yet')
   onStatus('Reading your Umbra v2 balance…', at(0.2, 8))
-  await syncNotes(nimbus, session, { onStatus })
+  await syncNotes(nimbus, session, { onStatus: within(onStatus, 0.06, 0.2) })
   const { available } = await mintBalance(nimbus, session, mint)
   if (available < payout) throw new Error(`Your Umbra v2 private balance can pay ${unitsText(available, asset)}, less than ${unitsText(payout, asset)}`)
   const paying = within(onStatus, 0.2, 1)
@@ -260,7 +267,10 @@ async function depositToSelf(opened, state, { asset, mint, amount, onStatus, rec
     onStatus('Waiting for Umbra v2 to confirm the registration…', at(0.1, 20))
     await waitFor('registration', async () => (await nimbus.readRegistration(state.session)).kind === 'registered')
   }
-  onStatus('Reading your Umbra v2 balance…', at(0.18, 8))
+  onStatus('Reading your Umbra v2 balance…', at(0.12, 6))
+  // The deposit reads the pool before it starts. Read it here instead, so a first
+  // read on this device (minutes) shows its pages; the deposit's own is then quick.
+  await syncNotes(nimbus, state.session, { onStatus: within(onStatus, 0.12, 0.22) })
   const deposited = await nimbus.deposit(await nimbus.createDepositContext(state.session),
     { mint, amount, recipient: state.session.walletAddress },
     { transactionVersion, priorityFeeLamports: PRIORITY_FEE_LAMPORTS, onProgress: depositProgress(onStatus) })
@@ -370,7 +380,7 @@ async function swap({ provider, inputAsset, outputAsset, totalBaseUnits, recipie
     if (fromShielded) {
       if (state.session.registration.kind === 'unregistered') throw new Error('This wallet has no Umbra v2 private balance yet')
       onStatus('Reading your Umbra v2 balance…', at(0.15, 8))
-      await syncNotes(nimbus, state.session, { onStatus })
+      await syncNotes(nimbus, state.session, { onStatus: within(onStatus, 0.06, 0.15) })
       const { available } = await mintBalance(nimbus, state.session, mint)
       if (available < units) throw new Error(`Your Umbra v2 private balance can pay ${unitsText(available, inputAsset)}, less than ${unitsText(units, inputAsset)}`)
     } else {
@@ -428,7 +438,7 @@ export async function shieldedBalances({ provider, prompt = true, signal, onStat
       // Never registered: nothing was ever deposited.
       if (session.registration.kind === 'unregistered') return result
       onStatus('Reading your private balance…')
-      await syncNotes(nimbus, session, { signal, onStatus })
+      await syncNotes(nimbus, session, { signal, onStatus: (text) => onStatus(text) })
       const rows = await nimbus.readBalances(session)
       for (const asset of Object.keys(result.balances)) {
         for (const row of rows.filter((item) => item.mint === MINTS[asset])) {

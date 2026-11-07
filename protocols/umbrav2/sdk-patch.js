@@ -29,7 +29,7 @@ const REPLACEMENTS = [
     `    if (!isEqualBytes(new Uint8Array(transaction.messageBytes), new Uint8Array(unsigned.messageBytes))) {
         let allowed = false;
         try {
-            allowed = __walletAdditionsAllowed(deps.decodeSolanaTransactionMessage({ messageBytes: new Uint8Array(unsigned.messageBytes) }), deps.decodeSolanaTransactionMessage({ messageBytes: new Uint8Array(transaction.messageBytes) }));
+            allowed = __walletAdditionsAllowed(deps.decodeSolanaTransactionMessage({ messageBytes: new Uint8Array(unsigned.messageBytes) }), deps.decodeSolanaTransactionMessage({ messageBytes: new Uint8Array(transaction.messageBytes) }), { wallet: deps.encodeSolanaAddress({ publicKey: args.walletAddress }) });
         }
         catch {
             allowed = false;

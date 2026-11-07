@@ -9,13 +9,22 @@
 // set it appends a SetComputeUnitPrice of its own. Every Umbra v2 deposit and
 // registration from Solflare was refused.
 //
+// On a bigger transaction (the registration, ~264k compute units) the price
+// the SDK spreads our small priority fee into falls under Solflare's floor of
+// 100,000 micro-lamports a unit, so Solflare raises it, and it raises the
+// loaded-accounts limit by 1 MiB to load the guard program.
+//
 // sdk-patch.js routes the SDK's check through `walletAdditionsAllowed`, which
 // accepts a changed message only when every instruction the SDK built is still
 // there, unchanged and in order, and the wallet added nothing but:
 //   - Lighthouse instructions, which only read accounts and assert;
-//   - a higher SetComputeUnitLimit, by at most MAX_ADDED_UNITS.
-// The fee payer, the signers, the blockhash, the lookup tables, the price and
-// the loaded-accounts limit must not change. Anything else is still refused.
+//   - a higher SetComputeUnitLimit, by at most MAX_ADDED_UNITS;
+//   - a higher SetLoadedAccountsDataSizeLimit, by at most MAX_ADDED_DATA;
+//   - when the connected wallet itself pays the fee, a higher (or a first)
+//     SetComputeUnitPrice, at most MAX_PRICE: the wallet spends its own SOL.
+// The fee payer, the signers, the blockhash and the lookup tables must not
+// change, nor the price of a transaction someone else pays for. Anything else
+// is still refused.
 //
 // Both arguments are compiled messages, as Kit's getCompiledTransactionMessageDecoder
 // (the SDK's decodeSolanaTransactionMessage) returns them.
@@ -24,6 +33,11 @@ export const LIGHTHOUSE_PROGRAM = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95'
 export const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111'
 // Solflare raised the limit by 40,000 units for two guards.
 export const MAX_ADDED_UNITS = 200_000
+// Solflare raised it by 1 MiB.
+export const MAX_ADDED_DATA = 2 * 1024 * 1024
+// Solflare's floor is 100,000; at the most compute a transaction may use,
+// 500,000 costs 0.0007 SOL.
+export const MAX_PRICE = 500_000n
 const MAX_UNITS = 1_400_000
 
 const SET_COMPUTE_UNIT_LIMIT = 2
@@ -83,8 +97,10 @@ function budgetOf(instructions) {
 }
 
 const unitsOf = (data) => (data?.length === 5 ? new DataView(data.buffer, data.byteOffset, 5).getUint32(1, true) : null)
+const priceOf = (data) => (data?.length === 9 ? new DataView(data.buffer, data.byteOffset, 9).getBigUint64(1, true) : null)
 
-export function walletAdditionsAllowed(built, signed) {
+// `wallet` is the connected wallet's address: the one whose own fee may rise.
+export function walletAdditionsAllowed(built, signed, { wallet } = {}) {
   if (built.version !== signed.version || built.version !== 0) return false
   if (String(built.lifetimeToken) !== String(signed.lifetimeToken)) return false
   if (built.header.numSignerAccounts !== signed.header.numSignerAccounts
@@ -108,8 +124,16 @@ export function walletAdditionsAllowed(built, signed) {
   const budgetBefore = budgetOf(before.filter(isBudget))
   const budgetAfter = budgetOf(after.filter(isBudget))
   if (!budgetBefore || !budgetAfter) return false
-  for (const type of [SET_COMPUTE_UNIT_PRICE, SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT]) {
-    if (hex(budgetBefore.get(type)) !== hex(budgetAfter.get(type))) return false
+  if (hex(budgetBefore.get(SET_COMPUTE_UNIT_PRICE)) !== hex(budgetAfter.get(SET_COMPUTE_UNIT_PRICE))) {
+    const walletPays = Boolean(wallet) && String(signed.staticAccounts[0]) === String(wallet)
+    const before = budgetBefore.has(SET_COMPUTE_UNIT_PRICE) ? priceOf(budgetBefore.get(SET_COMPUTE_UNIT_PRICE)) : 0n
+    const after = priceOf(budgetAfter.get(SET_COMPUTE_UNIT_PRICE))
+    if (!walletPays || before === null || after === null || after < before || after > MAX_PRICE) return false
+  }
+  if (hex(budgetBefore.get(SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT)) !== hex(budgetAfter.get(SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT))) {
+    const before = unitsOf(budgetBefore.get(SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT))
+    const after = unitsOf(budgetAfter.get(SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT))
+    if (before === null || after === null || after < before || after > before + MAX_ADDED_DATA) return false
   }
   const unitsBefore = unitsOf(budgetBefore.get(SET_COMPUTE_UNIT_LIMIT))
   const unitsAfter = unitsOf(budgetAfter.get(SET_COMPUTE_UNIT_LIMIT))

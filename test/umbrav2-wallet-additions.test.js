@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { VersionedTransaction } from '@solana/web3.js'
-import { COMPUTE_BUDGET_PROGRAM, LIGHTHOUSE_PROGRAM, MAX_ADDED_UNITS, walletAdditionsAllowed } from '../protocols/umbrav2/wallet-additions.js'
+import { COMPUTE_BUDGET_PROGRAM, LIGHTHOUSE_PROGRAM, MAX_ADDED_DATA, MAX_ADDED_UNITS, MAX_PRICE, walletAdditionsAllowed } from '../protocols/umbrav2/wallet-additions.js'
 import { patchTransactionModule } from '../protocols/umbrav2/sdk-patch.js'
 
 const fixture = JSON.parse(await readFile(new URL('./fixtures/solflare-guarded-funding.json', import.meta.url), 'utf8'))
+const registration = JSON.parse(await readFile(new URL('./fixtures/solflare-guarded-registration.json', import.meta.url), 'utf8'))
 
 // The compiled message as Kit's getCompiledTransactionMessageDecoder returns it,
 // which is what the SDK hands walletAdditionsAllowed.
@@ -133,7 +134,51 @@ test('the SDK patch applies to the pinned nimbus-solana and fails loudly on anot
   const source = await readFile(new URL('../node_modules/@umbra-privacy/nimbus-solana/dist/flows/transaction.js', import.meta.url), 'utf8')
   const patched = patchTransactionModule(source)
   assert.match(patched, /^import \{ walletAdditionsAllowed as __walletAdditionsAllowed \} from /)
-  assert.match(patched, /__walletAdditionsAllowed\(deps\.decodeSolanaTransactionMessage/)
+  assert.match(patched, /__walletAdditionsAllowed\(deps\.decodeSolanaTransactionMessage[^;]*\{ wallet: deps\.encodeSolanaAddress\(\{ publicKey: args\.walletAddress \}\) \}\)/)
   assert.match(patched, /messageBytes: new Uint8Array\(deps\.decodeSolanaTransaction\(\{ wire: walletSigning\.walletSigned \}\)\.messageBytes\)/)
   assert.throws(() => patchTransactionModule(source.replace('function readWalletSignature(', 'function readSignature(')), /flows\/transaction\.js changed/)
+})
+
+const budget = (message, type) => message.instructions.find((ix) => message.staticAccounts[ix.programAddressIndex] === COMPUTE_BUDGET_PROGRAM && ix.data[0] === type)
+const regBuilt = () => compiled(registration.built)
+const regSigned = () => compiled(registration.signed)
+const { wallet } = registration
+
+test('the registration fixture is the Solflare case: price raised to its floor, data limit raised, a guard added', () => {
+  const view = (data) => new DataView(data.buffer, data.byteOffset)
+  assert.ok(view(budget(regSigned(), 3).data).getBigUint64(1, true) > view(budget(regBuilt(), 3).data).getBigUint64(1, true))
+  assert.ok(view(budget(regSigned(), 4).data).getUint32(1, true) > view(budget(regBuilt(), 4).data).getUint32(1, true))
+  assert.equal(regSigned().staticAccounts[0], wallet)
+})
+
+test('accepts the registration Solflare returned, its price paid by the connected wallet', () => {
+  assert.equal(walletAdditionsAllowed(regBuilt(), regSigned(), { wallet }), true)
+})
+
+test('a raised price is refused when someone else pays it, or past the cap', () => {
+  // Not knowing the wallet, or a fee payer that is not it: the price must stand.
+  assert.equal(walletAdditionsAllowed(regBuilt(), regSigned()), false)
+  assert.equal(walletAdditionsAllowed(regBuilt(), regSigned(), { wallet: regSigned().staticAccounts[1] }), false)
+  const over = regSigned()
+  new DataView(budget(over, 3).data.buffer).setBigUint64(1, MAX_PRICE + 1n, true)
+  assert.equal(walletAdditionsAllowed(regBuilt(), over, { wallet }), false)
+  const lower = regSigned()
+  new DataView(budget(lower, 3).data.buffer).setBigUint64(1, 1n, true)
+  assert.equal(walletAdditionsAllowed(regBuilt(), lower, { wallet }), false)
+})
+
+test('the loaded-accounts limit may only rise, and by at most 2 MiB', () => {
+  const limit = new DataView(budget(regBuilt(), 4).data.buffer).getUint32(1, true)
+  const most = regSigned(); new DataView(budget(most, 4).data.buffer).setUint32(1, limit + MAX_ADDED_DATA, true)
+  assert.equal(walletAdditionsAllowed(regBuilt(), most, { wallet }), true)
+  const over = regSigned(); new DataView(budget(over, 4).data.buffer).setUint32(1, limit + MAX_ADDED_DATA + 1, true)
+  assert.equal(walletAdditionsAllowed(regBuilt(), over, { wallet }), false)
+  const lower = regSigned(); new DataView(budget(lower, 4).data.buffer).setUint32(1, limit - 1, true)
+  assert.equal(walletAdditionsAllowed(regBuilt(), lower, { wallet }), false)
+})
+
+test("the registration's own instructions still may not change", () => {
+  const after = regSigned()
+  after.instructions[1].data[10] ^= 1
+  assert.equal(walletAdditionsAllowed(regBuilt(), after, { wallet }), false)
 })

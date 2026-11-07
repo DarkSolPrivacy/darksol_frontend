@@ -65,9 +65,8 @@ test('a wallet prompt is told apart', () => {
 test('Umbra v2 reports a mark for every step of a send', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(new URL('../protocols/umbrav2/browser.js', import.meta.url), 'utf8')
-  // Every status line of a send carries a hint. Without one: the sync's page
-  // counter (one step however many pages), an earlier swap being finished, and
-  // the balance read, which is no send.
+  // Every status line of a send carries a hint. Without one: an earlier swap
+  // being finished, and the balance read, which is no send.
   const bare = [...source.matchAll(/(?:onStatus|paying|moving)\((['`][^'`]*['`])\)/g)].map((match) => match[1])
-  assert.deepEqual(bare, ['`Reading your private balance… (page ${round})`', "'Finishing your earlier swap…'", "'Reading your private balance…'"])
+  assert.deepEqual(bare, ["'Finishing your earlier swap…'", "'Reading your private balance…'"])
 })

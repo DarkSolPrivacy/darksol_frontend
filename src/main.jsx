@@ -20,7 +20,7 @@ import {
   LOGOS as PROTOCOL_LOGOS, PROTOCOLS, PROVIDER_CAPABILITIES, listProtocols, resolveProtocolId,
 } from '../protocols/registry.js'
 import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
-import { explainFailure } from '../protocols/shared/network.js'
+import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
 import { bucketFor, measuredPrivacy, sendOptions, withSimulation } from './send-options.js'
@@ -869,6 +869,16 @@ function PrivacyHome({ walletSession, settings }) {
     } catch (error) { return { gasError: error instanceof Error ? error.message : String(error) } }
   }
 
+  // A wallet with no SOL has no account on Solana, so the first transaction it
+  // pays is refused, after it may already have signed an unlock message or
+  // waited out a proof. One balance read says so first; a failed read says nothing.
+  async function walletHasNoSol() {
+    try {
+      const { solBalances } = await import('./wallet-balance.js')
+      return (await solBalances([wallet.address]))[0] === 0n
+    } catch { return false }
+  }
+
   async function sendTransfer() {
     setSendAttempted(true); setSendError('')
     if (submitted) return setSendError(receipt.depositSignature ? 'This deposit was already submitted. Do not send it again.' : 'This payment was already sent. Do not send it again.')
@@ -884,6 +894,8 @@ function PrivacyHome({ walletSession, settings }) {
     track('send_started', stats)
     setSending(true)
     try {
+      // Paying from a shielded balance, the relayer pays the fees.
+      if (!payingShielded && await walletHasNoSol()) throw new Error(NO_SOL_MESSAGE)
       const gas = await askForGas(kind)
       if (!gas) return track('send_failed', { ...stats, stage: 'deposit', reason: 'cancelled' })
       // One dispatch for every protocol and every capability. The adapter is
@@ -940,6 +952,7 @@ function PrivacyHome({ walletSession, settings }) {
     setSending(true)
     try {
       const rows = transferValidation.rows
+      if (option.kind !== 'balance' && await walletHasNoSol()) throw new Error(NO_SOL_MESSAGE)
       const { execute } = await loadBrowserAdapter(option.protocol)
       if (option.kind === 'later') {
         const result = await execute({ kind: 'send', provider: wallet.provider, asset, recipients: [], totalBaseUnits: option.deposit, source: 'wallet', onStatus: reportStatus })
