@@ -644,8 +644,17 @@ function PrivacyHome({ walletSession, settings }) {
   }, [wallet])
 
   useEffect(() => saveScheduled(scheduled), [scheduled])
+  // A step running far past its usual time (a service slow to answer, a slow
+  // machine) gets a note, so it never reads as a frozen page. Not while the
+  // wallet waits on the user.
+  const [stalledStatus, setStalledStatus] = useState('')
   // Each payment's bar starts empty.
-  useEffect(() => { if (!sending) setSendProgress(null) }, [sending])
+  useEffect(() => { if (!sending) { setSendProgress(null); setStalledStatus('') } }, [sending])
+  useEffect(() => {
+    if (!sending || !sendStatus || awaitsWallet(sendStatus)) return
+    const timer = setTimeout(() => setStalledStatus(sendStatus), Math.max(30, 3 * (sendProgress?.seconds ?? 10)) * 1000)
+    return () => clearTimeout(timer)
+  }, [sending, sendStatus])
   useEffect(() => savePending(pending), [pending])
 
   // One token's quote for every size at once, by size bucket. The options show from it at once.
@@ -1279,6 +1288,7 @@ function PrivacyHome({ walletSession, settings }) {
           ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
           : <button type="button" {...progressProps} onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{progressFill}{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
       </div>
+      {sending && (bar.note || stalledStatus === sendStatus) && <p className="sendNote" role="status">{bar.note || 'This step is taking longer than usual. It is still working: keep this tab open.'}</p>}
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
     {!chosenOption && !measured && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}

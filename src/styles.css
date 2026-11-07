@@ -728,6 +728,8 @@ label.privRow { cursor: pointer; }
 .actionArea > button[data-waiting] .sendProgress { animation: ds-progress-wait 1.4s ease-in-out infinite; }
 @keyframes ds-progress-sheen { to { transform: translateX(100%); } }
 @keyframes ds-progress-wait { 50% { opacity: .5; } }
+/* Why a step takes long (a first read on this device), under the send button. */
+.sendNote { margin: 8px 2px 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; }
 
 /* ==========================================================================
    Route details, results and notices

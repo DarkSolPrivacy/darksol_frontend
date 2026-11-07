@@ -62,11 +62,23 @@ test('a wallet prompt is told apart', () => {
   assert.equal(awaitsWallet(''), false)
 })
 
-test('Umbra v2 reports a mark for every step of a send', async () => {
+test('Umbra v2 reports every step of a payment against its plan', async () => {
   const { readFile } = await import('node:fs/promises')
+  const { STEP_SECONDS } = await import('../protocols/umbrav2/progress-plan.js')
   const source = await readFile(new URL('../protocols/umbrav2/browser.js', import.meta.url), 'utf8')
-  // Every status line of a send carries a hint. Without one: an earlier swap
-  // being finished, and the balance read, which is no send.
-  const bare = [...source.matchAll(/(?:onStatus|paying|moving)\((['`][^'`]*['`])\)/g)].map((match) => match[1])
+  // Every step it names is one the plan times.
+  const steps = new Set([...source.matchAll(/progress\.step\('(\w+)'/g)].map((match) => match[1]))
+  for (const step of steps) assert.ok(step in STEP_SECONDS, step)
+  for (const step of ['open', 'unlock', 'register', 'read', 'prepare', 'prove', 'approve', 'deposit', 'settle', 'payoutProve', 'payoutSend', 'swap']) assert.ok(steps.has(step), step)
+  // No status line of a payment goes out bare. Left: an earlier swap being
+  // finished, and the balance read, which is no payment.
+  const bare = [...source.matchAll(/onStatus\((['`][^'`]*['`])\)/g)].map((match) => match[1])
   assert.deepEqual(bare, ["'Finishing your earlier swap…'", "'Reading your private balance…'"])
+})
+
+test('a note under the button stays with its step', () => {
+  const bar = nextProgress(null, 'Setting up Umbra v2 on this device… (page 1 of 11)', { to: 0.1, seconds: 24, note: 'First time here' })
+  assert.equal(bar.note, 'First time here')
+  assert.equal(nextProgress(bar, 'Preparing the Umbra v2 deposit…', { to: 0.8, seconds: 4 }).note, '')
+  assert.equal(nextProgress(bar, 'Sending…').note, '')
 })
