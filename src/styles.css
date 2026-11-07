@@ -714,6 +714,22 @@ label.privRow { cursor: pointer; }
 .sendAction { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .actionArea { min-width: 0; flex: 1; display: flex; }
 .actionArea > button { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* While a payment runs the button fills as its steps go by (send-progress.js): the
+   fill eases toward each step's mark, a sheen says it is alive, and it pulses while
+   the wallet waits on the user. */
+.actionArea > button.progressing:disabled { position: relative; isolation: isolate; color: var(--text-secondary); }
+.sendProgress {
+  position: absolute; inset: 0 auto 0 0; z-index: -1; width: 0; overflow: hidden;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 28%, transparent));
+  box-shadow: inset -2px 0 0 var(--accent-line);
+  transition-property: width; transition-timing-function: cubic-bezier(.15, .7, .3, 1);
+}
+.sendProgress::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .09), transparent); transform: translateX(-100%); animation: ds-progress-sheen 1.8s ease-in-out infinite; }
+.actionArea > button[data-waiting] .sendProgress { animation: ds-progress-wait 1.4s ease-in-out infinite; }
+@keyframes ds-progress-sheen { to { transform: translateX(100%); } }
+@keyframes ds-progress-wait { 50% { opacity: .5; } }
+/* Why a step takes long (a first read on this device), under the send button. */
+.sendNote { margin: 8px 2px 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; }
 
 /* ==========================================================================
    Route details, results and notices

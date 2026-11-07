@@ -56,7 +56,7 @@ test('a Cloak withdrawal that fails after a merge leaves the merged note saved',
 })
 
 // Stands in for @umbra-privacy/nimbus-solana-web.
-function fakeNimbus({ rows, settlement = { kind: 'landed', signature: new Uint8Array(64).fill(7) }, outcome = 'relayed', syncs = [] }) {
+function fakeNimbus({ rows, settlement = { kind: 'landed', signature: new Uint8Array(64).fill(7) }, outcome = 'relayed', syncs = [], unpayable = [] }) {
   const calls = []
   return {
     calls,
@@ -64,7 +64,11 @@ function fakeNimbus({ rows, settlement = { kind: 'landed', signature: new Uint8A
     readBalances: async () => rows,
     createWithdrawalContext: async () => 'context',
     withdraw: async (context, args, options) => {
-      calls.push(['withdraw', args, options])
+      const { onProgress, ...rest } = options
+      assert.equal(typeof onProgress, 'function')
+      calls.push(['withdraw', args, rest])
+      // What nimbus-solana 0.1.1 throws for an amount no payout plus its fee adds up to.
+      if (unpayable.includes(args.amount)) throw Object.assign(new Error('the withdrawal could not be prepared'), { cause: new Error("receipt 3's fee is not the ceiling of its numerator over 10000, which the circuit checks") })
       return outcome === 'relayed' ? { kind: 'relayed', settlement } : { kind: 'relay-refused', code: 'busy' }
     },
   }
@@ -79,6 +83,17 @@ test('Umbra v2 pays from the private balance with no deposit, the SOL payout to 
   const sol = fakeNimbus({ rows: [{ mint: MINTS.SOL, state: 'available', total: 10n }] })
   await sendFromBalance({ nimbus: sol, session: registered, asset: 'SOL', mint: MINTS.SOL, payout: 10n, recipient: 'Recipient' })
   assert.deepEqual(sol.calls[1][2], { recipientTokenAccount: 'Recipient' })
+})
+
+test('an Umbra v2 payout the SDK cannot add up is retried a unit less, other failures are not', async () => {
+  const rows = [{ mint: MINTS.USDC, state: 'available', total: 5_000_000n }]
+  const nimbus = fakeNimbus({ rows, unpayable: [1_000_000n] })
+  await sendFromBalance({ nimbus, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 1_000_000n, recipient: 'R' })
+  assert.deepEqual(nimbus.calls.filter(([name]) => name === 'withdraw').map(([, args]) => args.amount), [1_000_000n, 999_999n])
+  // At most four units less.
+  const stuck = fakeNimbus({ rows, unpayable: [10n, 9n, 8n, 7n, 6n] })
+  await assert.rejects(sendFromBalance({ nimbus: stuck, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 10n, recipient: 'R' }), /could not be prepared/)
+  assert.equal(stuck.calls.filter(([name]) => name === 'withdraw').length, 5)
 })
 
 test('Umbra v2 refuses a payment its spendable balance does not cover, and counts a pending settlement as sent', async () => {

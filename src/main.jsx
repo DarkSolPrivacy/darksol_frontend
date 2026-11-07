@@ -20,10 +20,11 @@ import {
   LOGOS as PROTOCOL_LOGOS, PROTOCOLS, PROVIDER_CAPABILITIES, listProtocols, resolveProtocolId,
 } from '../protocols/registry.js'
 import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
-import { explainFailure } from '../protocols/shared/network.js'
+import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
 import { bucketFor, measuredPrivacy, sendOptions, withSimulation } from './send-options.js'
+import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
 
@@ -523,6 +524,9 @@ function PrivacyHome({ walletSession, settings }) {
   const [dirty, setDirty] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendStatus, setSendStatus] = useState('')
+  // The send button's progress bar (send-progress.js); adapters report through reportStatus.
+  const [sendProgress, setSendProgress] = useState(null)
+  const reportStatus = (text, hint) => { setSendStatus(text); setSendProgress((bar) => nextProgress(bar, text, hint)) }
   const [sendError, setSendError] = useState('')
   const [receipt, setReceipt] = useState(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -640,6 +644,17 @@ function PrivacyHome({ walletSession, settings }) {
   }, [wallet])
 
   useEffect(() => saveScheduled(scheduled), [scheduled])
+  // A step running far past its usual time (a service slow to answer, a slow
+  // machine) gets a note, so it never reads as a frozen page. Not while the
+  // wallet waits on the user.
+  const [stalledStatus, setStalledStatus] = useState('')
+  // Each payment's bar starts empty.
+  useEffect(() => { if (!sending) { setSendProgress(null); setStalledStatus('') } }, [sending])
+  useEffect(() => {
+    if (!sending || !sendStatus || awaitsWallet(sendStatus)) return
+    const timer = setTimeout(() => setStalledStatus(sendStatus), Math.max(30, 3 * (sendProgress?.seconds ?? 10)) * 1000)
+    return () => clearTimeout(timer)
+  }, [sending, sendStatus])
   useEffect(() => savePending(pending), [pending])
 
   // One token's quote for every size at once, by size bucket. The options show from it at once.
@@ -858,9 +873,19 @@ function PrivacyHome({ walletSession, settings }) {
     try {
       const { execute } = await loadBrowserAdapter('privacycash')
       const recipients = indexes.map((index) => ({ publicKey: transferValidation.rows[index].address.publicKey, baseUnits: units }))
-      const sent = await execute({ kind: 'send', provider: wallet.provider, asset: 'SOL', recipients, totalBaseUnits: units * BigInt(recipients.length), source, onStatus: setSendStatus })
+      const sent = await execute({ kind: 'send', provider: wallet.provider, asset: 'SOL', recipients, totalBaseUnits: units * BigInt(recipients.length), source, onStatus: reportStatus })
       return { gas: sent.withdrawals.at(-1) }
     } catch (error) { return { gasError: error instanceof Error ? error.message : String(error) } }
+  }
+
+  // A wallet with no SOL has no account on Solana, so the first transaction it
+  // pays is refused, after it may already have signed an unlock message or
+  // waited out a proof. One balance read says so first; a failed read says nothing.
+  async function walletHasNoSol() {
+    try {
+      const { solBalances } = await import('./wallet-balance.js')
+      return (await solBalances([wallet.address]))[0] === 0n
+    } catch { return false }
   }
 
   async function sendTransfer() {
@@ -878,12 +903,14 @@ function PrivacyHome({ walletSession, settings }) {
     track('send_started', stats)
     setSending(true)
     try {
+      // Paying from a shielded balance, the relayer pays the fees.
+      if (!payingShielded && await walletHasNoSol()) throw new Error(NO_SOL_MESSAGE)
       const gas = await askForGas(kind)
       if (!gas) return track('send_failed', { ...stats, stage: 'deposit', reason: 'cancelled' })
       // One dispatch for every protocol and every capability. The adapter is
       // still a lazy chunk, so no privacy SDK reaches the entry bundle.
       const { execute } = shieldOnly && shieldViaLinks
-        ? { execute: () => shieldToSelf({ wallet, protocol: recommended.protocol, asset, amount: rawTokenText(totalRaw, asset), onStatus: setSendStatus }) }
+        ? { execute: () => shieldToSelf({ wallet, protocol: recommended.protocol, asset, amount: rawTokenText(totalRaw, asset), onStatus: reportStatus }) }
         : await loadBrowserAdapter(recommended.protocol)
       const result = await execute({
         kind,
@@ -901,7 +928,7 @@ function PrivacyHome({ walletSession, settings }) {
         delayMinutes: kind === 'send' ? deadlineMinutes : 0,
         // SOL for fees a swap paid in SOL carries in its own deposit.
         gasBaseUnits: kind === 'swap' ? gas.units : undefined,
-        onStatus: setSendStatus,
+        onStatus: reportStatus,
       })
       if (gas.units) {
         if (kind === 'send') Object.assign(result, await sendGas(gas))
@@ -934,9 +961,10 @@ function PrivacyHome({ walletSession, settings }) {
     setSending(true)
     try {
       const rows = transferValidation.rows
+      if (option.kind !== 'balance' && await walletHasNoSol()) throw new Error(NO_SOL_MESSAGE)
       const { execute } = await loadBrowserAdapter(option.protocol)
       if (option.kind === 'later') {
-        const result = await execute({ kind: 'send', provider: wallet.provider, asset, recipients: [], totalBaseUnits: option.deposit, source: 'wallet', onStatus: setSendStatus })
+        const result = await execute({ kind: 'send', provider: wallet.provider, asset, recipients: [], totalBaseUnits: option.deposit, source: 'wallet', onStatus: reportStatus })
         const created = Date.now()
         const item = { id: crypto.randomUUID(), protocol: option.protocol, asset, recipient: rows[0].address.sanitized, baseUnits: String(activeValidation.total.baseUnits),
           recipients: rows.map((row) => ({ address: row.address.sanitized, baseUnits: String(row.amount.baseUnits) })),
@@ -954,7 +982,7 @@ function PrivacyHome({ walletSession, settings }) {
       const result = await execute({
         kind: 'send', provider: wallet.provider, asset, recipient: rows[0].address.publicKey,
         recipients: rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
-        totalBaseUnits: fromBalance ? activeValidation.total.baseUnits : option.deposit, source: fromBalance ? 'shielded' : 'wallet', onStatus: setSendStatus,
+        totalBaseUnits: fromBalance ? activeValidation.total.baseUnits : option.deposit, source: fromBalance ? 'shielded' : 'wallet', onStatus: reportStatus,
       })
       if (gas.units) {
         Object.assign(result, await sendGas(gas))
@@ -987,7 +1015,7 @@ function PrivacyHome({ walletSession, settings }) {
     try {
       const { execute } = await loadBrowserAdapter(item.protocol)
       const result = await execute({ kind: 'send', provider: wallet.provider, asset: item.asset, recipient: check.rows[0].address.publicKey,
-        recipients: check.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })), totalBaseUnits: check.total.baseUnits, source: 'shielded', onStatus: setSendStatus })
+        recipients: check.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })), totalBaseUnits: check.total.baseUnits, source: 'shielded', onStatus: reportStatus })
       setPending((items) => items.filter((entry) => entry.id !== item.id))
       shieldedCache.delete(wallet.address); shielded.refresh()
       setReceipt(result); setSendStatus('Sent')
@@ -1009,7 +1037,7 @@ function PrivacyHome({ walletSession, settings }) {
     setSending(true)
     try {
       const { sendScheduledNow } = await loadBrowserAdapter(scheduled.protocol)
-      const result = await sendScheduledNow({ provider: wallet.provider, job: scheduled, onStatus: setSendStatus })
+      const result = await sendScheduledNow({ provider: wallet.provider, job: scheduled, onStatus: reportStatus })
       setScheduled((job) => ({ ...job, status: 'sent', signature: result.tx || undefined }))
     } catch (deliveryError) {
       setSendError(explainFailure(deliveryError instanceof Error ? deliveryError.message : String(deliveryError)))
@@ -1130,6 +1158,10 @@ function PrivacyHome({ walletSession, settings }) {
   const actionLabel = !recommended ? actionVerb
     : plainSend ? `Send ${sentAmount} ${asset} via ${poolLabel(recommended.protocol)}` : `${actionVerb} via ${poolLabel(recommended.protocol)}`
   const actionProgress = isBridge ? 'Bridging...' : isSwap ? 'Swapping...' : shieldOnly ? 'Shielding...' : 'Sending...'
+  // While a payment runs the button fills as its steps go by, and pulses while the wallet waits on the user.
+  const bar = sendProgress ?? START
+  const progressProps = sending ? { className: 'progressing', 'data-waiting': awaitsWallet(sendStatus) ? '' : undefined } : {}
+  const progressFill = sending && <span className="sendProgress" aria-hidden="true" style={{ width: `${(bar.to * 100).toFixed(1)}%`, transitionDuration: `${bar.seconds}s` }} />
   // A payment from the shielded balance has no deposit signature, only withdrawals.
   const submitted = Boolean(receipt?.depositSignature || receipt?.withdrawals?.length)
   // A shielded payment larger than two notes goes out as several withdrawals, each with the pool's fixed fee.
@@ -1251,11 +1283,12 @@ function PrivacyHome({ walletSession, settings }) {
       {keepsLocally && <p className="privHint">Cloak saves what stays shielded in this browser only. Pay from it here before clearing this site’s data.</p>}
       <div className="sendAction">
         <div className="actionArea">{chosenOption
-          ? <button type="button" onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
+          ? <button type="button" {...progressProps} onClick={() => sendOption(chosenOption)} disabled={sending || connecting || Boolean(wallet && (submitted || !activeValidation.valid))}>{progressFill}{connecting ? 'Connecting…' : sending ? sendStatus || 'Sending...' : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : optionAction} {!sending && wallet && !submitted && <ArrowRight />}</button>
           : revealFirst
           ? <button type="button" onClick={shielded.reveal} disabled={sending}><ShieldCheck /> Reveal shielded balance</button>
-          : <button type="button" onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
+          : <button type="button" {...progressProps} onClick={sendTransfer} disabled={sending || connecting || Boolean(wallet && (submitted || scheduledBlocks || !formValid || !activeValidation.valid || loading || !recommended || recommended.band === 'NOT PRIVATE' || !browserExecutable))}>{progressFill}{connecting ? 'Connecting…' : sending ? sendStatus || actionProgress : !wallet ? <><Wallet /> Connect wallet</> : submitted ? 'Submitted' : awaitingShielded ? 'Reading shielded balance…' : loading ? 'Finding route...' : scheduledBlocks ? 'Delivery pending' : recommended?.band === 'NOT PRIVATE' ? 'Not private' : !browserExecutable ? 'View route details' : actionLabel} {!sending && wallet && !submitted && !scheduledBlocks && recommended?.band !== 'NOT PRIVATE' && browserExecutable && <ArrowRight />}</button>}</div>
       </div>
+      {sending && (bar.note || stalledStatus === sendStatus) && <p className="sendNote" role="status">{bar.note || 'This step is taking longer than usual. It is still working: keep this tab open.'}</p>}
     </section>
     {error && <section className="notice error"><CircleAlert /><span>{error}</span></section>}
     {!chosenOption && !measured && recommended && !shieldOnly && <RouteDetails estimate={recommended} alternatives={alternatives} asset={resultAsset} amount={resultAmount} delayMinutes={deadlineMinutes}

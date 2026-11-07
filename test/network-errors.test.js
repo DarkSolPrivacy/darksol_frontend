@@ -42,3 +42,23 @@ test('only relayer requests that got no answer are relabelled', async () => {
   await assert.rejects(target.fetch('https://example.com/?down'), { name: 'TypeError', message: 'Failed to fetch' })
   assert.equal(calls.length, 4)
 })
+
+test('a wallet that cannot pay the network fee is told so in plain words', () => {
+  // Umbra v2's SDK, before anything is signed: no account at all, and too few lamports.
+  const missing = explainFailure("the connected wallet pays this flow's transaction fee and has no account on the cluster, so Solana would refuse it as AccountNotFound; it needs 900880 lamports; nothing was proved, asked of the committee, signed or sent")
+  assert.match(missing, /^This wallet has no SOL for network fees: this step needs 0\.000901 SOL\./)
+  const few = explainFailure("the connected wallet holds 1000000 lamports and paying for this flow's transactions requires 3039280; nothing was proved, asked of the committee, signed or sent")
+  assert.match(few, /^Not enough SOL for network fees: this step needs 0\.00304 SOL/)
+  assert.match(few, /the wallet has 0\.001 SOL/)
+  // Solana's own refusals, from any pool.
+  for (const message of ['Simulation failed: Attempt to debit an account but found no record of a prior credit.', 'insufficient lamports 5000, need 10000', 'InsufficientFundsForFee']) {
+    assert.match(explainFailure(message), /^Not enough SOL to pay the network fee/, message)
+  }
+  // A lamport count with 403 in it is not an RPC refusal.
+  assert.doesNotMatch(explainFailure('the connected wallet holds 1403000 lamports and paying for this flow\'s transactions requires 2403000; nothing was proved'), /RPC access/)
+  assert.match(explainFailure('Request failed with status code 403'), /RPC access was denied/)
+})
+
+test("a wallet refusing to sign for an account that has not connected the site says what to do", () => {
+  assert.match(explainFailure('the wallet failed to sign transactions: Error: The requested method and/or account has not been authorized by the user.'), /switch to the account shown at the top right/)
+})
