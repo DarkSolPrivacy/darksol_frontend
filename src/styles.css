@@ -1924,3 +1924,12 @@ label.privRow { cursor: pointer; }
 .privMore:not(.on) .privMeter:not(:first-child) i.on { background: var(--text-disabled); }
 .privMore.on > span { color: var(--text-primary); }
 .privNote { display: block; line-height: 1.45; }
+.privGroup.soon .privGroupHead { cursor: default; opacity: 0.45; }
+.privGroup.soon .privGroupHead:hover { background: transparent; }
+.privGroup.soon img { filter: grayscale(1); }
+.privOptionLabel em.privSoon { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); font-style: normal; text-transform: uppercase; letter-spacing: 0.04em; }
+.ciSends { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ciSends th, .ciSends td { padding: 8px 6px; text-align: right; border-bottom: 1px solid var(--border-default); white-space: nowrap; }
+.ciSends thead th { color: var(--text-secondary); font-weight: 500; }
+.ciSends tbody th { text-align: left; color: var(--text-primary); font-weight: 500; }
+.privacyNote { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }

@@ -7,9 +7,9 @@ import { ed25519 } from '@noble/curves/ed25519'
 import bs58 from 'bs58'
 import { KEY_MESSAGE_TEXT, accountFromSeed, loginPayload, seedFromSignature, versionedNonce } from '../protocols/nearci/account.js'
 import { TOKENS, TREASURY, checkUnshieldIntent } from '../protocols/nearci/intent.js'
-import { PROTOCOLS } from '../protocols/registry.js'
+import { PROTOCOLS, listProtocols } from '../protocols/registry.js'
 import { validateManifest } from '../protocols/schema.js'
-import { poolFee, sendOptions } from '../src/send-options.js'
+import { QUOTE_POOLS, SOON_POOLS, poolFee, sendOptions } from '../src/send-options.js'
 
 const signature = Uint8Array.from({ length: 64 }, (_, i) => (i * 37 + 11) % 256)
 
@@ -71,8 +71,12 @@ test('an unshield signs only the transfer its quote described', () => {
   assert.throws(() => checkUnshieldIntent('not json', expect), /not JSON/)
 })
 
-test('CI is a registered pool and a ranked send option, with its fee and deposit cost', () => {
+test('CI is registered but planned: shown as Soon, never ranked, even when the quote measures it', () => {
   assert.deepEqual(validateManifest(PROTOCOLS.nearci), { valid: true, errors: [] })
+  assert.equal(PROTOCOLS.nearci.status, 'planned')
+  assert.ok(!listProtocols().some(({ id }) => id === 'nearci'), 'not a live pool: no balance read, no pool lists')
+  assert.deepEqual(SOON_POOLS, ['nearci'])
+  assert.ok(!QUOTE_POOLS.includes('nearci'))
   const prices = { USDC: 1, USDT: 1, SOL: 100 }
   assert.equal(poolFee('nearci', 'USDC', 25_000_000n, prices), 10_005n)
   assert.equal(poolFee('nearci', 'SOL', 10n ** 9n, prices), 112_297n)
@@ -83,12 +87,6 @@ test('CI is a registered pool and a ranked send option, with its fee and deposit
       nearci: { cells: [cell('exact', 'now', 300, 300), cell('keep', '6h', 270, 90), cell('keep', '24h', 270, 3), cell('balance', 'now', 300, 0)], popular: [{ amount: '30000000', deposits: 9 }] },
     },
   }
-  const result = sendOptions({ quote, asset: 'USDC', raw: 25_000_000n, prices, shielded: { nearci: 100_000_000n } })
-  const ids = result.options.map((option) => option.id)
-  assert.deepEqual(ids.sort(), ['nearci:balance:now', 'nearci:later:24h', 'nearci:later:6h', 'nearci:now:now'].sort())
-  const later = result.options.find((option) => option.id === 'nearci:later:24h')
-  // Keep copies the popular 30 USDC; the fee is 1Click's plus the deposit token account rent.
-  assert.deepEqual([later.deposit, later.kept, later.fee, later.level], [30_000_000n, 5_000_000n, 10_005n, 5])
-  assert.ok(Math.abs(later.feeUsd - (0.010005 + 0.0014934 * 100)) < 1e-9)
-  assert.equal(result.options.find((option) => option.id === 'nearci:now:now').level, 1)
+  // The backend still returns a nearci pool; the page ignores it.
+  assert.deepEqual(sendOptions({ quote, asset: 'USDC', raw: 25_000_000n, prices, shielded: { nearci: 100_000_000n } }).options, [])
 })

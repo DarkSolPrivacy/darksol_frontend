@@ -8,7 +8,10 @@ export default Object.freeze({
   id: 'nearci',
   name: 'NEAR Confidential Intents',
   aliases: Object.freeze(['nearci', 'nearconfidentialintents', 'confidentialintents']),
-  status: 'live',
+  // Planned, not live (2026-11-09): 1Click and the private chain's validators
+  // see every transfer, so the send page shows CI greyed out as "Soon" and never
+  // ranks it; the analytics page still shows its measured privacy.
+  status: 'planned',
   chain: 'near',
   chainId: null,
   network: 'NEAR (intents.near), from and to Solana through 1Click',
