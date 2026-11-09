@@ -80,7 +80,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
   const group = ({ protocol, options, best }) => {
     const open = toggled[protocol] ?? protocol === chosen.protocol
     const name = POOL_NAMES[protocol]
-    return <div className={`privGroup${options.includes(result.suggested) ? ' best' : ''}`} key={protocol}>
+    return <div className={`privGroup${options.includes(chosen) ? ' selected' : ''}`} key={protocol}>
       <button type="button" className="privGroupHead" aria-expanded={open} aria-label={`${name}, ${options.length} ${options.length === 1 ? 'option' : 'options'}`} onClick={() => setToggled({ ...toggled, [protocol]: !open })}>
         <img src={LOGOS[protocol]?.src} alt="" />
         <span className="privOptionLabel"><b className="privPoolName">{name}</b><small className="privPoolFee">(Fee {usd(best.feeUsd)})</small>{!open && options.includes(result.suggested) && <BestBadge reason={result.reason} />}{!open && options.includes(chosen) && <small className="chosen">{optionLabel(chosen)}</small>}{options.every((option) => option.paused) && <small>{options[0].paused}</small>}</span>
