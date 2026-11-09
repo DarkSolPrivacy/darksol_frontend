@@ -4,6 +4,16 @@ import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js'
 import { failureReason, track, walletKind } from './product-events.js'
 
 const CHAIN = 'solana:mainnet'
+
+// In Chrome on Android, adds a "Mobile Wallet Adapter" wallet that opens the
+// installed wallet app (Phantom, Solflare, ...) for each approval. It adds
+// nothing inside a wallet app's own browser. Loaded only on Android: 57 KB gzipped.
+const mobileWallet = globalThis.navigator?.userAgent?.includes('Android')
+  ? import('@solana-mobile/wallet-standard-mobile').then(({ registerMwa }) => registerMwa({
+    appIdentity: { name: 'DarkSol', uri: window.location.origin, icon: 'icon-192.png' },
+    chains: [CHAIN],
+  })).catch(() => { /* Installed wallets still work. */ })
+  : null
 const REQUIRED = ['standard:connect', 'solana:signMessage', 'solana:signTransaction']
 const LAST_WALLET = 'darksol:wallet:v1'
 const providers = new WeakMap()
@@ -124,6 +134,7 @@ export function useWalletSession() {
     const current = generation.current
     setConnecting(true)
     pending.current = (async () => {
+      await mobileWallet
       const options = walletChoices()
       if (!options.length) throw new Error('Install a Solana wallet such as Phantom or Solflare')
       const choice = options.length === 1 ? options[0] : await new Promise((resolve) => setPicker({ options, resolve }))
