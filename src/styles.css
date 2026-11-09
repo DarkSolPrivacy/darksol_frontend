@@ -695,20 +695,25 @@ label.privRow { cursor: pointer; }
 .privSwitch:disabled { opacity: .45; cursor: default; }
 .privHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; padding: 0 4px; color: var(--text-secondary); font-size: 12px; }
 .privHint button { height: 30px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
+/* Payments waiting to go out: small cards, beside the send card on wide screens (below). */
 .privPending { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.privPendingItem { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.privPendingItem { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .privPendingItem.ready { border-color: var(--accent-line); }
 .privPendingHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.privPendingHead b { font: 500 16px var(--font-mono); }
-.privPendingHead code { color: var(--text-secondary); font-size: 12px; }
-.privPendingReady { display: inline-flex; align-items: center; gap: 6px; color: var(--positive); font-size: 13px; }
-.privPendingReady svg { width: 14px; height: 14px; }
-.privProgress { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 12px; }
-.privProgress i { height: 5px; border-radius: 3px; background: var(--border-subtle); }
-.privProgress b { display: block; height: 5px; border-radius: 3px; background: var(--accent); }
+.privPendingHead b { font: 500 13px var(--font-mono); }
+.privPendingHead code { color: var(--text-secondary); font-size: 11px; }
+.privPendingReady { display: inline-flex; align-items: center; gap: 6px; color: var(--positive); font-size: 12px; }
+.privPendingReady svg { width: 13px; height: 13px; }
+.privProgress { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 11px; }
+.privProgress i { height: 4px; border-radius: 2px; background: var(--border-subtle); }
+.privProgress b { display: block; height: 4px; border-radius: 2px; background: var(--accent); }
 .privPendingActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.privPendingActions button { height: 40px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: transparent; color: var(--text-primary); font-size: 13px; }
+.privPendingActions button { height: 30px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; white-space: nowrap; }
 .privPendingActions button.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+/* Where the page has room, under the wallet button on the right, out of the send card's way. */
+@media (min-width: 1440px) {
+  .privPending { position: fixed; top: calc(16px + var(--control-md) + 16px); right: 24px; z-index: 40; width: 248px; max-height: calc(100vh - 96px); margin: 0; overflow-y: auto; }
+}
 
 /* The action row closes the module. */
 .sendAction { display: flex; align-items: center; gap: 6px; margin-top: 6px; }

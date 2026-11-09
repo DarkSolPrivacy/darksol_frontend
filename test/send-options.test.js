@@ -71,6 +71,23 @@ test('priorities: time sends now in the cheapest pool, fees takes the cheapest o
   assert.equal(effectiveSettings({ mode: 'auto', priority: 'fees', maxWait: 'now' }).priority, 'auto')
 })
 
+test('the longest wait in settings hides every longer wait, the shield-more offer included', () => {
+  const custom = (maxWait) => ({ ...DEFAULT_SETTINGS, mode: 'custom', priority: 'privacy', maxWait })
+  for (const topUp of [true, false]) {
+    const six = options(19.28, { settings: custom('6h'), topUp })
+    assert.ok(six.options.every((option) => option.waitSeconds <= 21_600))
+    // The fixture measures 6 h only for a common deposit (the top-up).
+    assert.equal(six.options.some((option) => option.wait === '6h'), topUp)
+    const none = options(19.28, { settings: custom('now'), topUp, shielded: { privacycash: USDC(50) } })
+    assert.ok(none.options.every((option) => option.waitSeconds === 0))
+    assert.ok(none.options.some((option) => option.kind === 'balance'))
+  }
+  // With a day allowed the shield-more suggestion waits a day; with 6 h, its best is 6 h.
+  assert.equal(options(19.28, { settings: custom('24h') }).suggested.id, 'privacycash:later:24h')
+  assert.equal(options(19.28, { settings: custom('6h') }).suggested.id, 'privacycash:later:6h')
+  assert.equal(options(19.28, { settings: custom('now') }).suggested.wait, 'now')
+})
+
 test('once two waits show the same meter step at the same fee, the sooner one is suggested', () => {
   // 90 USDC: 6 h scores 90 and 24 h 97, both 5 of 5; less the fee, 6 h ranked a step lower.
   const both = { ...quote, pools: { privacycash: { cells: [cell('exact', 'now', '10-100', 30, 30), cell('exact', '6h', '10-100', 30, 3), cell('exact', '24h', '10-100', 30, 1)], popular: [] } } }

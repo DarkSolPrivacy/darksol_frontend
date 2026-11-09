@@ -192,8 +192,10 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     }
     const deposit = fixed ?? (topUp && !chosen.keepNothing && send.keepShielded ? popularDeposit(pool.popular, raw) : null) ?? raw
     if (!balanceOnly) add('now', 'now', deposit)
+    // A wait longer than the settings' longest is never offered, not even greyed
+    // out: neither in the list nor as the shield-more offer.
     if (!balanceOnly && send.keepShielded && send.fromShielded) {
-      for (const wait of LATER_WAITS) add('later', wait, deposit)
+      for (const wait of LATER_WAITS) if (WAITS[wait] <= WAITS[chosen.maxWait]) add('later', wait, deposit)
     }
     if (send.fromShielded) {
       const balance = shielded[protocol]
@@ -205,7 +207,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       }
     }
   }
-  const allowed = options.filter((option) => option.executable && chosen.pools[option.protocol] && option.waitSeconds <= WAITS[chosen.maxWait])
+  const allowed = options.filter((option) => option.executable && chosen.pools[option.protocol])
   const pool = chosen.priority === 'time' && allowed.some((option) => option.waitSeconds === 0) ? allowed.filter((option) => option.waitSeconds === 0) : allowed
   const sorted = [...pool].sort(compare(chosen.priority))
   // An option on the same meter step or higher, at no higher fee, leads when it
