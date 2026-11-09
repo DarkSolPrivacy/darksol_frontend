@@ -15,7 +15,11 @@ import { PROTOCOLS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
 
-export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2', 'nearci'])
+export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
+// Shown under the options, greyed out as "Soon", never ranked: NEAR Confidential
+// Intents hides a payment from the public but not from 1Click or the validators
+// of NEAR's private chain (protocols/nearci/manifest.js).
+export const SOON_POOLS = Object.freeze(['nearci'])
 // A cell with fewer sends says too little to offer the option.
 export const MIN_SENDS = 10
 export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h': 86_400 })
@@ -29,7 +33,7 @@ const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
 export const DEFAULT_SETTINGS = Object.freeze({
   mode: 'auto', priority: 'privacy', maxWait: '24h', keepNothing: false, remind: true,
-  pools: Object.freeze({ privacycash: true, cloakc: true, umbrav2: true, nearci: true }),
+  pools: Object.freeze({ privacycash: true, cloakc: true, umbrav2: true }),
 })
 
 /** What the ranking uses: Auto is privacy first, a day's wait and every pool; the two switches always apply. */

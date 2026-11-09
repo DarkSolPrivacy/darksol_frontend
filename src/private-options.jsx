@@ -4,10 +4,11 @@
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
 import { ArrowRight, Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'lucide-react'
-import { LOGOS } from '../protocols/registry.js'
+import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
+import { SOON_POOLS } from './send-options.js'
 
-const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2', nearci: 'NEAR Confidential Intents' }
+const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
 const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
 
@@ -94,6 +95,12 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     {more && <ShieldMore {...more} base={more.on ? more.base : chosen} asset={asset} />}
     <div className="privList" role="radiogroup" aria-label="How to send">
       {groups.map(group)}
+      {SOON_POOLS.map((id) => <div className="privGroup soon" key={id} aria-disabled="true" title="Not offered yet: it hides a payment from the public, not from the service that runs it">
+        <div className="privGroupHead">
+          <img src={LOGOS[id]?.src} alt="" />
+          <span className="privOptionLabel"><b className="privPoolName">{PROTOCOLS[id]?.name ?? id}</b><em className="privSoon">Soon</em></span>
+        </div>
+      </div>)}
     </div>
     {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={!reading && result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
     <div className="privTiles">
