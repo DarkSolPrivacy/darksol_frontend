@@ -15,7 +15,7 @@ import { PROTOCOLS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
 
-export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
+export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2', 'nearci'])
 // A cell with fewer sends says too little to offer the option.
 export const MIN_SENDS = 10
 export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h': 86_400 })
@@ -29,7 +29,7 @@ const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
 export const DEFAULT_SETTINGS = Object.freeze({
   mode: 'auto', priority: 'privacy', maxWait: '24h', keepNothing: false, remind: true,
-  pools: Object.freeze({ privacycash: true, cloakc: true, umbrav2: true }),
+  pools: Object.freeze({ privacycash: true, cloakc: true, umbrav2: true, nearci: true }),
 })
 
 /** What the ranking uses: Auto is privacy first, a day's wait and every pool; the two switches always apply. */
@@ -170,8 +170,8 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     // Privacy Cash charges its fixed part per recipient.
     if (recipients > 1 && manifest.fees.fixedBasis === 'recipient') fee += poolFee(protocol, asset, 0n, prices) * BigInt(recipients - 1)
     const feeUsd = toNumber(fee, asset) * prices[asset]
-    // A fresh deposit also pays its network fee and rent.
-    const depositUsd = (manifest.fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
+    // A fresh deposit also pays its network fee and rent (per token where it differs, as for NEAR Confidential Intents).
+    const depositUsd = (manifest.fees.depositCostSolByToken?.[asset] ?? manifest.fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
     const runs = canRun(protocol) && (protocol !== 'cloakc' || raw >= PAYMENT_ASSETS[asset].cloakMin)
     const add = (kind, wait, deposit, extra) => {
       const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket)
