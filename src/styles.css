@@ -657,7 +657,8 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .privOption.chosen { background: var(--bg-elevated); }
 .privOption.off { opacity: .5; cursor: default; }
 .privOption input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
-.privOptionLabel { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* Wraps the fee under the name when a narrow phone has no room beside it. */
+.privOptionLabel { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
 .privOptionLabel b { font-size: 14px; font-weight: 500; }
 .privOptionLabel em { padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--on-accent); font: 600 11px var(--font-ui); }
 .privOptionLabel em.private { background: var(--positive); }
@@ -1145,11 +1146,10 @@ label.privRow { cursor: pointer; }
 .tourCount { color: var(--text-tertiary); font: 500 11px var(--font-mono); }
 .tourCard h3 { margin: 6px 0 6px; font-size: 15px; }
 .tourCard > p { margin: 0 0 14px; color: var(--text-secondary); font-size: 13px; line-height: 1.55; }
-.tourExample { margin: 0 0 14px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-input); }
-.tourExample > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; font-size: 12px; }
-.tourExample .privacy strong { font-size: 13px; }
-.tourExample .routeReasons { margin-top: 10px; gap: 5px; }
-.tourExample .routeReasons li { font-size: 11px; }
+/* The real options list with made-up numbers: only the pools and their bars. */
+.tourExample { margin: 0 0 14px; }
+.tourExample .privOptions { margin: 0; }
+.tourExample :is(.privTiles, .privGroup.soon) { display: none; }
 .tourFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tourFoot > div { display: flex; gap: 8px; }
 .tourFoot button { height: var(--control-md); padding: 0 12px; font-size: 13px; }
