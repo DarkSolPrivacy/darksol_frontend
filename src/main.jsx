@@ -1374,20 +1374,26 @@ const ONBOARDED_KEY = 'darksol:onboarded:v2'
 // on screen (swap and bridge have no shield, delay or add buttons) is skipped.
 const TOUR = [
   { target: '.sendAction', title: 'The best fit for you', example: true,
-    body: 'We check every pool for the clues an analyst would use to trace a payment, and choose the route that leaves the fewest.' },
+    body: 'For the amount you type, we measure how often each pool’s payments get traced, show it as 1 to 5 bars, and pick the best. Waiting before the payment goes out often adds bars.' },
   { target: '.shieldControl', title: 'Keep part shielded', body: 'Send only part of your deposit and keep the rest private, so the two amounts don’t match.' },
   { target: '.addReceiver', title: 'Several recipients', body: 'Split one payment between several addresses, so no single withdrawal matches your deposit.' },
 ]
 const TOUR_GAP = 12
 
-// What Details shows for a private send, in miniature.
+// The options list a 100 USDC send shows, with made-up numbers: Privacy Cash
+// reaches 5 of 5 after a 6 h wait (3 now), Umbra v2 4 and Cloak 2.
+const tourOption = (protocol, wait, level, feeUsd) => ({
+  id: `${protocol}:${wait}`, protocol, kind: wait === 'now' ? 'now' : 'later', wait, waitSeconds: wait === 'now' ? 0 : 21_600,
+  level, score: level * 20 - 5, feeUsd, deposit: 100_000_000n, receives: 100_000_000n - BigInt(feeUsd * 1e6), kept: 0n, executable: true,
+})
+const TOUR_BEST = tourOption('privacycash', '6h', 5, 0.42)
+const TOUR_UMBRA = tourOption('umbrav2', 'now', 4, 0.18)
+const TOUR_RESULT = { suggested: TOUR_BEST, reason: 'privacy', fastest: TOUR_UMBRA,
+  options: [TOUR_BEST, tourOption('privacycash', 'now', 3, 0.42), TOUR_UMBRA, tourOption('cloakc', 'now', 2, 0.31)] }
+
 function TourExample() {
-  return <div className="tourExample" aria-hidden="true">
-    <div><b>PrivacyCash ranks first</b><div className="privacy high"><strong>High</strong><em>82/100</em></div></div>
-    <ul className="routeReasons">
-      <li className="positive"><i>+</i><span>122 similar-size transfers hide yours</span></li>
-      <li className="positive"><i>+</i><span>28 points ahead of the next pool</span></li>
-    </ul>
+  return <div className="tourExample" aria-hidden="true" inert>
+    <PrivateOptions result={TOUR_RESULT} chosen={TOUR_BEST} onChoose={() => {}} asset="USDC" />
   </div>
 }
 
