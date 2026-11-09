@@ -1923,3 +1923,4 @@ label.privRow { cursor: pointer; }
 .privMore:not(.on) .privMoreArrow ~ .privMoreWait { color: var(--text-tertiary); }
 .privMore:not(.on) .privMeter:not(:first-child) i.on { background: var(--text-disabled); }
 .privMore.on > span { color: var(--text-primary); }
+.privNote { display: block; line-height: 1.45; }

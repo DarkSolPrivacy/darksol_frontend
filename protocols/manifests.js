@@ -8,8 +8,9 @@
 // local check stayed green.
 import cloakc from './cloakc/manifest.js'
 import curvy from './curvy/manifest.js'
+import nearci from './nearci/manifest.js'
 import privacycash from './privacycash/manifest.js'
 import umbra from './umbra/manifest.js'
 import umbrav2 from './umbrav2/manifest.js'
 
-export const manifests = Object.freeze([cloakc, privacycash, curvy, umbra, umbrav2])
+export const manifests = Object.freeze([cloakc, privacycash, curvy, umbra, umbrav2, nearci])

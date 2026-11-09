@@ -7,7 +7,7 @@ import { ArrowRight, Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'luci
 import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 
-const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
+const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2', nearci: 'NEAR Confidential Intents' }
 const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
 
@@ -101,7 +101,21 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>
       <div><small>Stays shielded</small><b className={chosen.kept > 0n ? 'up' : ''}>{chosen.kept > 0n ? `+${tokenText(chosen.kept, asset)}` : tokenText(chosen.kind === 'balance' ? chosen.balanceAfter : 0n, asset)}</b></div>
     </div>
+    {chosen.protocol === 'nearci' && <NearCiNote />}
   </section>
+}
+
+/**
+ * What NEAR Confidential Intents does not hide, beside its measured meter
+ * (darksol-backend docs/NEAR_CI.md): the meter is how often a public observer
+ * pairs the payment with its deposit, for a recipient with no public link to
+ * the sender, which is what the measurement assumes.
+ */
+export function NearCiNote() {
+  return <p className="privHint privNote">
+    Measured on NEAR's public data. 1Click, which runs both swaps, and the validators of NEAR's private chain can still see who paid whom.
+    {' '}Pay an address that has never received from this wallet: a known address links the payment whatever the pool.
+  </p>
 }
 
 /** Optional: deposit a common amount, send what was typed and keep the rest shielded, for more privacy. */

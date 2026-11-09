@@ -2,7 +2,8 @@
 // manifest fails CI rather than a request.
 
 export const EXECUTION_MODES = Object.freeze(['sdk', 'documented-only', 'unsupported'])
-export const CHAINS = Object.freeze(['solana', 'arbitrum'])
+// near: NEAR Confidential Intents, reached from Solana through 1Click (protocols/nearci).
+export const CHAINS = Object.freeze(['solana', 'arbitrum', 'near'])
 export const LANES = Object.freeze(['solana', 'evm', 'none'])
 export const STATUSES = Object.freeze(['live', 'planned', 'disabled'])
 export const CAPABILITIES = Object.freeze(['send', 'swap', 'bridge'])
@@ -15,6 +16,8 @@ export const SUPPORTED_ASSETS = Object.freeze(['USDC', 'SOL', 'USDT'])
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 const EVM = /^0x[0-9a-f]{40}$/
+// A NEAR implicit account: an ed25519 public key in hex.
+const NEAR_IMPLICIT = /^[0-9a-f]{64}$/
 
 const isPlainString = (value) => typeof value === 'string' && value.length > 0
 
@@ -44,7 +47,7 @@ export function validateManifest(manifest) {
   } else {
     for (const [key, value] of Object.entries(addresses)) {
       if (!isPlainString(value)) { fail(`addresses.${key} must be a string`); continue }
-      const pattern = value.startsWith('0x') ? EVM : BASE58
+      const pattern = value.startsWith('0x') ? EVM : manifest.chain === 'near' ? NEAR_IMPLICIT : BASE58
       if (!pattern.test(value)) fail(`addresses.${key} is not a well-formed address: ${value}`)
     }
     if (!isPlainString(manifest?.primaryAddress) || !(manifest.primaryAddress in addresses)) {

@@ -31,10 +31,11 @@ import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSett
 // The pool selector used to hardcode which ids sit under which heading, and the
 // bridge picker named privacycash directly. Both follow the manifests now.
 const SOLANA_POOL_IDS = listProtocols({ chain: 'solana' }).map(({ id }) => id)
-const OTHER_POOL_IDS = listProtocols().filter(({ chain }) => chain !== 'solana').map(({ id }) => id)
+// Pools whose flows the dashboard indexes; NEAR Confidential Intents (lane none) is measured by its own service.
+const OTHER_POOL_IDS = listProtocols().filter(({ chain, indexer }) => chain !== 'solana' && indexer.lane !== 'none').map(({ id }) => id)
 const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || null
 const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
-const SHIELDED_POOL_IDS = listProtocols({ chain: 'solana' }).filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
+const SHIELDED_POOL_IDS = listProtocols().filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
 // Shield only offers the payment-link pools and Umbra v2, which deposits into the
 // wallet's own private balance but has no payment links.
