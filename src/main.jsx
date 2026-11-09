@@ -879,6 +879,13 @@ function PrivacyHome({ walletSession, settings }) {
     } catch (error) { return { gasError: error instanceof Error ? error.message : String(error) } }
   }
 
+  // A payment that went through empties its amounts, so the options give way to
+  // the confirmation below the card, which stays until the next edit. The
+  // addresses stay.
+  function clearSentAmounts() {
+    setAmount(''); setReceiverAmounts((values) => values.map(() => '')); setKeepAmount(''); setSendAttempted(false)
+  }
+
   // A wallet with no SOL has no account on Solana, so the first transaction it
   // pays is refused, after it may already have signed an unlock message or
   // waited out a proof. One balance read says so first; a failed read says nothing.
@@ -938,6 +945,7 @@ function PrivacyHome({ walletSession, settings }) {
       // The shielded balance changed; the next read must not start from the old figure.
       if (keeping || shieldOnly || payingShielded || kind === 'swap' || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
       setReceipt({ ...result, kept: keeping ? `${rawTokenText(keepRaw, asset)} ${asset}` : null, shielded: shieldOnly ? `${rawTokenText(totalRaw, asset)} ${asset}` : null }); setSendStatus(shieldOnly ? 'Shielded' : 'Sent')
+      clearSentAmounts()
       track('send_completed', { ...stats, recipients: kind === 'send' && !shieldOnly && receiverCount > 1 ? 'many' : 'one' })
     } catch (transferError) {
       track('send_failed', { ...stats, stage: payingShielded || transferError?.receipt?.depositSignature ? 'withdrawal' : 'deposit', reason: failureReason(transferError) })
@@ -974,6 +982,7 @@ function PrivacyHome({ walletSession, settings }) {
         if (settings.remind && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
         shieldedCache.delete(wallet.address); shielded.refresh()
         setReceipt({ ...result, pending: item }); setSendStatus('')
+        clearSentAmounts()
         track('send_completed', { ...stats, recipients })
         return
       }
@@ -991,6 +1000,7 @@ function PrivacyHome({ walletSession, settings }) {
       }
       if (fromBalance || option.kept > 0n || gas.units) { shieldedCache.delete(wallet.address); shielded.refresh() }
       setReceipt({ ...result, kept: option.kept > 0n ? `${rawTokenText(option.kept, asset)} ${asset}` : null }); setSendStatus('Sent')
+      clearSentAmounts()
       track('send_completed', { ...stats, recipients })
     } catch (transferError) {
       track('send_failed', { ...stats, stage: option.kind === 'balance' || transferError?.receipt?.depositSignature ? 'withdrawal' : 'deposit', reason: failureReason(transferError) })
