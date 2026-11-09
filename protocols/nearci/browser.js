@@ -121,6 +121,23 @@ async function settle(depositAddress, onStatus, label) {
 
 const deadline = () => new Date(Date.now() + 3_600_000).toISOString()
 
+// 1Click asks its market makers for every quote; when none answers in time it
+// returns no deposit address ("Deposit address is not included in quote
+// response"). Nothing has been signed then, so asking again is safe.
+async function quote(body) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const { quote: answer } = await api('/quote', { method: 'POST', body })
+      if (answer?.depositAddress) return answer
+      if (attempt >= 3) throw new Error('no deposit address')
+    } catch (error) {
+      if (error.status && error.status < 500 && !/deposit address|quote/i.test(error.message)) throw error
+      if (attempt >= 3) throw new Error('1Click could not get a quote from its market makers right now. Nothing was sent: try again in a minute.')
+    }
+    await sleep(2000 * attempt)
+  }
+}
+
 // Polls the signature: DarkSol's RPC proxy has no websocket, which web3.js's
 // confirmTransaction waits on (it then reports a landed transaction as expired).
 async function landed(connection, signature, lastValidBlockHeight) {
@@ -141,12 +158,12 @@ async function landed(connection, signature, lastValidBlockHeight) {
 // Pays `units` of `asset` from the wallet into the account; resolves once 1Click credited it.
 async function shield({ provider, account, asset, units, onStatus }) {
   const wallet = provider.publicKey
-  const { quote } = await api('/quote', { method: 'POST', body: {
+  const shieldQuote = await quote({
     mode: 'shield', dry: false, swapType: 'EXACT_INPUT', slippageTolerance: 50, originAsset: TOKENS[asset], destinationAsset: TOKENS[asset],
     amount: String(units), recipient: account.id, refundTo: wallet.toBase58(), deadline: deadline(),
-  } })
-  if (!quote?.depositAddress || String(quote.amountIn) !== String(units)) throw new Error('NEAR Intents: the shield quote does not match the payment')
-  const depositAddress = new PublicKey(quote.depositAddress)
+  })
+  if (String(shieldQuote.amountIn) !== String(units)) throw new Error('NEAR Intents: the shield quote does not match the payment')
+  const depositAddress = new PublicKey(shieldQuote.depositAddress)
   const transaction = new Transaction()
   if (asset === 'SOL') {
     transaction.add(SystemProgram.transfer({ fromPubkey: wallet, toPubkey: depositAddress, lamports: BigInt(units) }))
@@ -169,27 +186,27 @@ async function shield({ provider, account, asset, units, onStatus }) {
   onStatus('Waiting for the deposit to confirm…')
   await landed(connection, signature, lastValidBlockHeight)
   // Tells 1Click about it so it need not wait to notice; best effort.
-  await api('/deposit', { method: 'POST', body: { txHash: signature, depositAddress: quote.depositAddress } }).catch(() => {})
-  await settle(quote.depositAddress, onStatus, 'Shielding into NEAR Confidential Intents')
-  return { signature, depositAddress: quote.depositAddress }
+  await api('/deposit', { method: 'POST', body: { txHash: signature, depositAddress: shieldQuote.depositAddress } }).catch(() => {})
+  await settle(shieldQuote.depositAddress, onStatus, 'Shielding into NEAR Confidential Intents')
+  return { signature, depositAddress: shieldQuote.depositAddress }
 }
 
 // Pays `units` of `asset` out of the account to `recipient` (the recipient gets them less 1Click's fee).
 async function unshield({ account, asset, units, recipient, onStatus }) {
   onStatus('Asking 1Click for the withdrawal…')
-  const { quote } = await api('/quote', { method: 'POST', body: {
+  const exitQuote = await quote({
     mode: 'unshield', dry: false, swapType: 'EXACT_INPUT', slippageTolerance: 50, originAsset: TOKENS[asset], destinationAsset: TOKENS[asset],
     amount: String(units), recipient, refundTo: account.id, deadline: deadline(),
-  } })
-  if (!quote?.depositAddress || String(quote.amountIn) !== String(units) || !(BigInt(quote.amountOut ?? 0) > 0n)) throw new Error('NEAR Intents: the withdrawal quote does not match the payment')
-  const { intent } = await api('/intent', { method: 'POST', body: { signerId: account.id, depositAddress: quote.depositAddress } })
+  })
+  if (String(exitQuote.amountIn) !== String(units) || !(BigInt(exitQuote.amountOut ?? 0) > 0n)) throw new Error('NEAR Intents: the withdrawal quote does not match the payment')
+  const { intent } = await api('/intent', { method: 'POST', body: { signerId: account.id, depositAddress: exitQuote.depositAddress } })
   const payload = typeof intent?.payload === 'string' ? intent.payload : JSON.stringify(intent?.payload)
   // Signs nothing but this exact transfer.
-  checkUnshieldIntent(payload, { signer: account.id, receiver: quote.depositAddress, asset, units })
+  checkUnshieldIntent(payload, { signer: account.id, receiver: exitQuote.depositAddress, asset, units })
   onStatus('Signing the withdrawal with your NEAR Confidential Intents key…')
   await api('/intent/submit', { method: 'POST', body: { signedData: account.signedData(payload) } })
-  const status = await settle(quote.depositAddress, onStatus, 'Paying the recipient from your private balance')
-  return { amountOut: String(status.swapDetails?.amountOut ?? quote.amountOut), signature: status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null }
+  const status = await settle(exitQuote.depositAddress, onStatus, 'Paying the recipient from your private balance')
+  return { amountOut: String(status.swapDetails?.amountOut ?? exitQuote.amountOut), signature: status.swapDetails?.destinationChainTxHashes?.[0]?.hash ?? null }
 }
 
 /**

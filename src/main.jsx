@@ -7,7 +7,7 @@ import PaymentLinks, { PAUSED, POOLS, PoolPicker, PoolSort, forgetAccess, poolHi
 import { PAYMENT_ASSETS, cloakMinimum } from './payment-assets.js'
 import PaymentCheckout from './payment-checkout.jsx'
 import TracePage from './traceability.jsx'
-import PoolPrivacy from './pool-privacy.jsx'
+import PoolPrivacy, { NearCiPrivacy } from './pool-privacy.jsx'
 import { PRIVACY_POOLS } from './pool-privacy.js'
 import { dropCampaignTags, recordPageView } from './page-views.js'
 import { failureReason, track } from './product-events.js'
@@ -1731,14 +1731,17 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const [range, setRange] = useState('30D')
   const [token, setToken] = useState('USDC')
   // Privacy leads; the flow charts are for whoever wants the raw activity.
-  const traced = PRIVACY_POOLS.includes(protocol)
+  // NEAR Confidential Intents is measured by its own service: privacy only, no dashboard flows.
+  const ci = protocol === 'nearci'
+  const traced = PRIVACY_POOLS.includes(protocol) || ci
   const [tab, setTab] = useState('privacy')
-  const view = traced ? tab : 'activity'
+  const view = ci ? 'privacy' : traced ? tab : 'activity'
   const [analytics, setAnalytics] = useState(EMPTY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (ci) { setAnalytics(EMPTY); setError(''); setLoading(false); return undefined }
     const controller = new AbortController()
     async function load() {
       setLoading(true)
@@ -1771,14 +1774,14 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <div className="analyticsToolbar">
       <div className="viewTabs" role="tablist" aria-label="View">
         <button type="button" role="tab" aria-selected={view === 'privacy'} disabled={!traced} onClick={() => setTab('privacy')}>Privacy{!traced && <em>Soon</em>}</button>
-        <button type="button" role="tab" aria-selected={view === 'activity'} onClick={() => setTab('activity')}>Activity</button>
+        <button type="button" role="tab" aria-selected={view === 'activity'} disabled={ci} onClick={() => setTab('activity')}>Activity</button>
       </div>
-      <div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>
+      {!ci && <div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>}
     </div>
     {error && <section className="notice error"><CircleAlert /><b className="indexState error">Error</b><span>{error}</span></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
-    {view === 'privacy' ? <PoolPrivacy protocol={protocol} range={range} /> : <>
+    {view === 'privacy' ? (ci ? <NearCiPrivacy /> : <PoolPrivacy protocol={protocol} range={range} />) : <>
     <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
     <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} balance`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
 
@@ -1797,7 +1800,8 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
 
     <RecentActivity key={`${protocol}:${range}`} analytics={analytics} loading={loading} protocol={protocol} />
     </>}
-    <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>
+    {ci ? <footer>Collected from FastNEAR by DarkSol’s nearci service <span>•</span> CI Treasury on intents.near <span>•</span> {PROTOCOLS.nearci.fees.policyLabel} ({PROTOCOLS.nearci.fees.policyDetail})</footer>
+      : <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>}
   </div>
 }
 
