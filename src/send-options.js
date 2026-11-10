@@ -42,6 +42,18 @@ export function effectiveSettings(settings = DEFAULT_SETTINGS) {
   return base.mode === 'custom' ? base : { ...base, priority: 'auto', maxWait: '24h', pools: { ...DEFAULT_SETTINGS.pools } }
 }
 
+// Include every setting that changes the simulation in its request identity.
+// A late response for another wait limit or manual deposit must never be used.
+export function simulationRequest({ asset, raw, settings, deposit = null }) {
+  const decimal = (value) => {
+    const scale = 10n ** BigInt(TOKEN_DECIMALS[asset])
+    return `${value / scale}.${String(value % scale).padStart(TOKEN_DECIMALS[asset], '0')}`
+  }
+  if (!(raw > 0n)) return null
+  return { asset, amount: decimal(raw), maxWait: effectiveSettings(settings).maxWait,
+    ...(deposit !== null && { deposit: decimal(deposit) }) }
+}
+
 // Never below 1: even a send the red team traced every time leaves no proof that
 // the money is the same, which the pool alone provides. 0 is kept for the one
 // case with no cover at all (overwhelmed below).
@@ -99,16 +111,17 @@ export function withSimulation(quote, sim, bucket) {
   for (const [protocol, measured] of Object.entries(sim.pools)) {
     if (!Array.isArray(measured?.cells)) continue
     const quoted = pools[protocol]
-    pools[protocol] = { ...quoted, cells: [...(quoted?.cells ?? []).filter((cell) => cell.bucket !== bucket), ...measured.cells.map((cell) => ({ ...cell, bucket, simulated }))] }
+    pools[protocol] = { ...quoted, amountMode: measured.amountMode, cells: [...(quoted?.cells ?? []).filter((cell) => cell.bucket !== bucket), ...measured.cells.map((cell) => ({ ...cell, bucket, simulated }))] }
   }
   return quote ? { ...quote, pools } : { asset: sim.asset, buckets: [bucket], pools }
 }
 
 // The first of `strategies` the quote measured with enough sends; `simulated`
 // when it was measured for this exact amount.
-function privacyOf(pool, strategies, wait, bucket) {
+function privacyOf(pool, strategies, wait, bucket, deposit = null) {
   for (const strategy of [strategies].flat()) {
-    const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket)
+    const cell = pool?.cells?.find((item) => item.strategy === strategy && item.wait === wait && item.bucket === bucket
+      && (pool.amountMode !== 'gross' || strategy !== 'keep' || item.deposit === String(deposit)))
     if (cell && cell.sends >= MIN_SENDS) return { score: Math.round(100 * (1 - cell.traced / cell.sends)), sends: cell.sends, ...cell.simulated && { simulated: cell.simulated } }
   }
   return null
@@ -127,7 +140,9 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
   if (!pool || !(raw > 0n) || !(prices[asset] > 0)) return null
   const bucket = bucketFor(toNumber(raw, asset) * prices[asset], quote.buckets)
   const common = deposit !== null && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit)
-  const privacy = privacyOf(pool, kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact', 'now', bucket)
+  const strategy = pool.amountMode === 'gross' && kind === 'keep' ? (deposit > raw ? 'keep' : 'exact')
+    : kind !== 'keep' ? kind : common ? ['keep', 'exact'] : 'exact'
+  const privacy = privacyOf(pool, strategy, 'now', bucket, deposit)
   return privacy && { ...privacy, bucket, level: overwhelmed(pool, toNumber(raw, asset), 'now') ? 0 : meterLevel(privacy.score) }
 }
 
@@ -138,6 +153,7 @@ export function measuredPrivacy({ quote, protocol, asset, raw, prices, kind, dep
 function strategyOf(pool, kind, recipients, deposit, raw) {
   if (kind === 'balance') return 'balance'
   if (recipients > 1) return 'split'
+  if (pool.amountMode === 'gross') return deposit > raw ? 'keep' : 'exact'
   return deposit >= raw && (pool.popular ?? []).some(({ amount }) => BigInt(amount) === deposit) ? ['keep', 'exact'] : 'exact'
 }
 
@@ -178,7 +194,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     const depositUsd = (manifest.fees.depositCostSolByToken?.[asset] ?? manifest.fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
     const runs = canRun(protocol) && (protocol !== 'cloakc' || raw >= PAYMENT_ASSETS[asset].cloakMin)
     const add = (kind, wait, deposit, extra) => {
-      const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket)
+      const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket, deposit)
       if (!privacy) return
       const cost = feeUsd + (kind === 'balance' ? 0 : depositUsd)
       // A pool that paused deposits can still pay from its shielded balance.
@@ -190,12 +206,24 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
         deposit, kept: deposit - raw, executable: runs && !paused, paused, ...extra,
       })
     }
-    const deposit = fixed ?? (topUp && !chosen.keepNothing && send.keepShielded ? popularDeposit(pool.popular, raw) : null) ?? raw
-    if (!balanceOnly) add('now', 'now', deposit)
+    const depositFor = (wait) => {
+      if (fixed !== null) return fixed
+      if (!topUp || chosen.keepNothing || !send.keepShielded) return raw
+      if (pool.amountMode !== 'gross') return popularDeposit(pool.popular, raw) ?? raw
+      // Each candidate was tested with this withdrawal and this deposit. Pick
+      // separately for each permitted wait; a 24 h winner need not win at 6 h.
+      if (recipients > 1) return raw
+      const level = (cell) => meterLevel(Math.round(100 * (1 - cell.traced / cell.sends)))
+      const candidates = pool.cells.filter((cell) => cell.bucket === bucket && cell.strategy === 'keep' && cell.wait === wait
+        && cell.sends >= MIN_SENDS && cell.deposit && BigInt(cell.deposit) > raw && BigInt(cell.deposit) <= raw * 3n / 2n)
+        .sort((a, b) => level(b) - level(a) || Number(BigInt(a.deposit) - BigInt(b.deposit)))
+      return candidates.length ? BigInt(candidates[0].deposit) : raw
+    }
+    if (!balanceOnly) add('now', 'now', depositFor('now'))
     // A wait longer than the settings' longest is never offered, not even greyed
     // out: neither in the list nor as the shield-more offer.
     if (!balanceOnly && send.keepShielded && send.fromShielded) {
-      for (const wait of LATER_WAITS) if (WAITS[wait] <= WAITS[chosen.maxWait]) add('later', wait, deposit)
+      for (const wait of LATER_WAITS) if (WAITS[wait] <= WAITS[chosen.maxWait]) add('later', wait, depositFor(wait))
     }
     if (send.fromShielded) {
       const balance = shielded[protocol]
@@ -231,6 +259,16 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
       : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
   return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
+}
+
+/** An optional privacy improvement, even when the fee/time priority leads elsewhere. */
+export function shieldMoreOffer(plain, more) {
+  const base = plain?.suggested
+  if (!base || !more || more.settings.keepNothing) return null
+  return more.options.filter((option) => option.executable && more.settings.pools[option.protocol]
+    && option.waitSeconds <= WAITS[more.settings.maxWait] && option.kept > 0n && option.level > base.level)
+    .sort((a, b) => b.level - a.level || a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd
+      || Number(a.kept - b.kept) || b.score - a.score)[0] ?? null
 }
 
 function compare(priority) {

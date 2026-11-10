@@ -128,12 +128,12 @@ export function NearCiNote() {
 /** Optional: deposit a common amount, send what was typed and keep the rest shielded, for more privacy. */
 // Grey until switched on: today's meter, an arrow, the meter with the extra shielded.
 export function ShieldMore({ option, base, asset, on, onToggle }) {
-  const detail = `Deposit ${tokenText(option.deposit, asset)}: they still get what you typed, the rest stays yours, shielded`
+  const detail = `Deposit ${tokenText(option.deposit, asset)} ${asset}, send ${tokenText(option.receives, asset)} after fees, keep ${tokenText(option.kept, asset)} shielded. Privacy ${option.level} of 5.`
   return <label className={`privHero privMore${on ? ' on' : ''}`} title={detail}>
     {base && <><Meter option={base} large /><b className="privMoreWait">{optionLabel(base)}</b></>}
     <ArrowRight className="privMoreArrow" aria-hidden="true" />
     <Meter option={option} large /><b className="privMoreWait">{optionLabel(option)}</b>
-    <span>More private shielding {tokenText(option.kept, asset)} {asset}</span>
+    <span>Keep {tokenText(option.kept, asset)} {asset} shielded for {option.level >= 4 ? 'high' : 'better'} privacy · deposit {tokenText(option.deposit, asset)} {asset}</span>
     <input type="checkbox" role="switch" className="privSwitch" aria-label={`More private shielding ${tokenText(option.kept, asset)} ${asset}. ${detail}`} checked={on} onChange={(event) => onToggle(event.target.checked)} />
   </label>
 }

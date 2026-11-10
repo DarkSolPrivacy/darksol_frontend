@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, withSimulation } from '../src/send-options.js'
+import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from '../src/send-options.js'
 
 const USDC = (value) => BigInt(Math.round(value * 1e6))
 const prices = { USDC: 1, USDT: 1, SOL: 100 }
@@ -317,4 +317,56 @@ test('options use a simulated cell for this exact amount, and never offer its 30
   assert.equal(result.suggested.id, 'privacycash:later:6h')
   assert.deepEqual(measuredPrivacy({ quote: withSimulation(quote, sim, '10-100'), protocol: 'privacycash', asset: 'USDC', raw: USDC(19.28), prices, kind: 'balance' }),
     { score: 100, sends: 300, simulated: { days: 90, samples: 300 }, bucket: '10-100', level: 5 })
+})
+
+test('28 → 30 and 90 → 100 suggest the measured remainder within a six-hour limit', () => {
+  for (const [amount, deposit] of [[28, 30], [90, 100]]) {
+    const bucket = bucketFor(amount, buckets)
+    const measured = { ...sim, pools: { privacycash: { amountMode: 'gross', cells: [
+      simCell('exact', 'now', 300, 300), simCell('exact', '6h', 300, 300),
+      { ...simCell('keep', 'now', 300, 290), deposit: String(USDC(deposit)) },
+      { ...simCell('keep', '6h', 300, 60), deposit: String(USDC(deposit)) },
+      { ...simCell('keep', '24h', 300, 0), deposit: String(USDC(deposit)) },
+      // More popular does not mean more private. Test and compare each deposit.
+      { ...simCell('keep', '6h', 300, 240), deposit: String(USDC(amount * 1.4)) },
+    ] } } }
+    const settings = { ...DEFAULT_SETTINGS, mode: 'custom', priority: 'fees', maxWait: '6h' }
+    const run = (topUp, extra = {}) => sendOptions({ quote: withSimulation(quote, measured, bucket),
+      asset: 'USDC', raw: USDC(amount), prices, settings, topUp, ...extra })
+    const plain = run(false), more = run(true)
+    // Fee priority still leads with Umbra; the separate privacy offer remains available.
+    assert.equal(more.suggested.protocol, 'umbrav2')
+    const offer = shieldMoreOffer(plain, more)
+    assert.equal(offer.deposit, USDC(deposit))
+    assert.equal(offer.kept, USDC(deposit - amount))
+    assert.equal(offer.wait, '6h')
+    assert.equal(offer.level, 4)
+    assert.equal(offer.receives + offer.fee, USDC(amount))
+    assert.ok([...plain.options, ...more.options].every((option) => option.waitSeconds <= 21_600))
+    assert.equal(shieldMoreOffer(plain, run(true, { settings: { ...settings, keepNothing: true } })), null)
+    assert.equal(shieldMoreOffer(plain, run(true, { settings: { ...settings, pools: { privacycash: false } } })), null)
+    assert.equal(shieldMoreOffer(plain, run(true, { paused: { privacycash: 'Paused' } })), null)
+    assert.equal(shieldMoreOffer(plain, run(true, { settings: { ...settings, maxWait: 'now' } })), null)
+    // A manually chosen, untested deposit cannot borrow another deposit's score.
+    assert.ok(!run(true, { deposit: USDC(deposit + 1) }).options.some((option) => option.protocol === 'privacycash'))
+  }
+})
+
+test('each wait selects its own deposit and the same privacy level keeps the smaller remainder', () => {
+  const measured = { ...sim, pools: { privacycash: { amountMode: 'gross', cells: [
+    simCell('exact', 'now', 300, 300),
+    ...[['6h', 30, 60], ['6h', 35, 45], ['24h', 30, 60], ['24h', 35, 0]].map(([wait, deposit, traced]) =>
+      ({ ...simCell('keep', wait, 300, traced), deposit: String(USDC(deposit)) })),
+  ] } } }
+  const result = sendOptions({ quote: withSimulation(null, measured, 'exact'), asset: 'USDC', raw: USDC(28), prices })
+  assert.equal(result.options.find((option) => option.wait === '6h').deposit, USDC(30))
+  assert.equal(result.options.find((option) => option.wait === '24h').deposit, USDC(35))
+})
+
+test('simulation request identity changes with the wait limit and the actual manual deposit', () => {
+  const input = { asset: 'USDC', raw: USDC(28), settings: { mode: 'custom', maxWait: '6h' } }
+  assert.deepEqual(simulationRequest(input), { asset: 'USDC', amount: '28.000000', maxWait: '6h' })
+  assert.deepEqual(simulationRequest({ ...input, deposit: USDC(30) }), { asset: 'USDC', amount: '28.000000', maxWait: '6h', deposit: '30.000000' })
+  assert.notEqual(JSON.stringify(simulationRequest(input)), JSON.stringify(simulationRequest({ ...input, settings: { mode: 'custom', maxWait: '24h' } })))
+  assert.equal(simulationRequest({ ...input, raw: 0n }), null)
 })

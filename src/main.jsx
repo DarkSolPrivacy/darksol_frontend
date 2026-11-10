@@ -23,7 +23,7 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
-import { bucketFor, measuredPrivacy, sendOptions, withSimulation } from './send-options.js'
+import { bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
@@ -594,7 +594,8 @@ function PrivacyHome({ walletSession, settings }) {
   const plannedAmounts = strategy === 'multiple' ? receiverAmounts.map((value) => value.replace(/\.$/, '')) : [sentAmount]
   // The amount the options measure: what is sent, or for shield only all of it.
   const simRaw = shieldOnly ? totalRaw : sentRaw
-  const simKey = !isSwap && !isBridge && simRaw > 0n ? `${asset}:${simRaw}` : null
+  const simKey = !isSwap && !isBridge && simRaw > 0n && (!keeping || (totalRaw > simRaw))
+    ? JSON.stringify(simulationRequest({ asset, raw: simRaw, settings, deposit: keeping ? totalRaw : null })) : null
   const keepError = !keeping ? '' : keepRaw === null ? 'Enter a valid amount to keep shielded'
     : !keepRaw ? 'Enter how much to keep shielded' : sentRaw !== null && sentRaw <= 0n ? 'Keep less than the full amount' : ''
   const receiverRaws = receiverAmounts.map((value) => rawTokenAmount(value, asset))
@@ -675,13 +676,13 @@ function PrivacyHome({ walletSession, settings }) {
   useEffect(() => {
     if (!simKey) return undefined
     const controller = new AbortController()
-    const [simAsset, raw] = simKey.split(':')
+    const { asset: simAsset } = JSON.parse(simKey)
     const timer = setTimeout(() => fetch('/api/privacy-sim', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: JSON.stringify({ asset: simAsset, amount: rawTokenText(BigInt(raw), simAsset) }),
+      body: simKey,
     })
       .then((response) => response.ok ? response.json() : null)
-      .then((data) => { if (data?.asset === simAsset) setSim({ key: simKey, data }) }, () => {}), 400)
+      .then((data) => { if (!controller.signal.aborted && data?.asset === simAsset) setSim({ key: simKey, data }) }, () => {}), 400)
     return () => { clearTimeout(timer); controller.abort() }
   }, [simKey])
 
@@ -1121,8 +1122,8 @@ function PrivacyHome({ walletSession, settings }) {
     return [run(false), keeping || payingShielded ? null : run(true)]
   // shieldedByPool is rebuilt every render; its content follows shielded.pools, asset and the recipients' amounts.
   }, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, shielded.pools, receiverAmounts, receiverCount, keeping, payingShielded, totalRaw])
-  const moreOffer = moreResult?.suggested && moreResult.suggested.kept > 0n && moreResult.suggested.score > (plainResult?.suggested?.score ?? -1) ? moreResult.suggested : null
-  const optionResult = shieldMore && moreOffer ? moreResult : plainResult
+  const moreOffer = shieldMoreOffer(plainResult, moreResult)
+  const optionResult = shieldMore && moreOffer ? { ...moreResult, suggested: moreOffer, reason: 'privacy' } : plainResult
   const toggleMore = (on) => { setShieldMore(on); setChosenOptionId(null) }
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
   // The pool whose shielded balance the hint below the options scores.
