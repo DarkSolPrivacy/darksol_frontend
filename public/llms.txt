@@ -10,14 +10,15 @@ DarkSol does not run its own pool. It is a routing and analysis layer on top of 
 
 ## Features
 
-- [Private transfer](https://darksol.app/): Send SOL, USDC or USDT through a privacy pool to one or more recipients. Optional swap to another token on delivery, bridging to Ethereum, BNB Chain, Base, Polygon or Bitcoin (via Privacy Cash, minimum about 0.05 SOL), and delayed delivery within 10, 20 or 30 minutes. Funds can also be kept shielded in the pool and spent later.
+- [Private transfer](https://darksol.app/): Send SOL, USDC or USDT through a privacy pool to one or more recipients. Optional swap to another token on delivery, bridging to Ethereum, BNB Chain, Base, Polygon or Bitcoin (via Privacy Cash, minimum about 0.05 SOL), and a wait of 6, 12 or 24 hours between deposit and withdrawal where it measurably improves privacy. A wait is not automatic delivery: the payment stays pending in the sender's browser until they return and send it. In every pool, funds can also be kept shielded and spent later, or part of a deposit kept shielded.
 - [Payment links](https://darksol.app/payment-links): Private invoices. The payer deposits straight into a privacy pool, and only the creator's wallet can collect the funds, to any address. The link does not reveal the creator's wallet address. Works with Privacy Cash and Cloak.
 - [Trace](https://darksol.app/trace): Paste a withdrawal's transaction hash or Solscan link and see which depositor wallets could have paid for it, whether a known linking pattern singles one out, and which public clues make it easier to trace.
 - [Analytics](https://darksol.app/analytics): How often each pool's withdrawals point to one wallet (a strongest candidate) and by which rule, plus pool balances and recent flows.
 
 ## How privacy is measured
 
-- The route privacy estimate is a score from 0 to 100. It is an estimate, not a guarantee.
+- The send-page privacy meter replays hypothetical sends against recorded pool history and tries to trace them with DarkSol's own forensic rules plus a timing analyst: 300 trials per scenario over up to 90 days of history. The score is 100 × (1 − traced / completed trials), shown as one to five bars; four or five bars count as private. It moves no funds and broadcasts nothing.
+- The score measures resistance to DarkSol's current attacks on historical public data. It is an estimate, not a guarantee of anonymity.
 - The red team indexes every deposit, withdrawal and note in the Privacy Cash and Cloak pools, and rebuilds each pool from its first note, checked against on-chain proofs and the live pool account.
 - Linking rules it checks: withdrawal signed by the depositor's own wallet; money paid back to the depositing wallet; only one wallet had enough left in the pool; the withdrawal emptied one wallet exactly; a unique matching amount; a pair of withdrawals that together emptied one wallet; a proof made right after a same-amount deposit.
 - Stated limits: amounts inside notes are hidden; spent notes cannot be identified; only the last hop is analysed. A suspected link is an inference, not proof of ownership, and finding no link does not prove anonymity.
@@ -25,10 +26,16 @@ DarkSol does not run its own pool. It is a routing and analysis layer on top of 
 ## What DarkSol can and cannot see
 
 - Route planning receives only the token, the amount and how it is split between recipients. Wallet and recipient addresses are not sent for planning.
-- To measure the private send options, the browser also sends the token and the exact amount. DarkSol does not log or store that amount.
+- To simulate the private send options, the browser also sends the token, the exact amount and the maximum wait. The simulation service does not log or store those amounts.
 - The payment-link service stores an anonymous merchant ID, invoice terms, note commitments, encrypted notes and payment status. It never receives the creator's wallet address, wallet signatures, note spending keys, or collection destinations. Spending keys are derived in the browser from a wallet signature.
-- For delayed delivery, DarkSol's server holds the prepared withdrawal until it is sent. The recipient and amount are fixed inside it, so it can only be delivered or dropped, never redirected.
 - Deposits and withdrawals are public Solana transactions, as with any privacy pool.
+
+## Supported pools
+
+- Privacy Cash: SOL, USDC, USDT. Several recipients, waits, swaps between SOL and USDC or USDT, bridging.
+- Cloak: SOL, USDC, USDT. One recipient, swaps from SOL to USDC or USDT.
+- Umbra v2: SOL, USDC, USDT. One recipient, swap from SOL to USDC or USDT through Jupiter.
+- Umbra v1 (legacy): SOL, USDC, USDT. One recipient.
 
 ## Fees
 
@@ -36,11 +43,14 @@ Each pool charges its own withdrawal fee, shown as the estimated fee before you 
 
 ## Docs
 
-- [Documentation](https://darksol.app/docs/): Full explanation of private transfers, payment links, the red team, core concepts and architecture.
-- [Private transfers](https://darksol.app/docs/#private-transfers)
-- [Payment links](https://darksol.app/docs/#payment-links)
-- [Red team](https://darksol.app/docs/#red-team)
+- [Documentation](https://docs.darksol.app/): Full explanation of private transfers, the privacy meter, payment links, the red team, core concepts and architecture.
+- [Private transfers](https://docs.darksol.app/#private-transfers)
+- [Privacy meter and simulations](https://docs.darksol.app/#privacy-meter)
+- [Payment links](https://docs.darksol.app/#payment-links)
+- [Red team](https://docs.darksol.app/#red-team)
 
 ## Optional
 
 - [X / Twitter](https://x.com/DarkSolapp): Announcements.
+- [Telegram](https://t.me/darksolapp): Community.
+- [GitHub](https://github.com/DarkSolPrivacy/darksol_frontend): Frontend source code.
