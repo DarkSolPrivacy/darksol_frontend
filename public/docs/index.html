@@ -33,6 +33,7 @@
       <a href="#private-receive">Private receive</a>
       <p class="nav-label">UNDER THE HOOD</p>
       <a href="#private-transfers">Private transfers</a>
+      <a href="#privacy-meter">Privacy meter &amp; simulations</a>
       <a href="#payment-links">Payment links</a>
       <a href="#red-team">Red team</a>
       <a href="#core-concepts">Core concepts</a>
@@ -59,19 +60,19 @@
         <h2 id="private-transfers-title">Private transfers</h2>
         <p>A private transfer moves funds through a privacy pool so the recipient's payment isn't directly linked to your wallet. You deposit into the pool, and the funds leave it separately to your recipient. DarkSol picks the pool for you from live pool activity; your wallet approves every transaction that moves your funds.</p>
         <figure class="diagram">
-          <a href="/docs/private-send-flow.svg"><img src="/docs/private-send-flow.svg" width="880" height="510" alt="Sequence diagram. 1: the sender enters the token, amount and recipients. 2: the browser asks the DarkSol planner to compare routes, sending only the amount and tokens, no addresses. 3: the planner returns the best route with a privacy estimate and estimated fee. 4: the sender's wallet approves a deposit into the privacy pool. 5: the pool delivers the funds to the recipient, either now or within 10 to 30 minutes. Route planning never receives the sender's or recipients' addresses." /></a>
+          <a href="/docs/private-send-flow.svg"><img src="/docs/private-send-flow.svg" width="880" height="510" alt="Sequence diagram. 1: the sender enters the token, amount and recipients. 2: the browser asks the DarkSol planner to compare routes, sending only the amount and tokens, no addresses. 3: the planner returns the best route with a privacy estimate and estimated fee. 4: the sender's wallet approves a deposit into the privacy pool. 5: the pool delivers the funds to the recipient, either now or after the chosen wait. Route planning never receives the sender's or recipients' addresses." /></a>
           <figcaption>What happens between entering a transfer and the recipient receiving it.</figcaption>
         </figure>
         <ol class="architecture">
           <li><strong>Enter</strong><span>Open <strong>Private transfer</strong> in the app, choose a token (SOL, USDC or USDT) and an amount, and add one or more recipients. With several recipients, their amounts must add up to the total.</span></li>
-          <li><strong>Compare</strong><span>As soon as the form is complete, DarkSol compares the supported pools and picks the route most likely to reach good privacy soonest, using fees to break close ties. Open <strong>Details</strong> to see the estimated privacy, pool size, similar-size activity, expected wait and estimated fee.</span></li>
+          <li><strong>Compare</strong><span>DarkSol compares measured privacy, fees and your settings. Expand a pool to see its available waits and privacy bars. An optional suggestion may deposit more and keep the remainder shielded if that improves the measured privacy.</span></li>
           <li><strong>Deposit</strong><span>Your wallet approves one deposit into the selected pool. Privacy Cash also asks you to sign a sign-in message once per browser; it moves no funds. Umbra v2 asks you to sign an unlock message once per tab, and both Umbra versions ask for a one-time registration.</span></li>
-          <li><strong>Deliver</strong><span>The funds leave the pool to your recipient. On Privacy Cash, Cloak and Umbra v2, the pool's relayer submits this withdrawal and pays its network fee, so there is nothing more to approve. When it lands, the app shows <strong>Transfer complete</strong> with a link to the transaction.</span></li>
+          <li><strong>Deliver</strong><span>The funds leave the pool to your recipient through its withdrawal flow. If you chose a wait, the deposit stays shielded until you return and send the pending payment. When the withdrawal lands, the app shows completion with a link to the transaction.</span></li>
         </ol>
-        <h3>How routes are scored</h3>
-        <p>The privacy estimate is a score from 0 to 100, based on how deep the pool is compared with your amount, how much recent activity there is, how many flows of a similar size it has seen, how spread out that activity is over time, and how unusual your amount is. A transfer larger than the pool, or a pool with too small a published anonymity set, is marked <strong>Not private</strong> and can't be sent. The score is an estimate, not a guarantee.</p>
+        <h3>How routes are compared</h3>
+        <p>The send-page meter shows how often hypothetical sends escape our forensic tracing tools against recorded pool history. DarkSol compares that measurement with fees and your settings to suggest an option. See <a href="#privacy-meter">Privacy meter &amp; simulations</a> for the method, the score and its limits. Other planner estimates use pool activity and available cover; they are separate from this meter.</p>
         <h3>What DarkSol sees</h3>
-        <p>To compare routes, your browser sends only the token, the amount and how it is split between recipients. Your wallet address and your recipients' addresses are not part of route planning. To measure how private each way of sending is, it also sends the token and the exact amount; DarkSol does not log or store that amount. Deposits and withdrawals are public Solana transactions, as with any pool.</p>
+        <p>To compare routes, your browser sends the token, amount and how it is split between recipients. Your wallet address and recipients' addresses are not part of route planning. Privacy simulations receive the token, exact withdrawal budget, maximum wait and optional manually chosen deposit. The simulation service does not log or retain those amounts. Actual deposits and withdrawals are public Solana transactions.</p>
         <h3>Supported pools</h3>
         <table>
           <caption>Pools available for private transfers</caption>
@@ -88,11 +89,41 @@
         <dl class="concepts">
           <div><dt>Swap</dt><dd>Pick a different token under <strong>Receive</strong> and the recipient gets that token instead. Cloak swaps SOL to USDC or USDT; Privacy Cash swaps between SOL and USDC or USDT; Umbra v2, which has no swap of its own, withdraws your SOL privately to a one-time wallet that swaps it to USDC or USDT through Jupiter and pays the recipient. <strong>Keep part shielded</strong> and <strong>Use shielded funds</strong> work for swaps too.</dd></div>
           <div><dt>Bridge</dt><dd>Choose <strong>Bridge</strong> under <strong>Receive</strong> to deliver to Ethereum, BNB Chain, Base, Polygon or Bitcoin through Privacy Cash. The amount must be worth at least about 0.05 SOL.</dd></div>
-          <div><dt>Delay</dt><dd>The clock button delivers within 10, 20 or 30 minutes instead of right away, which puts more pool activity between deposit and delivery. For a delayed delivery, DarkSol's server holds the prepared withdrawal, including its recipient, until it is sent. The recipient and amount are fixed inside it, so it can only be delivered or dropped, never redirected. If it isn't delivered, the funds stay in the pool and <strong>Send now</strong> sends them. One recipient, Privacy Cash only.</dd></div>
+          <div><dt>Wait</dt><dd>Choose a measured wait within your maximum: 6, 12 or 24 hours where available. You deposit now, and the payment stays pending in this browser until you return and send it. This is not automatic scheduled delivery. The withdrawal proof is prepared when you send, rather than held from the deposit time. See <a href="#privacy-meter">how waits affect the simulation</a>.</dd></div>
           <div><dt>Shielding</dt><dd>The shield button offers <strong>Keep part shielded</strong> to send some and keep the rest in the pool, <strong>Shield only</strong> to deposit without sending, and <strong>Use shielded funds</strong> to pay from what you already hold in a pool, with no new deposit. Every pool supports all three; Cloak keeps what stays shielded in this browser only.</dd></div>
         </dl>
         <h3>If a transfer is interrupted</h3>
         <p>Once the deposit lands, your funds are safe in the pool even if the page closes. Privacy Cash and Umbra v2 funds are tied to your wallet: sign in on any device and send them with <strong>Use shielded funds</strong>. Cloak saves its private notes in this browser only, so send them with <strong>Use shielded funds</strong> here and don't clear site data until you have.</p>
+      </section>
+      <section id="privacy-meter" aria-labelledby="privacy-meter-title">
+        <h2 id="privacy-meter-title">Privacy meter &amp; simulations</h2>
+        <p>We construct hypothetical sends and try to trace them using our forensic model. The simulation uses real indexed pool history and synthetic deposit and withdrawal records. It moves no funds, broadcasts no transaction, and does not execute private proofs or Solana's transaction simulation.</p>
+        <ol class="architecture">
+          <li><strong>Record the history</strong><span>Our production forensic linker processes the pool's public history, recording wallet budgets, unspent deposits and earlier withdrawals.</span></li>
+          <li><strong>Construct a send</strong><span>A synthetic sender deposits and withdraws the proposed amounts at historical times, with the selected wait and fees.</span></li>
+          <li><strong>Try to trace it</strong><span>A fast probe applies the linker's rules to the hypothetical withdrawal. A second analyst knows our sending strategy and guesses the sender using amounts and timing. A trial counts as traced if either identifies the synthetic sender.</span></li>
+          <li><strong>Repeat</strong><span>The exact-amount simulator runs 300 trials per scenario over up to 90 days of recorded history. Each scenario specifies the pool, token, amount, strategy, deposit candidate and wait.</span></li>
+        </ol>
+        <h3>What the bars mean</h3>
+        <p>The score is <code>100 × (1 − traced / completed trials)</code>, rounded to a whole number. If 60 of 300 trials are traced, the score is 80 and the meter shows <strong>4 of 5 bars</strong>. Four or five bars meet the app's private threshold.</p>
+        <p><strong>Zero bars are reserved for insufficient mathematical cover:</strong> the pool's existing funds cannot account for the withdrawal without the new deposit. For example, depositing an amount and immediately withdrawing the same amount, when it exceeds what the pool already holds of that token, necessarily reveals that the new deposit funded at least part of the withdrawal. The current zero-bar check flags immediate withdrawals larger than the pool's known token balance.</p>
+        <p><strong>One bar means weak privacy under our tracing model.</strong> Even if every simulated trial is traced, that is an attack result, not the same as establishing mathematically necessary funding. This distinction is why simulated results use one to five bars; it is not a cosmetic preference against showing zero. Bars are rounded categories, not exact probabilities. Results with fewer than ten completed trials are not offered.</p>
+        <h3>Why suggest keeping some shielded?</h3>
+        <p>Keeping a remainder changes the public amount pattern. We test the actual deposit and withdrawal together; a good score for sending 30 does not automatically apply to depositing 30 and withdrawing 28.</p>
+        <table>
+          <caption>Examples of combinations tested, not guaranteed private amounts</caption>
+          <thead><tr><th scope="col">Deposit</th><th scope="col">Withdrawal budget</th><th scope="col">Stays shielded</th></tr></thead>
+          <tbody><tr><td>30 USDC</td><td>28 USDC including fees</td><td>2 USDC</td></tr><tr><td>100 USDC</td><td>90 USDC including fees</td><td>10 USDC</td></tr></tbody>
+        </table>
+        <p>The recipient receives the withdrawal budget minus fees. We compare up to three common deposit amounts above the budget, capped at 1.5 times it, and test each separately for every allowed wait. At the same privacy level, the smaller remainder wins. An offer appears when it improves the ordinary suggestion's privacy level and your settings allow it; accepting it is optional.</p>
+        <h3>Your maximum wait</h3>
+        <p>Auto allows up to 24 hours. In Custom, a <strong>6 h</strong> maximum means only <strong>Now</strong> and <strong>In 6 h</strong> are simulated and offered, including suggestions to keep a remainder shielded. Longer trial loops do not run for that request. A 12-hour limit also allows 12 h; None allows only Now. In the model, Now means withdrawing about one minute after depositing.</p>
+        <h3>Where the measurement comes from</h3>
+        <p>The page first uses daily measurements for broad amount ranges. After typing pauses, exact-amount simulations replace them for <strong>Privacy Cash and Cloak</strong>. If simulation is unavailable, the page retains the broader measurement. <strong>Umbra v2 still uses amount-bucket measurements</strong>; its shared tree is not supported by the exact-amount simulator yet.</p>
+        <h3>Assumptions and limits</h3>
+        <p class="note"><strong>From shielded assumes an older, larger balance:</strong> about ten times the payment, deposited three days earlier. The app checks that your balance can fund the payment, but the score does not measure your actual notes' ages or origins. Freshly shielding funds does not automatically earn that score.</p>
+        <p>The fast probe approximates a full forensic replay. Tests compare their answers, but the probe omits some effects on intervening withdrawals and links from later withdrawals. Split-payment scenarios model two or three recipients rather than your exact allocation. Synthetic recipients also do not carry your real wallet relationships.</p>
+        <p>The score measures resistance to our current attacks on historical public data. More trials do not account for unknown attacks, future activity, or information held by relayers and exchanges. Escaping these attacks is not proof of anonymity.</p>
       </section>
       <section id="payment-links" aria-labelledby="payment-links-title">
         <h2 id="payment-links-title">Payment links</h2>
@@ -158,7 +189,7 @@
             <tr><td>Proof right after deposit</td><td>Its proof was made right after one wallet deposited exactly this amount.</td></tr>
           </tbody>
         </table>
-        <p class="note">Route scoring for <a href="#private-transfers">private transfers</a> weighs related signals, such as how common your amount is and how much similar-size activity a pool has.</p>
+        <p class="note">The <a href="#privacy-meter">send-page privacy meter</a> measures synthetic sends against these forensic rules and a timing analyst. It summarizes trial outcomes; the Trace report above analyses an actual transaction.</p>
         <h3>What a trace cannot tell</h3>
         <p>Amounts inside notes are hidden, so possible sources can't be filtered by size, and the count is of notes, not people. Notes that were already spent can't be identified, so they stay among the possible sources. Only the last hop is analysed: where money held in the pool first came from is not followed, and the recipient's other activity is not checked yet.</p>
         <p>A suspected link is an inference, not proof of ownership. Finding no link does not prove anonymity.</p>
@@ -170,7 +201,7 @@
           <div><dt>Privacy pool</dt><dd>A protocol that holds shielded funds and verifies private transfers.</dd></div>
           <div><dt>Shielding</dt><dd>Moving public funds into a pool. Withdrawing makes the destination and amount public again.</dd></div>
           <div><dt>Private note</dt><dd>The secret data used to spend shielded funds. Keep recovery material private.</dd></div>
-          <div><dt>Privacy estimate</dt><dd>A score based on pool activity and your transfer. Amount, timing, and available cover matter; the score is not a guarantee.</dd></div>
+          <div><dt>Privacy estimate</dt><dd>The send-page meter reports how often hypothetical sends escape our tracing model against recorded history. Other planner estimates use pool activity and available cover. Neither is a guarantee; see <a href="#privacy-meter">how the meter is measured</a>.</dd></div>
         </dl>
       </section>
       <section id="architecture" aria-labelledby="architecture-title">

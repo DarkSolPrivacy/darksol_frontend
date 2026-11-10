@@ -9,7 +9,7 @@ Private traction metrics live at `/admin-stats`, served and authenticated by the
 ## Public documentation
 
 The brief public guide is plain HTML and CSS in [`public/docs/`](public/docs/index.html).
-Vite copies it into the build; preview it at `/docs/`. The app navigation links there.
+Vite copies it into the build; preview it locally at `/docs/index.html`. The app navigation links to `/docs/` in production.
 Edit the copy in `index.html` and the layout in `styles.css`; no extra build tool is needed.
 
 `middleware.js` serves the same page at the root of `docs.darksol.app`, before Vercel serves the app homepage.
@@ -70,18 +70,22 @@ both repos on purpose, so the decoders stay next to the writer that runs them.
 
 ## Run locally
 
-Node.js 24 or newer — the PrivacyCash and Curvy SDKs require it.
+Use Node.js 24 or newer. To preview the frontend in WSL with the production API:
 
 ```bash
-npm install
-cp .env.example .env.local   # the SQL database connection string
-npm run dev                  # read-only API on :8787 + Vite on :5173
+cd ~/darksol_frontend
+source ~/.nvm/nvm.sh
+nvm use 24
+npx vite --host 0.0.0.0 --port 5173 --strictPort
 ```
 
-This repo is read-only against the database. The writer that fills it —
-and the schema it owns — is [darksol-backend](https://github.com/DarkSolPrivacy/darksol-backend),
-running as a container on its own VPS. Nothing here has to be running for it to
-index, and nothing has to be run by hand to see fresh data.
+Open **http://localhost:5173**; documentation is at **http://localhost:5173/docs/index.html**.
+On a fresh checkout, install dependencies with `npm ci` first.
+
+**This preview does not run the modified backend.** Vite defaults to `https://api.darksol.app`.
+For the full local API/simulator setup, populated database prerequisite and `DARKSOL_API_URL` override,
+follow [Local development](docs/LOCAL_DEVELOPMENT.md). The `npm run dev` script also starts this
+repository's older API, but does not change Vite's proxy target.
 
 ## Deploying
 
@@ -154,26 +158,37 @@ The planner reads only stored metrics. Missing prices, snapshots or flow waterma
 
 ### Privacy meter
 
-The send page does not score privacy with the planner's heuristics. It shows how often DarkSol's red team traced
-sends like this one in a simulation: synthetic sends added to each pool's real history, then attacked by the same
-linker as the trace page plus a timing analyst who knows DarkSol's rules. The method, the strategies, the waits and
-the limits are in darksol-backend's [`docs/PRIVACY_QUOTE.md`](https://github.com/DarkSolPrivacy/darksol-backend/blob/main/docs/PRIVACY_QUOTE.md);
-the page reads the result from `GET /api/privacy-quote`.
+The send-page meter measures how often hypothetical sends escape forensic attacks against real indexed
+pool history. It constructs synthetic deposit and withdrawal records; it does not broadcast a transaction,
+execute private proofs, or call Solana's `simulateTransaction`.
 
-[`src/send-options.js`](src/send-options.js) turns each measured cell (pool, token, size bucket, strategy, wait)
-into bars with as few rules of its own as possible:
+The production linker records the pool's historical state. A fast probe applies its rules to each
+hypothetical withdrawal, while a second analyst guesses the sender from amounts and timing, knowing
+our strategy. A trial counts as traced if either identifies the synthetic sender.
 
-| Step | Rule |
+| Source | What it measures |
 | --- | --- |
-| Score | `100 × (1 − traced / sends)`, from the cell matching the send. A cell with fewer than 10 sends is not shown. |
-| Bars | The score divided by 20 and rounded, from 1 to 5. |
-| 1 of 5 | The lowest a measurement can give. Even a send traced every time leaves no proof that the money is the same, and that cover comes from the pool alone. |
-| 0 of 5 | Only when the send goes out now and is larger than everything the pool holds of the token (the quote's `balance`): most of the withdrawal can only be the sender's own deposit. |
-| 4 of 5 | The threshold for calling an option private. |
+| `GET /api/privacy-quote` | Daily, broad amount-bucket measurements, shown initially and as a fallback. |
+| `POST /api/privacy-sim` | After typing pauses, 300 trials per scenario for the entered withdrawal budget in Privacy Cash and Cloak, over up to 90 days of recorded history. Umbra v2 retains its bucket quote. |
 
-About 30 sends per cell make a score good to roughly ±10 points, so the page shows bars and words, never a percentage.
-To rank options, the score is lowered by the fee as a share of the payment, so a fee that eats most of a small
-payment can outweigh a longer wait.
+The score is `round(100 * (1 - traced / completed trials))`: 60 traced out of 300 gives 80, displayed as
+four bars. One to five bars describe resistance to our tracing model, even when every trial is traced.
+Zero is reserved for insufficient mathematical cover: an immediate withdrawal exceeds the pool's known
+token balance, so its existing funds cannot account for the full withdrawal without the new deposit.
+An immediate 1:1 deposit and withdrawal larger than that balance is an example. This distinguishes an
+attack's inference from mathematically necessary funding. Four or five bars meet the UI's private
+threshold. Ranking additionally considers fees and preferences.
+
+Top-ups are measured as specific pairs: deposit **30**, withdraw **28 including fees**, keep **2**;
+or deposit **100**, withdraw **90 including fees**, keep **10**. They do not inherit the score of sending
+30 or 100 outright. Candidates are compared separately for each allowed wait; the same privacy level
+favors the smaller remainder. A custom **6 h** maximum runs and shows only **now** and **6 h**.
+
+The score describes our historical attack model. In particular, **from shielded** assumes an older,
+larger balance (about ten times the payment, deposited three days earlier), not the actual age of the
+user's notes. The fast probe omits some effects on other withdrawals; full-replay tests check its
+approximation. See [How privacy is measured](docs/PRIVACY_MEASUREMENT.md) for the complete method,
+examples and limits, or the [public guide](public/docs/index.html#privacy-meter).
 
 ### Swaps
 

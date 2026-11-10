@@ -1,5 +1,6 @@
 // The send settings and the payments waiting to go out. Both live only in this
-// browser: no address, amount or setting reaches our server.
+// browser. Privacy simulations separately send the amount, optional deposit
+// and maximum wait, without a wallet address; the server does not retain them.
 import { DEFAULT_SETTINGS } from './send-options.js'
 
 const SETTINGS_KEY = 'darksol:send-settings:v1'

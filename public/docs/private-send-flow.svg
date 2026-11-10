@@ -66,7 +66,7 @@
     <!-- 2 Compare routes -->
     <line class="flow" x1="110" y1="184" x2="330" y2="184" marker-end="url(#arrow)"/>
     <text class="step halo" x="220" y="175"><tspan class="num">2 </tspan>Compare routes</text>
-    <text class="detail halo" x="220" y="201">amount + tokens, no addresses</text>
+    <text class="detail halo" x="220" y="201">amounts · token · max wait</text>
 
     <!-- 3 Best route -->
     <line class="flow" x1="330" y1="248" x2="110" y2="248" marker-end="url(#arrow)"/>
@@ -81,7 +81,7 @@
     <!-- 5 Deliver -->
     <line class="flow-accent" x1="550" y1="384" x2="770" y2="384" marker-end="url(#arrow-accent)"/>
     <text class="step halo" x="660" y="375"><tspan class="num">5 </tspan>Deliver</text>
-    <text class="detail halo" x="660" y="401">now, or within 10–30 min</text>
+    <text class="detail halo" x="660" y="401">now, or send after your wait</text>
   </g>
 
   <!-- Key -->
