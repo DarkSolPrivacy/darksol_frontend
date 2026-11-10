@@ -2,10 +2,18 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://darksol.app/</loc>
-    <lastmod>2026-09-18</lastmod>
+    <lastmod>2026-11-10</lastmod>
+  </url>
+  <url>
+    <loc>https://darksol.app/trace</loc>
+    <lastmod>2026-11-10</lastmod>
+  </url>
+  <url>
+    <loc>https://darksol.app/payment-links</loc>
+    <lastmod>2026-11-10</lastmod>
   </url>
   <url>
     <loc>https://darksol.app/analytics</loc>
-    <lastmod>2026-09-18</lastmod>
+    <lastmod>2026-11-10</lastmod>
   </url>
 </urlset>
