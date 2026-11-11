@@ -228,6 +228,13 @@ async function syncNotes(nimbus, session, { signal, progress, reading } = {}) {
   }
 }
 
+// Whether a sync read every stream to its end: what the SDK's own sync before a
+// deposit or a withdrawal would do again. Each of those flows syncs first
+// unless given `sync: false`; the adapter gives it only for a call made right
+// after its own sync caught up, with nothing but a read of the store between
+// them, and reports the `synced` stage the SDK then leaves out.
+const caughtUp = (result) => result?.kind === 'ingested' && result.caughtUp === true
+
 // What the session holds of `mint`: spendable now, and whether a note is still settling.
 async function mintBalance(nimbus, session, mint) {
   const rows = (await nimbus.readBalances(session)).filter((row) => row.mint === mint)
@@ -261,16 +268,25 @@ function withdrawalProgress(progress, timings = NO_TIMINGS) {
 // of it, and records the payout on `receipt`. A pending settlement (the relayer
 // took it but stopped reporting before it landed) still lands, so it counts as
 // sent: the page must not offer to pay it again.
-async function withdrawTo(nimbus, session, { asset, mint, amount, recipient, progress = createProgress(() => {}, []), timings = NO_TIMINGS }, receipt) {
+async function withdrawTo(nimbus, session, { asset, mint, amount, recipient, progress = createProgress(() => {}, []), timings = NO_TIMINGS, synced = false, context }, receipt) {
   timings.leg('withdrawal')
+  // `synced`: the caller's sync has just caught up, so the first attempt skips
+  // the SDK's own. `context` is one the caller built before that sync; a retry
+  // builds its own and syncs again, since an attempt ran in between.
+  let first = { synced, context }
   // Native SOL is paid to the wallet itself. Left to the SDK, it names the wallet's
   // wrapped-SOL token account, which the payout refuses: no key signs for lamports there.
   const withdraw = async (units) => {
-    // The withdrawal syncs the note store before it starts.
-    timings.enter('note scan')
-    return nimbus.withdraw(await nimbus.createWithdrawalContext(session),
+    const { synced: skipSync, context: built } = first
+    first = { synced: false }
+    const onProgress = withdrawalProgress(progress, timings)
+    const withdrawal = built ?? await nimbus.createWithdrawalContext(session)
+    if (skipSync) onProgress({ stage: 'synced' })
+    // Otherwise the withdrawal syncs the note store before it starts.
+    else timings.enter('note scan')
+    return nimbus.withdraw(withdrawal,
       { mint, amount: units, recipient: String(recipient) },
-      { onProgress: withdrawalProgress(progress, timings), ...(asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {}) })
+      { onProgress, ...(skipSync ? { sync: false } : {}), ...(asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {}) })
   }
   // The SDK (nimbus-solana 0.4.0, nimbus-statement 0.1.1) refuses an amount that no payout plus its fee
   // adds up to: at 10 bps, every amount ≡ 1 mod 1001, 1 USDC and 1 USDT among
@@ -298,13 +314,16 @@ async function withdrawTo(nimbus, session, { asset, mint, amount, recipient, pro
 // Pays the recipient from the wallet's private balance, with no deposit.
 export async function sendFromBalance({ nimbus, session, asset, mint, payout, recipient, onStatus = () => {}, progress = createProgress(onStatus, []), reading, timings = NO_TIMINGS }) {
   if (session.registration.kind === 'unregistered') throw new Error('This wallet has no Umbra v2 private balance yet')
-  timings.leg('withdrawal'); timings.enter('note scan')
-  await syncNotes(nimbus, session, { progress, reading })
+  timings.leg('withdrawal'); timings.enter('other')
+  // Built before the sync, so only the balance's read stands between the sync and the withdrawal.
+  const context = await nimbus.createWithdrawalContext(session)
+  timings.enter('note scan')
+  const synced = caughtUp(await syncNotes(nimbus, session, { progress, reading }))
   timings.enter('other')
   const { available } = await mintBalance(nimbus, session, mint)
   if (available < payout) throw new Error(`Your Umbra v2 private balance can pay ${unitsText(available, asset)}, less than ${unitsText(payout, asset)}`)
   progress.step('payoutProve', 'Sending from your private balance…', { part: 0.1 })
-  return withdrawTo(nimbus, session, { asset, mint, amount: payout, recipient, progress, timings }, createReceipt({ provider: 'umbrav2', asset }))
+  return withdrawTo(nimbus, session, { asset, mint, amount: payout, recipient, progress, timings, synced, context }, createReceipt({ provider: 'umbrav2', asset }))
 }
 
 // Status lines for the deposit's stages. The wallet is asked only once the
@@ -351,30 +370,40 @@ async function depositToSelf(opened, state, { asset, mint, amount, progress, rec
   }
   // The deposit reads the pool before it starts. Read it here instead, so a first
   // read on this device (minutes) shows its pages; the deposit's own is then quick.
-  timings.leg('deposit'); timings.enter('note scan')
-  await syncNotes(nimbus, state.session, { progress, reading: opened.reading })
-  const deposited = await nimbus.deposit(await nimbus.createDepositContext(state.session),
+  timings.leg('deposit'); timings.enter('other')
+  // Built before the sync, so nothing stands between the sync and the deposit.
+  const context = await nimbus.createDepositContext(state.session)
+  timings.enter('note scan')
+  const synced = caughtUp(await syncNotes(nimbus, state.session, { progress, reading: opened.reading }))
+  const onProgress = depositProgress(progress, timings)
+  // The deposit would sync again before it starts; after a sync that caught up
+  // it is told not to, and the stage it would have reported is reported here.
+  if (synced) onProgress({ stage: 'synced' })
+  const deposited = await nimbus.deposit(context,
     { mint, amount, recipient: state.session.walletAddress },
-    { transactionVersion, priorityFeeLamports: PRIORITY_FEE_LAMPORTS, onProgress: depositProgress(progress, timings) })
+    { transactionVersion, priorityFeeLamports: PRIORITY_FEE_LAMPORTS, onProgress, ...(synced ? { sync: false } : {}) })
   if (!landed(deposited)) throw new Error(`The Umbra v2 deposit did not land (${outcomeName(deposited)})`)
   return createReceipt({ provider: 'umbrav2', asset, ...receipt, depositSignature: bs58.encode(deposited.submission.submission.signature) })
 }
 
 // Waits until the deposit just made is spendable and returns what the balance
-// can spend of `mint`. The deposit synced the store before it ran, so what is
-// available at first was already there; the new note reads as pending until it
-// is final.
+// can spend of `mint`, and whether the sync that saw it caught up (the payout
+// that follows then needs no sync of its own). The store was synced before the
+// deposit ran, so what is available at first was already there; the new note
+// reads as pending until it is final. This sync after the deposit is the one
+// that finds the note, and is never skipped.
 async function settledBalance(nimbus, session, mint, progress) {
   const before = (await mintBalance(nimbus, session, mint)).available
   progress.step('settle', 'Waiting for the deposit to settle…')
   let available = 0n
+  let synced = false
   await waitFor('deposit', async () => {
-    await syncNotes(nimbus, session)
+    synced = caughtUp(await syncNotes(nimbus, session))
     const now = await mintBalance(nimbus, session, mint)
     available = now.available
     return available > before && !now.pending
   })
-  return available
+  return { available, synced }
 }
 
 // A payment's steps for the bar. Before the session, from what this browser
@@ -418,11 +447,13 @@ async function send({ provider, asset, totalBaseUnits, recipient, recipients, so
     const receipt = await depositToSelf(opened, state, { asset, mint, amount, progress, timings })
     if (!payout) return receipt
     try {
+      // Built before the wait, so only the balance's read stands between its last sync and the payout.
+      const context = await nimbus.createWithdrawalContext(state.session)
       timings.enter('settlement wait')
-      const available = await settledBalance(nimbus, state.session, mint, progress)
+      const { available, synced } = await settledBalance(nimbus, state.session, mint, progress)
       progress.step('payoutProve', 'Sending privately…', { part: 0.1 })
       // Never more than this send, even when an earlier balance sits beside it.
-      return await withdrawTo(nimbus, state.session, { asset, mint, amount: available < payout ? available : payout, recipient, progress, timings }, receipt)
+      return await withdrawTo(nimbus, state.session, { asset, mint, amount: available < payout ? available : payout, recipient, progress, timings, synced, context }, receipt)
     } catch (error) {
       return throwWithReceipt(receipt, 'The deposit landed, but the private send failed. The funds stay in your Umbra v2 private balance: pay from it with Use shielded funds', error)
     }

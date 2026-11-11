@@ -62,10 +62,11 @@ function fakeNimbus({ rows, settlement = { kind: 'landed', signature: new Uint8A
     calls,
     syncNoteStore: async () => { calls.push(['sync']); return syncs.shift() ?? { kind: 'ingested', caughtUp: true } },
     readBalances: async () => rows,
-    createWithdrawalContext: async () => 'context',
+    createWithdrawalContext: async () => { calls.push(['context']); return 'context' },
     withdraw: async (context, args, options) => {
       const { onProgress, ...rest } = options
       assert.equal(typeof onProgress, 'function')
+      assert.equal(context, 'context')
       calls.push(['withdraw', args, rest])
       // What nimbus-solana 0.1.1 throws for an amount no payout plus its fee adds up to.
       if (unpayable.includes(args.amount)) throw Object.assign(new Error('the withdrawal could not be prepared'), { cause: new Error("receipt 3's fee is not the ceiling of its numerator over 10000, which the circuit checks") })
@@ -79,10 +80,32 @@ test('Umbra v2 pays from the private balance with no deposit, the SOL payout to 
   const nimbus = fakeNimbus({ rows: [{ mint: MINTS.USDC, state: 'available', total: 5_000_000n }, { mint: MINTS.USDC, state: 'pending', total: 9_000_000n }] })
   const receipt = await sendFromBalance({ nimbus, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 2_000_000n, recipient: 'Recipient' })
   assert.deepEqual(receipt, { provider: 'umbrav2', asset: 'USDC', depositSignature: null, withdrawals: [{ tx: bs58.encode(new Uint8Array(64).fill(7)) }] })
-  assert.deepEqual(nimbus.calls, [['sync'], ['withdraw', { mint: MINTS.USDC, amount: 2_000_000n, recipient: 'Recipient' }, {}]])
+  // One sync: the adapter's caught up, so the withdrawal is told not to sync again.
+  assert.deepEqual(nimbus.calls, [['context'], ['sync'], ['withdraw', { mint: MINTS.USDC, amount: 2_000_000n, recipient: 'Recipient' }, { sync: false }]])
   const sol = fakeNimbus({ rows: [{ mint: MINTS.SOL, state: 'available', total: 10n }] })
   await sendFromBalance({ nimbus: sol, session: registered, asset: 'SOL', mint: MINTS.SOL, payout: 10n, recipient: 'Recipient' })
-  assert.deepEqual(sol.calls[1][2], { recipientTokenAccount: 'Recipient' })
+  assert.deepEqual(sol.calls.at(-1)[2], { sync: false, recipientTokenAccount: 'Recipient' })
+})
+
+test('an Umbra v2 payout skips the SDK\'s sync only right after a sync that caught up, and still reports it', async () => {
+  const rows = [{ mint: MINTS.USDC, state: 'available', total: 5_000_000n }]
+  const pay = (nimbus, onStatus) => sendFromBalance({ nimbus, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 1_000_001n, recipient: 'R', onStatus })
+  // The bar's "proving" line comes with the synced stage, which the SDK no longer reports.
+  const lines = []
+  await pay(fakeNimbus({ rows }), (text) => lines.push(text))
+  assert.ok(lines.includes('Proving the private transfer…'), lines.join(' | '))
+  // A sync that stopped before the feeds' end leaves the withdrawal its own.
+  const behind = fakeNimbus({ rows, syncs: [{ kind: 'ingested', caughtUp: false, rounds: 1 }] })
+  await pay(behind)
+  assert.deepEqual(behind.calls.at(-1)[2], {})
+  // So does a wallet the sync calls unregistered.
+  const unknown = fakeNimbus({ rows, syncs: [{ kind: 'unregistered' }] })
+  await pay(unknown)
+  assert.deepEqual(unknown.calls.at(-1)[2], {})
+  // A retry after a refused attempt syncs again, with a context of its own.
+  const retried = fakeNimbus({ rows, unpayable: [1_000_001n] })
+  await pay(retried)
+  assert.deepEqual(retried.calls.map(([name, , options]) => [name, options]), [['context', undefined], ['sync', undefined], ['withdraw', { sync: false }], ['context', undefined], ['withdraw', {}]])
 })
 
 test('an Umbra v2 payout the SDK cannot add up is retried a unit less, other failures are not', async () => {
@@ -112,7 +135,7 @@ test('an Umbra v2 sync that stops partway is tried again, never read as a smalle
   const unavailable = { kind: 'unavailable', step: 'notes', detail: {} }
   const flaky = fakeNimbus({ rows, syncs: [unavailable] })
   await sendFromBalance({ nimbus: flaky, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 1n, recipient: 'R' })
-  assert.deepEqual(flaky.calls.map(([name]) => name), ['sync', 'sync', 'withdraw'])
+  assert.deepEqual(flaky.calls.map(([name]) => name), ['context', 'sync', 'sync', 'withdraw'])
   const down = fakeNimbus({ rows, syncs: [unavailable, unavailable, unavailable] })
   await assert.rejects(sendFromBalance({ nimbus: down, session: registered, asset: 'USDC', mint: MINTS.USDC, payout: 1n, recipient: 'R' }), /could not finish reading your notes \(notes\)/)
   assert.ok(!down.calls.some(([name]) => name === 'withdraw'))
