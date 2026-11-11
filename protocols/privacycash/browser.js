@@ -2,6 +2,7 @@ import { Connection, PublicKey } from '@solana/web3.js'
 import { ENDPOINTS, MINTS as REGISTRY_MINTS } from '../addresses.js'
 import { isNoAnswer } from '../shared/network.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
+import { createCircuitFiles } from './circuit-files.js'
 import { coversRecentOnly, scanKeys, scanOlderNotes, scanRecentFirst, treeSize } from './recent-scan.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
@@ -26,10 +27,20 @@ export function relayerFailure(url, method = 'GET') {
 // The SDK calls the relayer with bare fetches, so a dropped connection reaches
 // the page as the browser's "Failed to fetch". Installed once when this adapter
 // loads, under captureWithdrawal's own swap of fetch, which restores it.
+//
+// The same wrapper answers the proving files from memory (circuit-files.js):
+// snarkjs fetches both by URL inside every proof, and they are downloaded and
+// checked once per page instead, ahead of the click when preload() ran. A file
+// that cannot be loaded and checked is fetched from the network as before.
+// Returns the files' holder, for preload().
 export function labelRelayerFailures(target = globalThis) {
   const fetch = target.fetch
-  if (typeof fetch !== 'function' || fetch.labelsRelayer) return
+  if (typeof fetch !== 'function') return null
+  if (fetch.labelsRelayer) return fetch.circuitFiles ?? null
+  const circuitFiles = createCircuitFiles({ fetch: (input, init) => fetch(input, init), base: target.location?.href, subtle: target.crypto?.subtle })
   const labelled = async (input, init) => {
+    const held = await circuitFiles.respond(input, init)
+    if (held) return held
     try { return await fetch(input, init) } catch (error) {
       if (!isNoAnswer(error)) throw error
       let url
@@ -39,9 +50,11 @@ export function labelRelayerFailures(target = globalThis) {
     }
   }
   labelled.labelsRelayer = true
+  labelled.circuitFiles = circuitFiles
   target.fetch = labelled
+  return circuitFiles
 }
-labelRelayerFailures()
+const circuitFiles = labelRelayerFailures()
 
 function signatureBytes(value) {
   const signature = value?.signature ?? value
@@ -487,23 +500,44 @@ export function rescanShielded({ provider, onStatus = () => {} }) {
   }).finally(() => { if (rescan === controller) rescan = null })
 }
 
+// Loads what a payment would otherwise load after the click: the SDK, the
+// hasher's WebAssembly and the two proving files (19.7 MB, checked against
+// their digests, then held in memory for every proof on this page). It asks the
+// wallet for nothing and proves nothing. Not started while a payment runs or
+// waits; a preload still downloading when one starts is shared with it, not
+// repeated. Resolves to whether everything loaded, never rejects.
+let payments = 0
+let preloading = null
+export function preload() {
+  if (payments || !circuitFiles) return Promise.resolve(false)
+  preloading ??= Promise.all([
+    import('@lightprotocol/hasher.rs').then(({ WasmFactory }) => WasmFactory.getInstance()),
+    import('privacycash/utils'),
+    ...circuitFiles.paths.map((path) => circuitFiles.load(path)),
+  ]).then(() => true, () => { preloading = null; return false })
+  return preloading
+}
+
 // The one entry point the UI calls. Bridging and swapping live in bridge.js and
 // swap.js and are loaded only when asked for, so their relayer code stays out of
 // the transfer path.
 export async function execute({ kind, ...options }) {
   // A payment never waits behind a full rescan.
   rescan?.abort()
-  // Timed from the click: a send behind a balance read shows the wait as queued.
-  if (kind === 'send') {
-    return withTimings('privacycash', { downloads: circuitDownload }, (timings) => exclusive(() => { timings.enter('other'); return executePrivacyCashTransfer({ ...options, timings }) }))
-  }
-  if (kind === 'bridge') {
-    const { executePrivacyCashBridge } = await import('./bridge.js')
-    return exclusive(() => executePrivacyCashBridge(options))
-  }
-  if (kind === 'swap') {
-    const { executePrivacyCashSwap } = await import('./swap.js')
-    return exclusive(() => executePrivacyCashSwap(options))
-  }
-  throw new Error(`PrivacyCash has no browser ${kind} flow`)
+  payments += 1
+  try {
+    // Timed from the click: a send behind a balance read shows the wait as queued.
+    if (kind === 'send') {
+      return await withTimings('privacycash', { downloads: circuitDownload }, (timings) => exclusive(() => { timings.enter('other'); return executePrivacyCashTransfer({ ...options, timings }) }))
+    }
+    if (kind === 'bridge') {
+      const { executePrivacyCashBridge } = await import('./bridge.js')
+      return await exclusive(() => executePrivacyCashBridge(options))
+    }
+    if (kind === 'swap') {
+      const { executePrivacyCashSwap } = await import('./swap.js')
+      return await exclusive(() => executePrivacyCashSwap(options))
+    }
+    throw new Error(`PrivacyCash has no browser ${kind} flow`)
+  } finally { payments -= 1 }
 }

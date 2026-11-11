@@ -78,6 +78,29 @@ function progressHook(onStatus, timings) {
   }
 }
 
+// Loads what a payment would otherwise load after the click: the SDK and its
+// proving files, through the SDK's own loadVerifiedCircuitArtifacts, which
+// checks them against the digests it pins and keeps them for its proofs. It
+// asks the wallet for nothing and proves nothing. Not started while a payment
+// runs. Resolves to whether both loaded, never rejects.
+let payments = 0
+let preloading = null
+export function preload() {
+  if (payments) return Promise.resolve(false)
+  preloading ??= import('@cloak.dev/sdk')
+    .then((sdk) => sdk.loadVerifiedCircuitArtifacts(sdk.getCircuitsPath()))
+    .then(() => true, () => { preloading = null; return false })
+  return preloading
+}
+
+// The SDK for a payment. A preload still downloading the proving files is
+// waited for, so the proof finds them held instead of downloading them again.
+async function loadSdk() {
+  const sdk = await import('@cloak.dev/sdk')
+  await preloading
+  return sdk
+}
+
 // What a private send or withdrawal needs: the relay authenticates the wallet
 // with one message signature per request. Deposits add their own fields.
 function relayOptions(sdk, provider, connection, onStatus, timings = NO_TIMINGS) {
@@ -145,7 +168,7 @@ async function sendFromSaved({ provider, asset, amount, recipient, onStatus, tim
   if (asset !== 'SOL' && !MINTS[asset]) throw new Error(`CLOAKC does not support ${asset}`)
   onStatus('Reading your Cloak notes...')
   timings.enter('sdk load')
-  const sdk = await import('@cloak.dev/sdk')
+  const sdk = await loadSdk()
   timings.leg('withdrawal'); timings.enter('note scan')
   const connection = rpcConnection()
   const wallet = String(provider.publicKey)
@@ -178,7 +201,7 @@ async function depositNote({ provider, asset, totalBaseUnits, onStatus, timings 
 
   onStatus('Preparing CLOAKC deposit...')
   timings.enter('sdk load')
-  const sdk = await import('@cloak.dev/sdk')
+  const sdk = await loadSdk()
   timings.leg('deposit'); timings.enter('other')
   const mint = asset === 'SOL' ? sdk.NATIVE_SOL_MINT : new PublicKey(MINTS[asset])
   const owner = await sdk.generateUtxoKeypair()
@@ -259,7 +282,7 @@ export async function executeCloakSwap({ provider, inputAsset, outputAsset, tota
   if (fromShielded) {
     if (!provider?.publicKey || typeof provider.signMessage !== 'function') throw new Error('Connect a Solana wallet that supports message signing')
     onStatus('Reading your Cloak notes...')
-    sdk = await import('@cloak.dev/sdk')
+    sdk = await loadSdk()
     const connection = rpcConnection()
     wallet = String(provider.publicKey)
     options = relayOptions(sdk, provider, connection, onStatus)
@@ -363,7 +386,10 @@ export async function shieldedBalances({ provider }) {
 // capability. Anything the manifest does not run is refused here rather than
 // silently doing the wrong thing.
 export async function execute({ kind, ...options }) {
-  if (kind === 'send') return withTimings('cloakc', { downloads: circuitDownload }, (timings) => { timings.enter('other'); return executeCloakSend({ ...options, timings }) })
-  if (kind === 'swap') return executeCloakSwap(options)
-  throw new Error(`CLOAKC has no browser ${kind} flow`)
+  payments += 1
+  try {
+    if (kind === 'send') return await withTimings('cloakc', { downloads: circuitDownload }, (timings) => { timings.enter('other'); return executeCloakSend({ ...options, timings }) })
+    if (kind === 'swap') return await executeCloakSwap(options)
+    throw new Error(`CLOAKC has no browser ${kind} flow`)
+  } finally { payments -= 1 }
 }

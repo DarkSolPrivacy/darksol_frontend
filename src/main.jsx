@@ -26,6 +26,7 @@ import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from '
 import { bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
+import { preloadRoute } from './preload.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
@@ -1201,6 +1202,17 @@ function PrivacyHome({ walletSession, settings }) {
   const submitted = Boolean(receipt?.depositSignature || receipt?.withdrawals?.length)
   // A shielded payment larger than two notes goes out as several withdrawals, each with the pool's fixed fee.
   const payingPool = chosenOption?.protocol ?? recommended?.protocol
+  // The selected route's SDK and proving files load while the form is being
+  // finished (src/preload.js): for that pool only, once a wallet is connected
+  // and the form is valid, and never while a payment runs. The selection can
+  // change as the quote and the simulation arrive, so it has to hold for a
+  // moment first: a pool picked in passing downloads nothing.
+  const preloadPool = wallet && formValid && !sending && !loading ? payingPool ?? null : null
+  useEffect(() => {
+    if (!preloadPool) return undefined
+    const timer = setTimeout(() => { preloadRoute(preloadPool, { load: loadBrowserAdapter }) }, 1500)
+    return () => clearTimeout(timer)
+  }, [preloadPool])
   const shieldedSplit = payingShielded && payingPool && receiversValid ? shielded.pools[payingPool]?.plan?.(asset, receiverRaws) : null
   // What the recipient should get after every fee on the recommended route.
   const swapOutput = isSwap ? recommended?.settlement?.output : null
