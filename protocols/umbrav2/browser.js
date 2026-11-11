@@ -26,7 +26,7 @@ import { swapEligibility } from '../../src/swap-routes.js'
 import manifest from './manifest.js'
 import { createReceipt, throwWithReceipt } from '../shared/receipts.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
-import { STEP_SECONDS, createProgress, expectedPages, planSteps, readLines } from './progress-plan.js'
+import { PAGES_PER_ROUND, STEP_SECONDS, createProgress, expectedPages, planSteps, readLines } from './progress-plan.js'
 
 // How long to wait for the indexer to see a registration or a deposit: three minutes.
 const POLL_MS = 4000
@@ -98,6 +98,11 @@ function loadSdk() {
     if (!window.crossOriginIsolated) throw new Error('Umbra v2 needs the page reloaded before it can send. Reload DarkSol and try again.')
     const nimbus = await import('@umbra-privacy/nimbus-solana-web')
     const gateway = new URL('/api/umbra-gateway', window.location.origin).toString()
+    // No `proving` and no worker starter of our own: the SDK (0.5.0) then proves
+    // in shared memory and, because the workers are the ones it starts itself,
+    // keeps them and one loaded proving key for 120 s after a proof, so a
+    // withdrawal that follows its deposit proves without starting over. A
+    // custom starter or `threading: 'workers'` would give that up.
     const sdk = await nimbus.loadNimbusSdk({ cluster: 'mainnet' }, {
       assetsBaseUrl: '/nimbus/',
       endpoints: {
@@ -157,7 +162,7 @@ function exclusive(task) {
 }
 
 // Where openNimbusSession's default tab store keeps the unlock secret
-// (signature-secret-store.js in @umbra-privacy/nimbus-solana-web 0.1.1, a key
+// (signature-secret-store.js in @umbra-privacy/nimbus-solana-web 0.5.0, a key
 // it keeps fixed). Read directly, so asking whether the tab is unlocked loads
 // none of the SDK.
 const secretKey = (address) => `umbra/nimbus-solana-web/account-secret/mainnet/solana:mainnet/${address}`
@@ -194,8 +199,8 @@ async function openSession(provider, progress = createProgress(() => {}, []), ti
 // Syncs the note store to the chain's tip. A step it could not finish (the
 // store busy, a service down) leaves what it read and the next call goes on,
 // so it is tried again; a partial sync must never read as a smaller balance.
-// The first read on a device checks the pool's notes from the start in this
-// browser: one page per 1,000 notes, minutes in all. With `reading` (from
+// The first read on a device checks the pool's notes from the wallet's
+// registration on, in this browser: one page per 1,000 notes. With `reading` (from
 // openSession) a long read reports its pages against the plan, says why it
 // takes long, and a full read is recorded for next time.
 const LONG_READ_PAGES = 3
@@ -211,7 +216,8 @@ async function syncNotes(nimbus, session, { signal, progress, reading } = {}) {
   }
   report(1)
   for (let attempt = 1; ; attempt++) {
-    const result = await nimbus.syncNoteStore(session, {}, { signal, onProgress: ({ round }) => report(round + 1) })
+    // A round reads up to PAGES_PER_ROUND pages of each stream; `round` counts from 1.
+    const result = await nimbus.syncNoteStore(session, {}, { signal, onProgress: ({ round }) => report(round * PAGES_PER_ROUND + 1) })
     if (result?.kind === 'ingested' && result.caughtUp && reading && Number.isSafeInteger(reading.nextLeaf)) saveReadMark(session.walletAddress, reading.nextLeaf)
     if (result?.kind !== 'unavailable') return result
     if (attempt === 3) throw new Error(`Umbra v2 could not finish reading your notes (${result.step})`)
@@ -262,7 +268,7 @@ async function withdrawTo(nimbus, session, { asset, mint, amount, recipient, pro
       { mint, amount: units, recipient: String(recipient) },
       { onProgress: withdrawalProgress(progress, timings), ...(asset === 'SOL' ? { recipientTokenAccount: String(recipient) } : {}) })
   }
-  // The SDK (nimbus-solana 0.1.1) refuses an amount that no payout plus its fee
+  // The SDK (nimbus-solana 0.4.0, nimbus-statement 0.1.1) refuses an amount that no payout plus its fee
   // adds up to: at 10 bps, every amount ≡ 1 mod 1001, 1 USDC and 1 USDT among
   // them. It puts the unit left over on the fee, and its own statement check,
   // which wants each fee to be exactly its ceiling, rejects that before anything

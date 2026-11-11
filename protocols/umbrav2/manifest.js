@@ -19,7 +19,7 @@ export default Object.freeze({
   }),
   primaryAddress: 'program',
   explorer: EXPLORERS.solana,
-  // The SDK's mainnet preset (@umbra-privacy/nimbus-solana-web 0.1.1). The
+  // The SDK's mainnet preset (@umbra-privacy/nimbus-solana-web 0.5.0). The
   // gateway fronts the relayer, guardians, screener, data endorser, fee enclave
   // and coordinator, and refuses requests without a bearer token; ./browser.js
   // reaches it through the backend's /api/umbra-gateway, which adds one.
@@ -62,7 +62,7 @@ export default Object.freeze({
   // the SDK merges notes first when the largest three fall short. The balance is
   // found again from the wallet's unlock signature on any device.
   send: Object.freeze({ execution: 'sdk', keepShielded: true, fromShielded: true }),
-  // The SDK publishes no swap (@umbra-privacy/nimbus-solana-web 0.1.1), so
+  // The SDK publishes no swap (@umbra-privacy/nimbus-solana-web 0.5.0), so
   // browser.js runs one: a private withdrawal of SOL to a one-time swap wallet,
   // a Jupiter Ultra swap there, and a payout of everything it holds to the
   // recipient (shared/swap-wallet.js). SOL input only: the swap wallet's network

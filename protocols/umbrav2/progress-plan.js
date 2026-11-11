@@ -11,7 +11,7 @@ export const STEP_SECONDS = Object.freeze({
   unlock: 8, // the wallet's unlock message, once per tab
   register: 35, // first payment of a wallet: approve, land, wait for the indexer
   read: 5, // reading the balance when this browser already holds it
-  page: 24, // one page of a longer read: up to 1,000 notes checked in the browser
+  page: 24, // one page of a longer read: up to 1,000 notes checked and stored in the browser
   prepare: 4,
   prove: 25, // the deposit's proof
   approve: 8, // the wallet's approval
@@ -22,15 +22,19 @@ export const STEP_SECONDS = Object.freeze({
   swap: 20, // the one-time wallet's Jupiter swap and payout
 })
 
-// A read's pages: a store this browser has never filled reads the pool from the
-// start, one page per 1,000 notes and one for the unsealed tail; a known one only
-// what was added since its last read. `nextLeaf` is the pool's note count from the
+// A read's pages, one per 1,000 notes and one for the unsealed tail. A store this
+// browser has never filled reads from the wallet's registration on (the SDK asks
+// Umbra's context API where that is, nimbus-solana-web 0.5), which the page cannot
+// know beforehand, so it plans a typical first read; a known store reads only what
+// was added since its last read. `nextLeaf` is the pool's note count from the
 // indexer's CDN manifest, `savedLeaf` the count at this browser's last full read.
+// The SDK reads PAGES_PER_ROUND pages of each stream per round (its reads.js).
 export const NOTES_PER_PAGE = 1000
-const FIRST_READ_GUESS = 11
+export const PAGES_PER_ROUND = 4
+const FIRST_READ_GUESS = 4
 export function expectedPages({ known, savedLeaf, nextLeaf }) {
   const count = Number.isSafeInteger(nextLeaf) && nextLeaf >= 0 ? nextLeaf : null
-  if (!known) return count === null ? FIRST_READ_GUESS : Math.ceil(count / NOTES_PER_PAGE) + 1
+  if (!known) return FIRST_READ_GUESS
   if (count === null || !Number.isSafeInteger(savedLeaf)) return 1
   return 1 + Math.floor(Math.max(0, count - savedLeaf) / NOTES_PER_PAGE)
 }
@@ -86,5 +90,5 @@ export function readLines({ known, page, pages }) {
   const minutes = `about ${left} min left`
   return known
     ? { text: `Catching up on Umbra v2… (page ${page} of ${total})`, note: `Reading what happened in the pool since your last visit: ${minutes}.` }
-    : { text: `Setting up Umbra v2 on this device… (page ${page} of ${total})`, note: `First time here: Umbra v2 checks the pool's notes in your browser to find your funds, so nobody else learns which are yours. This happens only once: ${minutes}. Next time it takes seconds.` }
+    : { text: `Setting up Umbra v2 on this device… (page ${page} of ${total})`, note: `First time here: Umbra v2 checks the pool's notes since you registered, in your browser, to find your funds, so nobody else learns which are yours. This happens only once: ${minutes}. Next time it takes seconds.` }
 }

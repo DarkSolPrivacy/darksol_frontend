@@ -1,7 +1,7 @@
 // Vite plugin: lets Umbra v2's SDK accept the guards Solflare adds to a
 // transaction (see wallet-additions.js for what is accepted and why).
 //
-// It rewrites @umbra-privacy/nimbus-solana's flows/transaction.js (0.1.1) as the
+// It rewrites @umbra-privacy/nimbus-solana's flows/transaction.js (0.4.0; the same snippets as 0.1.1) as the
 // bundle is built, in three places:
 //   1. readWalletSignature: a changed message passes when walletAdditionsAllowed
 //      accepts it, and the wallet's signature is then checked over that message.

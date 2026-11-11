@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { STEP_SECONDS, createProgress, expectedPages, planSteps, readLines } from '../protocols/umbrav2/progress-plan.js'
 
-test('a first read on a device reads the whole pool, a known one only what was added', () => {
-  // The CDN manifest of 2026-11-07: 10,000 notes, read as 11 pages here.
-  assert.equal(expectedPages({ known: false, nextLeaf: 10_000 }), 11)
-  assert.equal(expectedPages({ known: false }), 11)
+test('a first read on a device reads from the registration on, a known one only what was added', () => {
+  // Where the registration sits is the SDK's to ask, so a first read plans a typical one.
+  assert.equal(expectedPages({ known: false, nextLeaf: 13_035 }), 4)
+  assert.equal(expectedPages({ known: false }), 4)
   assert.equal(expectedPages({ known: true, savedLeaf: 9_950, nextLeaf: 10_000 }), 1)
   assert.equal(expectedPages({ known: true, savedLeaf: 6_000, nextLeaf: 10_400 }), 5)
   assert.equal(expectedPages({ known: true }), 1)
