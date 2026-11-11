@@ -10,12 +10,14 @@ export function allowsPreload(connection = globalThis.navigator?.connection) {
 }
 
 // `load` is protocols/browser.js's loadBrowserAdapter (Vite-only, so the caller
-// passes it). Resolves to whether the pool's preload ran to its end. Never rejects.
-export async function preloadRoute(protocolId, { load, connection } = {}) {
+// passes it); `provider` the connected wallet, which a preload may read the
+// address of and never asks to sign. Resolves to whether the pool's preload ran
+// to its end. Never rejects.
+export async function preloadRoute(protocolId, { load, connection, provider } = {}) {
   if (!protocolId || !allowsPreload(connection)) return false
   try {
     const adapter = await load(protocolId)
     if (typeof adapter.preload !== 'function') return false
-    return Boolean(await adapter.preload())
+    return Boolean(await adapter.preload({ provider }))
   } catch { return false }
 }

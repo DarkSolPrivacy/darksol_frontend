@@ -12,8 +12,9 @@ test('a data-saver connection preloads nothing', async () => {
 
 test('only the selected pool is preloaded, through its adapter', async () => {
   const asked = []
-  const load = async (id) => { asked.push(id); return { preload: async () => true } }
-  assert.equal(await preloadRoute('cloakc', { load, connection: {} }), true)
+  const provider = { publicKey: 'wallet' }
+  const load = async (id) => { asked.push(id); return { preload: async (options) => { assert.equal(options.provider, provider); return true } } }
+  assert.equal(await preloadRoute('cloakc', { load, connection: {}, provider }), true)
   assert.deepEqual(asked, ['cloakc'])
   assert.equal(await preloadRoute(null, { load, connection: {} }), false)
   assert.deepEqual(asked, ['cloakc'])

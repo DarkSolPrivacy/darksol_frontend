@@ -26,6 +26,7 @@ import { swapEligibility } from '../../src/swap-routes.js'
 import manifest from './manifest.js'
 import { createReceipt, throwWithReceipt } from '../shared/receipts.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
+import { createProvingKeyFetch, heldArtifacts, wantedFiles, warmProvingKeys } from './proving-keys.js'
 import { PAGES_PER_ROUND, STEP_SECONDS, createProgress, expectedPages, planSteps, readLines } from './progress-plan.js'
 
 // How long to wait for the indexer to see a registration or a deposit: three minutes.
@@ -105,6 +106,9 @@ function loadSdk() {
     // custom starter or `threading: 'workers'` would give that up.
     const sdk = await nimbus.loadNimbusSdk({ cluster: 'mainnet' }, {
       assetsBaseUrl: '/nimbus/',
+      // The SDK's own fetch, except that a proving file preload() downloaded
+      // ahead is handed over instead of fetched again (proving-keys.js).
+      platform: { fetch: createProvingKeyFetch() },
       endpoints: {
         rpc: new URL('/api/solana-rpc', window.location.origin).toString(),
         // The preset's gateway slugs, the ones server/umbra-gateway.js forwards.
@@ -553,11 +557,39 @@ export async function shieldedBalances({ provider, prompt = true, signal, onStat
   })
 }
 
+// Loads what a payment would otherwise load after the click: the SDK with its
+// WebAssembly, and the proving files this browser does not hold yet (about
+// 135 MB the first time, as Umbra's own app downloads when a wallet connects;
+// nothing once the SDK has cached them). It asks the wallet for nothing and
+// proves nothing. Not started while a payment runs or waits; a download under
+// way when one starts is shared with it. Resolves to whether it ran to its
+// end, never rejects.
+let payments = 0
+let preloading = null
+export function preload({ provider } = {}) {
+  if (payments) return Promise.resolve(false)
+  preloading ??= (async () => {
+    const { sdk } = await loadSdk()
+    const { provingKeys, cacheDatabase } = sdk.settings
+    const held = await heldArtifacts(cacheDatabase)
+    // A browser that cannot say what the SDK holds downloads nothing ahead.
+    if (!held) return true
+    // A wallet whose notes this browser has read is registered: it needs no registration proof.
+    const registered = Boolean(readMark(provider?.walletStandard?.account?.address))
+    await warmProvingKeys(wantedFiles(provingKeys, held, { registered }))
+    return true
+  })().catch(() => false).finally(() => { preloading = null })
+  return preloading
+}
+
 export async function execute({ kind, ...options }) {
-  // Timed from the click: a send behind a balance read shows the wait as queued.
-  if (kind === 'send') {
-    return withTimings('umbrav2', { downloads: provingKeyDownload }, (timings) => exclusive(() => { timings.enter('other'); return send({ ...options, timings }) }))
-  }
-  if (kind === 'swap') return exclusive(() => swap(options))
-  throw new Error(`Umbra v2 has no browser ${kind} flow`)
+  payments += 1
+  try {
+    // Timed from the click: a send behind a balance read shows the wait as queued.
+    if (kind === 'send') {
+      return await withTimings('umbrav2', { downloads: provingKeyDownload }, (timings) => exclusive(() => { timings.enter('other'); return send({ ...options, timings }) }))
+    }
+    if (kind === 'swap') return await exclusive(() => swap(options))
+    throw new Error(`Umbra v2 has no browser ${kind} flow`)
+  } finally { payments -= 1 }
 }

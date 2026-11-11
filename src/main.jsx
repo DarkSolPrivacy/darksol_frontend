@@ -1210,7 +1210,7 @@ function PrivacyHome({ walletSession, settings }) {
   const preloadPool = wallet && formValid && !sending && !loading ? payingPool ?? null : null
   useEffect(() => {
     if (!preloadPool) return undefined
-    const timer = setTimeout(() => { preloadRoute(preloadPool, { load: loadBrowserAdapter }) }, 1500)
+    const timer = setTimeout(() => { preloadRoute(preloadPool, { load: loadBrowserAdapter, provider: wallet.provider }) }, 1500)
     return () => clearTimeout(timer)
   }, [preloadPool])
   const shieldedSplit = payingShielded && payingPool && receiversValid ? shielded.pools[payingPool]?.plan?.(asset, receiverRaws) : null
