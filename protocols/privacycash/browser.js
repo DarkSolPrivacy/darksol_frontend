@@ -1,6 +1,7 @@
 import { Connection, PublicKey } from '@solana/web3.js'
 import { ENDPOINTS, MINTS as REGISTRY_MINTS } from '../addresses.js'
 import { isNoAnswer } from '../shared/network.js'
+import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
 // Re-exported so bridge.js and the older call sites keep one source.
@@ -117,11 +118,21 @@ async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   if (await connection.getBalance(publicKey, 'confirmed') === 0) throw new Error('A small SOL balance is required for network fees')
 }
 
+// The SDK's log lines that start a stage of a deposit or a withdrawal
+// (deposit.ts, withdraw.ts and their SPL twins in privacycash 1.2.2). The scan
+// before them has no line of its own: the adapter enters it before the call.
+const LOG_STAGES = [[/^generating ZK proof/i, 'proof'], [/^submitting transaction to relayer/i, 'relay request'], [/^waiting for transaction confirmation/i, 'settlement wait']]
+// The proving files snarkjs fetches inside the proof (stage-timings.js takes them out of it).
+const circuitDownload = (url) => (url.includes(`${CIRCUIT_BASE_PATH}.`) ? 'circuit download' : null)
+
 // The SDK exposes no progress callback, but it logs every UTXO page it scans and
-// every proof/relayer stage, so its logger is the only live progress there is.
-export function reportProgress(privacyCash, onStatus) {
+// every proof/relayer stage, so its logger is the only live progress there is,
+// and the only sign of where a stage starts.
+export function reportProgress(privacyCash, onStatus, timings = NO_TIMINGS) {
   privacyCash.setLogger?.((level, message) => {
     if (level === 'warn' || level === 'error') console.log(`[${level}]`, message)
+    const stage = level === 'info' && LOG_STAGES.find(([line]) => line.test(message))?.[1]
+    if (stage) timings.enter(stage)
     const page = /####fetch_utxo_offset\s+(\d+)/.exec(message)
     if (page) return onStatus(`Scanning notes ${page[1]}…`)
     const found = /Found (\d+) total UTXOs/.exec(message)
@@ -133,7 +144,7 @@ export function reportProgress(privacyCash, onStatus) {
 // Wallet check, circuit/WASM load and encryption-key derivation are identical for a
 // private transfer and a private bridge, so both entry points share this setup.
 // `fund: false` skips the wallet balance check, for a session that only withdraws.
-export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, fund = true, onStatus = () => {} }) {
+export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, fund = true, onStatus = () => {}, timings = NO_TIMINGS }) {
   if (!provider?.publicKey || typeof provider.signTransaction !== 'function') throw new Error('Connect a compatible Solana wallet')
   const publicKey = new PublicKey(String(provider.publicKey))
   const connection = rpcConnection()
@@ -142,13 +153,16 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
     await assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   }
   onStatus('Preparing privacy tools…')
+  timings.enter('sdk load')
   const [{ WasmFactory }, privacyCash] = await Promise.all([
     import('@lightprotocol/hasher.rs'),
     import('privacycash/utils'),
   ])
-  reportProgress(privacyCash, onStatus)
+  reportProgress(privacyCash, onStatus, timings)
   const lightWasm = await WasmFactory.getInstance()
+  timings.enter('sign-in')
   const { encryptionService, signature } = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
+  timings.enter('other')
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
   return {
     privacyCash,
@@ -156,7 +170,7 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
     publicKey,
     connection,
     signature,
-    transactionSigner: (transaction) => provider.signTransaction(transaction),
+    transactionSigner: (transaction) => timings.during('wallet approval', () => provider.signTransaction(transaction)),
   }
 }
 
@@ -300,9 +314,10 @@ export async function awaitCapacity(privacyCash, common, asset, units, onStatus)
 // same address (see planWithdrawals). The relayer submits each and pays its
 // network fee, so the wallet signs nothing beyond its sign-in message, but the
 // pool's fee applies to every withdrawal.
-async function sendFromShielded({ provider, asset, recipients, onStatus }) {
-  const { privacyCash, common } = await openPrivacyCashSession({ provider, asset, totalBaseUnits: 0n, fund: false, onStatus })
+async function sendFromShielded({ provider, asset, recipients, onStatus, timings = NO_TIMINGS }) {
+  const { privacyCash, common } = await openPrivacyCashSession({ provider, asset, totalBaseUnits: 0n, fund: false, onStatus, timings })
   onStatus('Reading your shielded balance…')
+  timings.leg('withdrawal'); timings.enter('note scan')
   const notes = await noteAmounts(privacyCash, common, asset)
   const terms = await withdrawalTerms(privacyCash, asset)
   const plan = planWithdrawals(notes, recipients.map((recipient) => BigInt(recipient.baseUnits)), terms.minimum)
@@ -321,6 +336,7 @@ async function sendFromShielded({ provider, asset, recipients, onStatus }) {
       onStatus(total > 1 ? `Sending withdrawal ${receipt.withdrawals.length + 1} of ${total}…` : 'Sending from your shielded balance…')
       let result
       try {
+        timings.leg(total > 1 ? `withdrawal ${receipt.withdrawals.length + 1}` : 'withdrawal'); timings.enter('note scan')
         await awaitCapacity(privacyCash, common, asset, units, onStatus)
         result = await withdrawTo(privacyCash, common, asset, { publicKey: recipient.publicKey, baseUnits: units })
       } catch (error) { throw fail(error instanceof Error ? error.message : String(error)) }
@@ -335,16 +351,18 @@ async function sendFromShielded({ provider, asset, recipients, onStatus }) {
 // Deposits `totalBaseUnits` and pays the recipients from it. Whatever the
 // recipients do not take stays in the wallet's shielded balance as change.
 // `source: 'shielded'` pays from that balance instead, with no deposit.
-export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, source = 'wallet', onStatus = () => {} }) {
+export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, source = 'wallet', onStatus = () => {}, timings = NO_TIMINGS }) {
   if (delayMinutes && recipients.length !== 1) throw new Error('A delivery deadline supports one recipient')
   if (source === 'shielded') {
     if (delayMinutes) throw new Error('A delivery deadline needs a fresh deposit')
-    return sendFromShielded({ provider, asset, recipients, onStatus })
+    return sendFromShielded({ provider, asset, recipients, onStatus, timings })
   }
   if (recipients.reduce((sum, recipient) => sum + BigInt(recipient.baseUnits), 0n) > BigInt(totalBaseUnits)) throw new Error('Recipients add up to more than the deposit')
-  const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus })
+  const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus, timings })
 
   onStatus('Approve deposit in your wallet…')
+  // The SDK's deposit scans for the wallet's notes first, then proves.
+  timings.leg('deposit'); timings.enter('note scan')
   const deposit = await depositTo(privacyCash, common, asset, totalBaseUnits, transactionSigner)
 
   const receipt = { provider: 'privacycash', asset, depositSignature: deposit.tx, withdrawals: [] }
@@ -357,6 +375,7 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
   try {
     for (let index = 0; index < recipients.length; index += 1) {
       onStatus(`Sending ${index + 1} of ${recipients.length}…`)
+      timings.leg(recipients.length > 1 ? `withdrawal ${index + 1}` : 'withdrawal'); timings.enter('note scan')
       receipt.withdrawals.push(await withdrawTo(privacyCash, common, asset, recipients[index]))
     }
   } catch (error) {
@@ -420,7 +439,10 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
 // swap.js and are loaded only when asked for, so their relayer code stays out of
 // the transfer path.
 export async function execute({ kind, ...options }) {
-  if (kind === 'send') return exclusive(() => executePrivacyCashTransfer(options))
+  // Timed from the click: a send behind a balance read shows the wait as queued.
+  if (kind === 'send') {
+    return withTimings('privacycash', { downloads: circuitDownload }, (timings) => exclusive(() => { timings.enter('other'); return executePrivacyCashTransfer({ ...options, timings }) }))
+  }
   if (kind === 'bridge') {
     const { executePrivacyCashBridge } = await import('./bridge.js')
     return exclusive(() => executePrivacyCashBridge(options))
