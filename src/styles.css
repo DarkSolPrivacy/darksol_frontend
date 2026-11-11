@@ -1305,6 +1305,8 @@ label.privRow { cursor: pointer; }
 .walletScanning { width: 12px; height: 12px; border: 1.5px solid rgba(255, 255, 255, .12); border-top-color: var(--text-secondary); border-radius: 50%; animation: ds-spin .8s linear infinite; }
 .walletEmpty, .walletStatus { margin: 4px 8px 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.6; }
 .walletStatus { font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.walletRecent button { margin-left: 6px; padding: 0; border: 0; background: none; color: var(--text-primary); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.walletRecent button:disabled { color: var(--text-tertiary); cursor: default; }
 .walletSkeleton { display: grid; gap: 6px; padding: 4px 0; }
 .walletSkeleton i { height: 44px; border-radius: var(--radius-sm); background: linear-gradient(90deg, #131313 25%, #1B1B1B 50%, #131313 75%); background-size: 200% 100%; animation: ds-shimmer 1.4s linear infinite; }
 .walletTokens { display: grid; margin: 0; padding: 0; list-style: none; }

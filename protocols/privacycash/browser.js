@@ -2,6 +2,7 @@ import { Connection, PublicKey } from '@solana/web3.js'
 import { ENDPOINTS, MINTS as REGISTRY_MINTS } from '../addresses.js'
 import { isNoAnswer } from '../shared/network.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
+import { coversRecentOnly, scanKeys, scanOlderNotes, scanRecentFirst, treeSize } from './recent-scan.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
 // Re-exported so bridge.js and the older call sites keep one source.
@@ -141,6 +142,24 @@ export function reportProgress(privacyCash, onStatus, timings = NO_TIMINGS) {
   })
 }
 
+// The SDK's scan for the wallet's notes of one asset: `extra` adds its `offset` or swaps its storage.
+const scanNotes = (privacyCash, common, asset, extra) => (asset === 'SOL'
+  ? privacyCash.getUtxos({ ...common, ...extra })
+  : privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset], ...extra }))
+
+// Before anything scans a wallet's notes of `asset` for the first time in this
+// browser, reads the tree's recent notes only (recent-scan.js), so the SDK's
+// own scans in deposit, withdraw and getUtxos start from there. Does nothing
+// once the browser holds a position. Inside the queue, like every scan.
+export function recentFirst(privacyCash, common, asset) {
+  return scanRecentFirst({
+    keys: scanKeys(privacyCash.localstorageKey, common.publicKey, asset),
+    storage: common.storage,
+    size: () => treeSize(asset),
+    scan: (offset) => scanNotes(privacyCash, common, asset, { offset }),
+  })
+}
+
 // Wallet check, circuit/WASM load and encryption-key derivation are identical for a
 // private transfer and a private bridge, so both entry points share this setup.
 // `fund: false` skips the wallet balance check, for a session that only withdraws.
@@ -162,8 +181,12 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
   const lightWasm = await WasmFactory.getInstance()
   timings.enter('sign-in')
   const { encryptionService, signature } = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
-  timings.enter('other')
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
+  // The SDK's deposit and withdrawal scan from the saved position; a browser
+  // without one gets it here, at the recent notes, instead of note 0.
+  timings.enter('note scan')
+  await recentFirst(privacyCash, common, asset)
+  timings.enter('other')
   return {
     privacyCash,
     common,
@@ -209,7 +232,7 @@ export async function captureWithdrawal(run) {
 
 // The wallet's unspent notes of one asset, largest first, in base units.
 export async function noteAmounts(privacyCash, common, asset) {
-  const utxos = asset === 'SOL' ? await privacyCash.getUtxos(common) : await privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset] })
+  const utxos = await scanNotes(privacyCash, common, asset)
   return utxos.map((utxo) => BigInt(utxo.amount.toString())).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
 }
 
@@ -409,7 +432,9 @@ async function deliverScheduled({ provider, job, onStatus = () => {} }) {
 // `notes` with `terms` feed planShieldedSend.
 // Payment-link notes are sealed under keys of their own, so they are not among
 // them. The SDK caches its scan position in localStorage: the first scan reads
-// the whole pool, later ones only what is new. With `prompt: false` nothing asks
+// the pool's recent notes (recent-scan.js), later ones only what is new, and
+// `recent` lists the assets whose balance therefore leaves out older notes
+// until rescanShielded has read them. With `prompt: false` nothing asks
 // the wallet to sign, and a browser that holds no signature yet gets null.
 export async function shieldedBalances({ provider, prompt = true, signal, onStatus = () => {} }) {
   const publicKey = new PublicKey(String(provider.publicKey))
@@ -422,10 +447,12 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
   reportProgress(privacyCash, onStatus)
   const common = { publicKey, connection: rpcConnection(), storage: localStorage, abortSignal: signal,
     encryptionService: (await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)).encryptionService }
-  const result = { balances: {}, spendable: {}, notes: {}, terms: {} }
+  const result = { balances: {}, spendable: {}, notes: {}, terms: {}, recent: [] }
   // One tree at a time: the SDK keeps its scan progress in module state.
   for (const asset of ['SOL', ...Object.keys(MINTS)]) {
+    await recentFirst(privacyCash, common, asset)
     const notes = await noteAmounts(privacyCash, common, asset)
+    if (coversRecentOnly(scanKeys(privacyCash.localstorageKey, publicKey, asset), localStorage)) result.recent.push(asset)
     const terms = await withdrawalTerms(privacyCash, asset)
     result.notes[asset] = notes
     result.terms[asset] = terms
@@ -435,10 +462,37 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
   return result
 }
 
+// The full rescan: reads every tree whose balance covers recent notes only from
+// note 0, minutes for the SOL tree, and adds what it finds to the balance. It
+// runs in the queue like any scan and gives way to a payment: execute() stops
+// it, and it starts over when asked again. Resolves to whether it found notes.
+let rescan = null
+export function rescanShielded({ provider, onStatus = () => {} }) {
+  rescan?.abort()
+  const controller = new AbortController()
+  rescan = controller
+  return exclusive(async () => {
+    controller.signal.throwIfAborted()
+    const publicKey = new PublicKey(String(provider.publicKey))
+    const privacyCash = await import('privacycash/utils')
+    reportProgress(privacyCash, onStatus)
+    const common = { publicKey, connection: rpcConnection(), abortSignal: controller.signal,
+      encryptionService: (await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)).encryptionService }
+    let found = false
+    for (const asset of ['SOL', ...Object.keys(MINTS)]) {
+      const keys = scanKeys(privacyCash.localstorageKey, publicKey, asset)
+      if (await scanOlderNotes({ keys, storage: localStorage, scan: (storage) => scanNotes(privacyCash, { ...common, storage }, asset) })) found = true
+    }
+    return found
+  }).finally(() => { if (rescan === controller) rescan = null })
+}
+
 // The one entry point the UI calls. Bridging and swapping live in bridge.js and
 // swap.js and are loaded only when asked for, so their relayer code stays out of
 // the transfer path.
 export async function execute({ kind, ...options }) {
+  // A payment never waits behind a full rescan.
+  rescan?.abort()
   // Timed from the click: a send behind a balance read shows the wait as queued.
   if (kind === 'send') {
     return withTimings('privacycash', { downloads: circuitDownload }, (timings) => exclusive(() => { timings.enter('other'); return executePrivacyCashTransfer({ ...options, timings }) }))
