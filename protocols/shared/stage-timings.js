@@ -48,6 +48,10 @@ export function tableRows(pool, spans, carved) {
   for (const interval of carved) byStage.set(interval.stage, [...(byStage.get(interval.stage) ?? []), interval])
   for (const span of spans) {
     let own = span.end - span.start
+    // A stage left the moment it began (a leg renamed under it, then the next
+    // stage entered within the same tick) takes no row, so it cannot put its
+    // stage ahead of where that stage really ran.
+    if (own < 1) continue
     add(span.leg, span.stage, 0)
     for (const [stage, intervals] of byStage) {
       if (stage === span.stage) continue

@@ -33,6 +33,17 @@ test('stages add up per leg, in the order they ran, and the rows sum to the tota
   assert.ok(rows.every((item) => item.stage === '' || STAGES.includes(item.stage)))
 })
 
+test('a stage that lasted no time where a leg began does not take that place in the order', () => {
+  const time = clock()
+  const timings = createTimings('privacycash', { ...quiet, now: time.now })
+  timings.enter('settlement wait'); time.pass(2000)
+  // The withdrawal begins: the settlement stage is renamed under it, then left at once.
+  timings.leg('withdrawal'); time.pass(0.02); timings.enter('note scan'); time.pass(1500)
+  timings.enter('settlement wait'); time.pass(2100)
+  const { rows } = timings.finish()
+  assert.deepEqual(rows.map((item) => `${item.leg}/${item.stage}`), ['send/settlement wait', 'withdrawal/note scan', 'withdrawal/settlement wait', 'total/'])
+})
+
 test('a wallet approval interrupts a stage and hands back to it', async () => {
   const time = clock()
   const timings = createTimings('cloakc', { ...quiet, now: time.now })
