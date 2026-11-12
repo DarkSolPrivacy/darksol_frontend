@@ -179,7 +179,9 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const usd = amount * prices[asset]
   const bucket = bucketFor(usd, quote.buckets)
   const options = []
+  // The hint's pool: the best balance score, the cheaper pool on the same step, as the options rank.
   let balanceHint = null
+  let hintFee = Infinity
   for (const protocol of QUOTE_POOLS) {
     const pool = quote.pools[protocol]
     const manifest = PROTOCOLS[protocol]
@@ -233,7 +235,11 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       else {
         // Not read yet, or too small: say what paying from a balance would score.
         const privacy = privacyOf(pool, 'balance', 'now', bucket)
-        if (privacy && meterLevel(privacy.score) >= PRIVATE_LEVEL && !balanceHint) balanceHint = { protocol, ...privacy, level: meterLevel(privacy.score), known: balance !== undefined }
+        const level = privacy ? meterLevel(privacy.score) : 0
+        if (level >= PRIVATE_LEVEL && (!balanceHint || level > balanceHint.level || (level === balanceHint.level && feeUsd < hintFee))) {
+          balanceHint = { protocol, ...privacy, level, known: balance !== undefined }
+          hintFee = feeUsd
+        }
       }
     }
   }

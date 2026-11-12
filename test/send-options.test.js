@@ -246,7 +246,8 @@ test('Cloak and Umbra v2 pay from a shielded balance, and wait to send from it, 
   // Unread balances: no option from them, but the hint says what one would score.
   const unread = run()
   assert.ok(!unread.options.some((option) => option.kind === 'balance'))
-  assert.equal(unread.balanceHint.protocol, 'cloakc')
+  // Both score 5 of 5 from a balance: the hint names the cheaper pool.
+  assert.equal(unread.balanceHint.protocol, 'umbrav2')
   assert.deepEqual(unread.options.filter((option) => option.kind === 'later').map((option) => option.id).sort(), ['cloakc:later:24h', 'umbrav2:later:24h'])
   // A balance that covers it in either pool is offered, and the cheaper pool leads.
   const funded = run({ shielded: { cloakc: USDC(30), umbrav2: USDC(20) } })
