@@ -23,7 +23,7 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
-import { bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
+import { WEAK_LEVEL, bucketFor, measuredPrivacy, poolFee, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
@@ -1148,6 +1148,16 @@ function PrivacyHome({ walletSession, settings }) {
     }
     return null
   }, [chosenOption, isSwap, isBridge, amountQuote, manualProtocol, asset, prices, recommended, shieldOnly, payingShielded, totalRaw, sentRaw])
+  // Every option likely traced: the pool that takes deposits now and pays best
+  // from its balance later; on the same meter step the cheaper one, as the options rank.
+  const shieldFirst = useMemo(() => {
+    if (!optionResult?.weak || optionResult.balanceOnly || !amountQuote) return null
+    const fee = (id) => Number(poolFee(id, asset, sentRaw, prices) ?? Infinity)
+    return SHIELD_POOLS.filter(({ id }) => !shieldBlocked[id] && optionResult.settings.pools[id] !== false)
+      .map(({ id }) => ({ protocol: id, fee: fee(id), ...measuredPrivacy({ quote: amountQuote, protocol: id, asset, raw: sentRaw, prices, kind: 'balance' }) }))
+      .filter((pool) => pool.level >= WEAK_LEVEL).sort((a, b) => b.level - a.level || a.fee - b.fee || b.score - a.score)[0] ?? null
+  // shieldBlocked is rebuilt every render; its content follows PAUSED, asset and the amount.
+  }, [optionResult, amountQuote, asset, sentRaw, prices, totalRaw])
   const optionAction = !chosenOption ? '' : chosenOption.kind === 'later' ? `Deposit ${tokenText(chosenOption.deposit, asset)} ${asset} · send in ${chosenOption.wait.replace('h', ' h')}`
     : chosenOption.kind === 'balance' ? `Send ${sentAmount} ${asset} from shielded` : `Send ${sentAmount} ${asset} now`
   const browserExecutable = browserCanRun(recommended?.protocol, isBridge ? 'bridge' : isSwap ? 'swap' : 'send')
@@ -1289,7 +1299,7 @@ function PrivacyHome({ walletSession, settings }) {
         more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: shieldMore, onToggle: toggleMore }}
         shielded={Object.fromEntries(FROM_SHIELDED_IDS.map((id) => [id, !wallet ? 0n : shieldedByPool[id]]))}
         reading={Boolean(wallet) && Boolean(hintPool) && (!shielded.pools[hintPool] || shielded.pools[hintPool].state === 'loading')} onReveal={shielded.reveal}
-        onShield={() => chooseShield('shield')} />
+        shieldFirst={shieldFirst} onShield={(id) => { setShieldPool(id); chooseShield('shield') }} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
