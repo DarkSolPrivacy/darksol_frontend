@@ -1,0 +1,521 @@
+{
+ "date": "2026-11-12",
+ "machine": "VPS, 6 logical cores, headless Chromium 141 (Playwright 1.56 image), datacenter link",
+ "method": "funded sends from one test wallet to another (0.012 SOL Privacy Cash, 0.01 SOL Cloak, 0.005 SOL Umbra v2), signed in Node by the benchmark harness; nothing faked or aborted; one browser profile; ms from each send's own stage table. Transaction signatures and addresses are left out on purpose.",
+ "builds": {
+  "pc-before": "items 1-5",
+  "pc-after-item6": "items 1-6",
+  "cloak-before": "items 1-5",
+  "cloak-after-fix": "items 1-6 and the Cloak polling confirmation",
+  "umbra-cold": "items 1-6, new profile",
+  "umbra-warm-one-sync": "items 1-6 (two runs also with the Cloak fix)",
+  "umbra-warm-two-syncs": "items 1-4 with the Umbra preload, before item 5"
+ },
+ "sets": {
+  "pc-before": {
+   "runs": 3,
+   "stages": {
+    "send / queued": {
+     "medianMs": 1,
+     "minMs": 0,
+     "maxMs": 11075
+    },
+    "send / other": {
+     "medianMs": 64,
+     "minMs": 38,
+     "maxMs": 103
+    },
+    "send / note scan": {
+     "medianMs": 0,
+     "minMs": 0,
+     "maxMs": 22777
+    },
+    "deposit / note scan": {
+     "medianMs": 1060,
+     "minMs": 1049,
+     "maxMs": 1225
+    },
+    "deposit / proof": {
+     "medianMs": 8207,
+     "minMs": 7081,
+     "maxMs": 9674
+    },
+    "deposit / relay request": {
+     "medianMs": 7446,
+     "minMs": 7391,
+     "maxMs": 7677
+    },
+    "deposit / settlement wait": {
+     "medianMs": 2140,
+     "minMs": 2128,
+     "maxMs": 2144
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 2131,
+     "minMs": 2122,
+     "maxMs": 2141
+    },
+    "withdrawal / note scan": {
+     "medianMs": 1470,
+     "minMs": 1259,
+     "maxMs": 1612
+    },
+    "withdrawal / proof": {
+     "medianMs": 6924,
+     "minMs": 5875,
+     "maxMs": 8170
+    },
+    "withdrawal / relay request": {
+     "medianMs": 2482,
+     "minMs": 2292,
+     "maxMs": 2637
+    },
+    "total": {
+     "medianMs": 45931,
+     "minMs": 29766,
+     "maxMs": 54834
+    },
+    "click to signed deposit": {
+     "medianMs": 22275,
+     "minMs": 8372,
+     "maxMs": 32663
+    }
+   }
+  },
+  "pc-after-item6": {
+   "runs": 3,
+   "stages": {
+    "send / other": {
+     "medianMs": 47,
+     "minMs": 39,
+     "maxMs": 57
+    },
+    "deposit / note scan": {
+     "medianMs": 1005,
+     "minMs": 976,
+     "maxMs": 1116
+    },
+    "deposit / proof": {
+     "medianMs": 7112,
+     "minMs": 6787,
+     "maxMs": 7144
+    },
+    "deposit / relay request": {
+     "medianMs": 7801,
+     "minMs": 7418,
+     "maxMs": 8048
+    },
+    "deposit / settlement wait": {
+     "medianMs": 138,
+     "minMs": 123,
+     "maxMs": 143
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 121,
+     "minMs": 117,
+     "maxMs": 167
+    },
+    "withdrawal / note scan": {
+     "medianMs": 1321,
+     "minMs": 1306,
+     "maxMs": 1768
+    },
+    "withdrawal / proof": {
+     "medianMs": 5937,
+     "minMs": 5898,
+     "maxMs": 6512
+    },
+    "withdrawal / relay request": {
+     "medianMs": 2260,
+     "minMs": 2252,
+     "maxMs": 2403
+    },
+    "total": {
+     "medianMs": 26067,
+     "minMs": 25470,
+     "maxMs": 26593
+    },
+    "click to signed deposit": {
+     "medianMs": 8327,
+     "minMs": 8173,
+     "maxMs": 8459
+    }
+   }
+  },
+  "cloak-before": {
+   "runs": 3,
+   "stages": {
+    "send / other": {
+     "medianMs": 51,
+     "minMs": 34,
+     "maxMs": 55
+    },
+    "deposit / other": {
+     "medianMs": 2117,
+     "minMs": 1900,
+     "maxMs": 3589
+    },
+    "deposit / note scan": {
+     "medianMs": 1483,
+     "minMs": 1321,
+     "maxMs": 2049
+    },
+    "deposit / wallet approval": {
+     "medianMs": 61,
+     "minMs": 32,
+     "maxMs": 78
+    },
+    "deposit / proof": {
+     "medianMs": 9262,
+     "minMs": 7641,
+     "maxMs": 9788
+    },
+    "deposit / relay request": {
+     "medianMs": 55,
+     "minMs": 46,
+     "maxMs": 55
+    },
+    "deposit / settlement wait": {
+     "medianMs": 35272,
+     "minMs": 34874,
+     "maxMs": 35685
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 564,
+     "minMs": 516,
+     "maxMs": 732
+    },
+    "withdrawal / note scan": {
+     "medianMs": 158,
+     "minMs": 145,
+     "maxMs": 376
+    },
+    "withdrawal / proof": {
+     "medianMs": 7363,
+     "minMs": 6938,
+     "maxMs": 8939
+    },
+    "withdrawal / other": {
+     "medianMs": 152,
+     "minMs": 122,
+     "maxMs": 161
+    },
+    "withdrawal / relay request": {
+     "medianMs": 1907,
+     "minMs": 1619,
+     "maxMs": 2126
+    },
+    "withdrawal / wallet approval": {
+     "medianMs": 31,
+     "minMs": 30,
+     "maxMs": 58
+    },
+    "total": {
+     "medianMs": 58394,
+     "minMs": 58122,
+     "maxMs": 60920
+    },
+    "click to signed deposit": {
+     "medianMs": 13768,
+     "minMs": 11105,
+     "maxMs": 15595
+    }
+   }
+  },
+  "cloak-after-fix": {
+   "runs": 3,
+   "stages": {
+    "deposit / other": {
+     "medianMs": 1987,
+     "minMs": 1870,
+     "maxMs": 2389
+    },
+    "deposit / note scan": {
+     "medianMs": 1378,
+     "minMs": 1348,
+     "maxMs": 1380
+    },
+    "deposit / wallet approval": {
+     "medianMs": 36,
+     "minMs": 27,
+     "maxMs": 71
+    },
+    "deposit / proof": {
+     "medianMs": 8934,
+     "minMs": 7938,
+     "maxMs": 9162
+    },
+    "deposit / relay request": {
+     "medianMs": 53,
+     "minMs": 52,
+     "maxMs": 57
+    },
+    "deposit / settlement wait": {
+     "medianMs": 4136,
+     "minMs": 3894,
+     "maxMs": 4300
+    },
+    "withdrawal / note scan": {
+     "medianMs": 174,
+     "minMs": 139,
+     "maxMs": 227
+    },
+    "withdrawal / proof": {
+     "medianMs": 7496,
+     "minMs": 7357,
+     "maxMs": 8646
+    },
+    "withdrawal / other": {
+     "medianMs": 103,
+     "minMs": 91,
+     "maxMs": 203
+    },
+    "withdrawal / relay request": {
+     "medianMs": 1798,
+     "minMs": 1775,
+     "maxMs": 1887
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 693,
+     "minMs": 605,
+     "maxMs": 721
+    },
+    "total": {
+     "medianMs": 27446,
+     "minMs": 25193,
+     "maxMs": 28515
+    },
+    "click to signed deposit": {
+     "medianMs": 12951,
+     "minMs": 11474,
+     "maxMs": 13141
+    }
+   }
+  },
+  "umbra-cold": {
+   "runs": 1,
+   "stages": {
+    "send / circuit download": {
+     "medianMs": 613,
+     "minMs": 613,
+     "maxMs": 613
+    },
+    "deposit / other": {
+     "medianMs": 3367,
+     "minMs": 3367,
+     "maxMs": 3367
+    },
+    "deposit / circuit download": {
+     "medianMs": 20288,
+     "minMs": 20288,
+     "maxMs": 20288
+    },
+    "deposit / note scan": {
+     "medianMs": 143575,
+     "minMs": 143575,
+     "maxMs": 143575
+    },
+    "deposit / proof": {
+     "medianMs": 18249,
+     "minMs": 18249,
+     "maxMs": 18249
+    },
+    "deposit / wallet approval": {
+     "medianMs": 2259,
+     "minMs": 2259,
+     "maxMs": 2259
+    },
+    "deposit / relay request": {
+     "medianMs": 2348,
+     "minMs": 2348,
+     "maxMs": 2348
+    },
+    "deposit / settlement wait": {
+     "medianMs": 7859,
+     "minMs": 7859,
+     "maxMs": 7859
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 4017,
+     "minMs": 4017,
+     "maxMs": 4017
+    },
+    "withdrawal / proof": {
+     "medianMs": 12435,
+     "minMs": 12435,
+     "maxMs": 12435
+    },
+    "withdrawal / relay request": {
+     "medianMs": 1415,
+     "minMs": 1415,
+     "maxMs": 1415
+    },
+    "total": {
+     "medianMs": 216426,
+     "minMs": 216426,
+     "maxMs": 216426
+    },
+    "click to signed deposit": {
+     "medianMs": 188534,
+     "minMs": 188534,
+     "maxMs": 188534
+    }
+   }
+  },
+  "umbra-warm-one-sync": {
+   "runs": 3,
+   "stages": {
+    "send / other": {
+     "medianMs": 75,
+     "minMs": 12,
+     "maxMs": 150
+    },
+    "send / sign-in": {
+     "medianMs": 372,
+     "minMs": 319,
+     "maxMs": 682
+    },
+    "deposit / other": {
+     "medianMs": 1859,
+     "minMs": 1705,
+     "maxMs": 1867
+    },
+    "deposit / note scan": {
+     "medianMs": 1075,
+     "minMs": 1072,
+     "maxMs": 2231
+    },
+    "deposit / proof": {
+     "medianMs": 13305,
+     "minMs": 12165,
+     "maxMs": 13433
+    },
+    "deposit / wallet approval": {
+     "medianMs": 383,
+     "minMs": 254,
+     "maxMs": 807
+    },
+    "deposit / relay request": {
+     "medianMs": 1483,
+     "minMs": 1470,
+     "maxMs": 1646
+    },
+    "deposit / settlement wait": {
+     "medianMs": 7973,
+     "minMs": 2808,
+     "maxMs": 13004
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 3874,
+     "minMs": 2353,
+     "maxMs": 64184
+    },
+    "withdrawal / proof": {
+     "medianMs": 9667,
+     "minMs": 9385,
+     "maxMs": 10819
+    },
+    "withdrawal / relay request": {
+     "medianMs": 955,
+     "minMs": 926,
+     "maxMs": 1152
+    },
+    "total": {
+     "medianMs": 47526,
+     "minMs": 38456,
+     "maxMs": 97483
+    },
+    "click to signed deposit": {
+     "medianMs": 17543,
+     "minMs": 16044,
+     "maxMs": 18754
+    }
+   }
+  },
+  "umbra-warm-two-syncs": {
+   "runs": 2,
+   "stages": {
+    "send / other": {
+     "medianMs": 254,
+     "minMs": 10,
+     "maxMs": 499
+    },
+    "send / sign-in": {
+     "medianMs": 490,
+     "minMs": 320,
+     "maxMs": 661
+    },
+    "deposit / other": {
+     "medianMs": 1840,
+     "minMs": 1764,
+     "maxMs": 1915
+    },
+    "deposit / note scan": {
+     "medianMs": 3532,
+     "minMs": 3026,
+     "maxMs": 4039
+    },
+    "deposit / proof": {
+     "medianMs": 12463,
+     "minMs": 12344,
+     "maxMs": 12582
+    },
+    "deposit / wallet approval": {
+     "medianMs": 217,
+     "minMs": 207,
+     "maxMs": 227
+    },
+    "deposit / relay request": {
+     "medianMs": 1462,
+     "minMs": 1449,
+     "maxMs": 1475
+    },
+    "deposit / settlement wait": {
+     "medianMs": 9784,
+     "minMs": 7962,
+     "maxMs": 11606
+    },
+    "withdrawal / settlement wait": {
+     "medianMs": 4473,
+     "minMs": 4451,
+     "maxMs": 4495
+    },
+    "withdrawal / note scan": {
+     "medianMs": 1311,
+     "minMs": 1028,
+     "maxMs": 1594
+    },
+    "withdrawal / proof": {
+     "medianMs": 9105,
+     "minMs": 8803,
+     "maxMs": 9407
+    },
+    "withdrawal / relay request": {
+     "medianMs": 1752,
+     "minMs": 871,
+     "maxMs": 2632
+    },
+    "total": {
+     "medianMs": 46684,
+     "minMs": 42622,
+     "maxMs": 50746
+    },
+    "click to signed deposit": {
+     "medianMs": 19016,
+     "minMs": 18235,
+     "maxMs": 19796
+    }
+   }
+  }
+ },
+ "solflare": {
+  "what": "one 0.003 SOL Umbra v2 send with the real Solflare 2.42 extension, final build",
+  "totalMs": 110248,
+  "catchUpSyncMs": 59570,
+  "walletApprovalMs": 6605,
+  "depositProofMs": 16944,
+  "payoutProofMs": 9963,
+  "guardInstructionAdded": true,
+  "landed": true
+ }
+}

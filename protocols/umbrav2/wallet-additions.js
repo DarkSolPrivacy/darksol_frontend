@@ -1,6 +1,6 @@
 // Which changes a wallet may make to a transaction Umbra v2's SDK asks it to sign.
 //
-// The SDK (@umbra-privacy/nimbus-solana 0.1.1, flows/transaction.js) refuses any
+// The SDK (@umbra-privacy/nimbus-solana 0.4.0, flows/transaction.js) refuses any
 // signed message that differs from the one it built: "the wallet changed the
 // transaction's message … nothing was sent". Solflare always changes it. Its
 // backend simulation returns the transaction with Lighthouse guard instructions

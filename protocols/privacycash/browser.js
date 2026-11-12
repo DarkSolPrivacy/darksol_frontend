@@ -1,6 +1,9 @@
 import { Connection, PublicKey } from '@solana/web3.js'
 import { ENDPOINTS, MINTS as REGISTRY_MINTS } from '../addresses.js'
 import { isNoAnswer } from '../shared/network.js'
+import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
+import { createCircuitFiles } from './circuit-files.js'
+import { coversRecentOnly, scanKeys, scanOlderNotes, scanRecentFirst, treeSize } from './recent-scan.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
 // Re-exported so bridge.js and the older call sites keep one source.
@@ -24,10 +27,20 @@ export function relayerFailure(url, method = 'GET') {
 // The SDK calls the relayer with bare fetches, so a dropped connection reaches
 // the page as the browser's "Failed to fetch". Installed once when this adapter
 // loads, under captureWithdrawal's own swap of fetch, which restores it.
+//
+// The same wrapper answers the proving files from memory (circuit-files.js):
+// snarkjs fetches both by URL inside every proof, and they are downloaded and
+// checked once per page instead, ahead of the click when preload() ran. A file
+// that cannot be loaded and checked is fetched from the network as before.
+// Returns the files' holder, for preload().
 export function labelRelayerFailures(target = globalThis) {
   const fetch = target.fetch
-  if (typeof fetch !== 'function' || fetch.labelsRelayer) return
+  if (typeof fetch !== 'function') return null
+  if (fetch.labelsRelayer) return fetch.circuitFiles ?? null
+  const circuitFiles = createCircuitFiles({ fetch: (input, init) => fetch(input, init), base: target.location?.href, subtle: target.crypto?.subtle })
   const labelled = async (input, init) => {
+    const held = await circuitFiles.respond(input, init)
+    if (held) return held
     try { return await fetch(input, init) } catch (error) {
       if (!isNoAnswer(error)) throw error
       let url
@@ -37,9 +50,11 @@ export function labelRelayerFailures(target = globalThis) {
     }
   }
   labelled.labelsRelayer = true
+  labelled.circuitFiles = circuitFiles
   target.fetch = labelled
+  return circuitFiles
 }
-labelRelayerFailures()
+const circuitFiles = labelRelayerFailures()
 
 function signatureBytes(value) {
   const signature = value?.signature ?? value
@@ -117,11 +132,21 @@ async function assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   if (await connection.getBalance(publicKey, 'confirmed') === 0) throw new Error('A small SOL balance is required for network fees')
 }
 
+// The SDK's log lines that start a stage of a deposit or a withdrawal
+// (deposit.ts, withdraw.ts and their SPL twins in privacycash 1.2.2). The scan
+// before them has no line of its own: the adapter enters it before the call.
+const LOG_STAGES = [[/^generating ZK proof/i, 'proof'], [/^submitting transaction to relayer/i, 'relay request'], [/^waiting for transaction confirmation/i, 'settlement wait']]
+// The proving files snarkjs fetches inside the proof (stage-timings.js takes them out of it).
+const circuitDownload = (url) => (url.includes(`${CIRCUIT_BASE_PATH}.`) ? 'circuit download' : null)
+
 // The SDK exposes no progress callback, but it logs every UTXO page it scans and
-// every proof/relayer stage, so its logger is the only live progress there is.
-export function reportProgress(privacyCash, onStatus) {
+// every proof/relayer stage, so its logger is the only live progress there is,
+// and the only sign of where a stage starts.
+export function reportProgress(privacyCash, onStatus, timings = NO_TIMINGS) {
   privacyCash.setLogger?.((level, message) => {
     if (level === 'warn' || level === 'error') console.log(`[${level}]`, message)
+    const stage = level === 'info' && LOG_STAGES.find(([line]) => line.test(message))?.[1]
+    if (stage) timings.enter(stage)
     const page = /####fetch_utxo_offset\s+(\d+)/.exec(message)
     if (page) return onStatus(`Scanning notes ${page[1]}…`)
     const found = /Found (\d+) total UTXOs/.exec(message)
@@ -130,10 +155,28 @@ export function reportProgress(privacyCash, onStatus) {
   })
 }
 
+// The SDK's scan for the wallet's notes of one asset: `extra` adds its `offset` or swaps its storage.
+const scanNotes = (privacyCash, common, asset, extra) => (asset === 'SOL'
+  ? privacyCash.getUtxos({ ...common, ...extra })
+  : privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset], ...extra }))
+
+// Before anything scans a wallet's notes of `asset` for the first time in this
+// browser, reads the tree's recent notes only (recent-scan.js), so the SDK's
+// own scans in deposit, withdraw and getUtxos start from there. Does nothing
+// once the browser holds a position. Inside the queue, like every scan.
+export function recentFirst(privacyCash, common, asset) {
+  return scanRecentFirst({
+    keys: scanKeys(privacyCash.localstorageKey, common.publicKey, asset),
+    storage: common.storage,
+    size: () => treeSize(asset),
+    scan: (offset) => scanNotes(privacyCash, common, asset, { offset }),
+  })
+}
+
 // Wallet check, circuit/WASM load and encryption-key derivation are identical for a
 // private transfer and a private bridge, so both entry points share this setup.
 // `fund: false` skips the wallet balance check, for a session that only withdraws.
-export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, fund = true, onStatus = () => {} }) {
+export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, fund = true, onStatus = () => {}, timings = NO_TIMINGS }) {
   if (!provider?.publicKey || typeof provider.signTransaction !== 'function') throw new Error('Connect a compatible Solana wallet')
   const publicKey = new PublicKey(String(provider.publicKey))
   const connection = rpcConnection()
@@ -142,21 +185,28 @@ export async function openPrivacyCashSession({ provider, asset, totalBaseUnits, 
     await assertWalletCanFund(connection, publicKey, asset, totalBaseUnits)
   }
   onStatus('Preparing privacy tools…')
+  timings.enter('sdk load')
   const [{ WasmFactory }, privacyCash] = await Promise.all([
     import('@lightprotocol/hasher.rs'),
     import('privacycash/utils'),
   ])
-  reportProgress(privacyCash, onStatus)
+  reportProgress(privacyCash, onStatus, timings)
   const lightWasm = await WasmFactory.getInstance()
+  timings.enter('sign-in')
   const { encryptionService, signature } = await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)
   const common = { lightWasm, storage: localStorage, keyBasePath: CIRCUIT_BASE_PATH, publicKey, connection, encryptionService, referrer: '' }
+  // The SDK's deposit and withdrawal scan from the saved position; a browser
+  // without one gets it here, at the recent notes, instead of note 0.
+  timings.enter('note scan')
+  await recentFirst(privacyCash, common, asset)
+  timings.enter('other')
   return {
     privacyCash,
     common,
     publicKey,
     connection,
     signature,
-    transactionSigner: (transaction) => provider.signTransaction(transaction),
+    transactionSigner: (transaction) => timings.during('wallet approval', () => provider.signTransaction(transaction)),
   }
 }
 
@@ -195,7 +245,7 @@ export async function captureWithdrawal(run) {
 
 // The wallet's unspent notes of one asset, largest first, in base units.
 export async function noteAmounts(privacyCash, common, asset) {
-  const utxos = asset === 'SOL' ? await privacyCash.getUtxos(common) : await privacyCash.getUtxosSPL({ ...common, mintAddress: MINTS[asset] })
+  const utxos = await scanNotes(privacyCash, common, asset)
   return utxos.map((utxo) => BigInt(utxo.amount.toString())).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
 }
 
@@ -300,9 +350,10 @@ export async function awaitCapacity(privacyCash, common, asset, units, onStatus)
 // same address (see planWithdrawals). The relayer submits each and pays its
 // network fee, so the wallet signs nothing beyond its sign-in message, but the
 // pool's fee applies to every withdrawal.
-async function sendFromShielded({ provider, asset, recipients, onStatus }) {
-  const { privacyCash, common } = await openPrivacyCashSession({ provider, asset, totalBaseUnits: 0n, fund: false, onStatus })
+async function sendFromShielded({ provider, asset, recipients, onStatus, timings = NO_TIMINGS }) {
+  const { privacyCash, common } = await openPrivacyCashSession({ provider, asset, totalBaseUnits: 0n, fund: false, onStatus, timings })
   onStatus('Reading your shielded balance…')
+  timings.leg('withdrawal'); timings.enter('note scan')
   const notes = await noteAmounts(privacyCash, common, asset)
   const terms = await withdrawalTerms(privacyCash, asset)
   const plan = planWithdrawals(notes, recipients.map((recipient) => BigInt(recipient.baseUnits)), terms.minimum)
@@ -321,6 +372,7 @@ async function sendFromShielded({ provider, asset, recipients, onStatus }) {
       onStatus(total > 1 ? `Sending withdrawal ${receipt.withdrawals.length + 1} of ${total}…` : 'Sending from your shielded balance…')
       let result
       try {
+        timings.leg(total > 1 ? `withdrawal ${receipt.withdrawals.length + 1}` : 'withdrawal'); timings.enter('note scan')
         await awaitCapacity(privacyCash, common, asset, units, onStatus)
         result = await withdrawTo(privacyCash, common, asset, { publicKey: recipient.publicKey, baseUnits: units })
       } catch (error) { throw fail(error instanceof Error ? error.message : String(error)) }
@@ -335,16 +387,18 @@ async function sendFromShielded({ provider, asset, recipients, onStatus }) {
 // Deposits `totalBaseUnits` and pays the recipients from it. Whatever the
 // recipients do not take stays in the wallet's shielded balance as change.
 // `source: 'shielded'` pays from that balance instead, with no deposit.
-export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, source = 'wallet', onStatus = () => {} }) {
+export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, source = 'wallet', onStatus = () => {}, timings = NO_TIMINGS }) {
   if (delayMinutes && recipients.length !== 1) throw new Error('A delivery deadline supports one recipient')
   if (source === 'shielded') {
     if (delayMinutes) throw new Error('A delivery deadline needs a fresh deposit')
-    return sendFromShielded({ provider, asset, recipients, onStatus })
+    return sendFromShielded({ provider, asset, recipients, onStatus, timings })
   }
   if (recipients.reduce((sum, recipient) => sum + BigInt(recipient.baseUnits), 0n) > BigInt(totalBaseUnits)) throw new Error('Recipients add up to more than the deposit')
-  const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus })
+  const { privacyCash, common, transactionSigner } = await openPrivacyCashSession({ provider, asset, totalBaseUnits, onStatus, timings })
 
   onStatus('Approve deposit in your wallet…')
+  // The SDK's deposit scans for the wallet's notes first, then proves.
+  timings.leg('deposit'); timings.enter('note scan')
   const deposit = await depositTo(privacyCash, common, asset, totalBaseUnits, transactionSigner)
 
   const receipt = { provider: 'privacycash', asset, depositSignature: deposit.tx, withdrawals: [] }
@@ -357,6 +411,7 @@ export async function executePrivacyCashTransfer({ provider, asset, totalBaseUni
   try {
     for (let index = 0; index < recipients.length; index += 1) {
       onStatus(`Sending ${index + 1} of ${recipients.length}…`)
+      timings.leg(recipients.length > 1 ? `withdrawal ${index + 1}` : 'withdrawal'); timings.enter('note scan')
       receipt.withdrawals.push(await withdrawTo(privacyCash, common, asset, recipients[index]))
     }
   } catch (error) {
@@ -390,7 +445,9 @@ async function deliverScheduled({ provider, job, onStatus = () => {} }) {
 // `notes` with `terms` feed planShieldedSend.
 // Payment-link notes are sealed under keys of their own, so they are not among
 // them. The SDK caches its scan position in localStorage: the first scan reads
-// the whole pool, later ones only what is new. With `prompt: false` nothing asks
+// the pool's recent notes (recent-scan.js), later ones only what is new, and
+// `recent` lists the assets whose balance therefore leaves out older notes
+// until rescanShielded has read them. With `prompt: false` nothing asks
 // the wallet to sign, and a browser that holds no signature yet gets null.
 export async function shieldedBalances({ provider, prompt = true, signal, onStatus = () => {} }) {
   const publicKey = new PublicKey(String(provider.publicKey))
@@ -403,10 +460,12 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
   reportProgress(privacyCash, onStatus)
   const common = { publicKey, connection: rpcConnection(), storage: localStorage, abortSignal: signal,
     encryptionService: (await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)).encryptionService }
-  const result = { balances: {}, spendable: {}, notes: {}, terms: {} }
+  const result = { balances: {}, spendable: {}, notes: {}, terms: {}, recent: [] }
   // One tree at a time: the SDK keeps its scan progress in module state.
   for (const asset of ['SOL', ...Object.keys(MINTS)]) {
+    await recentFirst(privacyCash, common, asset)
     const notes = await noteAmounts(privacyCash, common, asset)
+    if (coversRecentOnly(scanKeys(privacyCash.localstorageKey, publicKey, asset), localStorage)) result.recent.push(asset)
     const terms = await withdrawalTerms(privacyCash, asset)
     result.notes[asset] = notes
     result.terms[asset] = terms
@@ -416,18 +475,69 @@ async function readShielded({ provider, publicKey, signal, onStatus }) {
   return result
 }
 
+// The full rescan: reads every tree whose balance covers recent notes only from
+// note 0, minutes for the SOL tree, and adds what it finds to the balance. It
+// runs in the queue like any scan and gives way to a payment: execute() stops
+// it, and it starts over when asked again. Resolves to whether it found notes.
+let rescan = null
+export function rescanShielded({ provider, onStatus = () => {} }) {
+  rescan?.abort()
+  const controller = new AbortController()
+  rescan = controller
+  return exclusive(async () => {
+    controller.signal.throwIfAborted()
+    const publicKey = new PublicKey(String(provider.publicKey))
+    const privacyCash = await import('privacycash/utils')
+    reportProgress(privacyCash, onStatus)
+    const common = { publicKey, connection: rpcConnection(), abortSignal: controller.signal,
+      encryptionService: (await encryptionForWallet(provider, publicKey, privacyCash.EncryptionService)).encryptionService }
+    let found = false
+    for (const asset of ['SOL', ...Object.keys(MINTS)]) {
+      const keys = scanKeys(privacyCash.localstorageKey, publicKey, asset)
+      if (await scanOlderNotes({ keys, storage: localStorage, scan: (storage) => scanNotes(privacyCash, { ...common, storage }, asset) })) found = true
+    }
+    return found
+  }).finally(() => { if (rescan === controller) rescan = null })
+}
+
+// Loads what a payment would otherwise load after the click: the SDK, the
+// hasher's WebAssembly and the two proving files (19.7 MB, checked against
+// their digests, then held in memory for every proof on this page). It asks the
+// wallet for nothing and proves nothing. Not started while a payment runs or
+// waits; a preload still downloading when one starts is shared with it, not
+// repeated. Resolves to whether everything loaded, never rejects.
+let payments = 0
+let preloading = null
+export function preload() {
+  if (payments || !circuitFiles) return Promise.resolve(false)
+  preloading ??= Promise.all([
+    import('@lightprotocol/hasher.rs').then(({ WasmFactory }) => WasmFactory.getInstance()),
+    import('privacycash/utils'),
+    ...circuitFiles.paths.map((path) => circuitFiles.load(path)),
+  ]).then(() => true, () => { preloading = null; return false })
+  return preloading
+}
+
 // The one entry point the UI calls. Bridging and swapping live in bridge.js and
 // swap.js and are loaded only when asked for, so their relayer code stays out of
 // the transfer path.
 export async function execute({ kind, ...options }) {
-  if (kind === 'send') return exclusive(() => executePrivacyCashTransfer(options))
-  if (kind === 'bridge') {
-    const { executePrivacyCashBridge } = await import('./bridge.js')
-    return exclusive(() => executePrivacyCashBridge(options))
-  }
-  if (kind === 'swap') {
-    const { executePrivacyCashSwap } = await import('./swap.js')
-    return exclusive(() => executePrivacyCashSwap(options))
-  }
-  throw new Error(`PrivacyCash has no browser ${kind} flow`)
+  // A payment never waits behind a full rescan.
+  rescan?.abort()
+  payments += 1
+  try {
+    // Timed from the click: a send behind a balance read shows the wait as queued.
+    if (kind === 'send') {
+      return await withTimings('privacycash', { downloads: circuitDownload }, (timings) => exclusive(() => { timings.enter('other'); return executePrivacyCashTransfer({ ...options, timings }) }))
+    }
+    if (kind === 'bridge') {
+      const { executePrivacyCashBridge } = await import('./bridge.js')
+      return await exclusive(() => executePrivacyCashBridge(options))
+    }
+    if (kind === 'swap') {
+      const { executePrivacyCashSwap } = await import('./swap.js')
+      return await exclusive(() => executePrivacyCashSwap(options))
+    }
+    throw new Error(`PrivacyCash has no browser ${kind} flow`)
+  } finally { payments -= 1 }
 }

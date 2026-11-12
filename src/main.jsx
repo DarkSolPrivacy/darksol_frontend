@@ -26,6 +26,7 @@ import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from '
 import { bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
+import { preloadRoute } from './preload.js'
 import { MeasuredSummary, PendingPayments, PrivateHint, PrivateOptions, SendSettings, ShieldMore, tokenText } from './private-options.jsx'
 
 // The pool selector used to hardcode which ids sit under which heading, and the
@@ -107,7 +108,29 @@ function useShieldedPools(wallet, active = true) {
       if (!signal.aborted) read(id, false, signal)
     }
   }
-  return { pools, status, reveal, refresh: () => setRound((value) => value + 1) }
+  // Reads the notes a pool's first scan skipped (Privacy Cash reads recent notes
+  // first), then the balance again. A payment started meanwhile stops it.
+  const rescan = async (id) => {
+    const adapter = await loadBrowserAdapter(id).catch(() => null)
+    if (!adapter?.rescanShielded) return
+    const { signal } = scan.current
+    setStatus(`${sourceName(id)} · Reading all notes…`)
+    await adapter.rescanShielded({ provider: wallet.provider, onStatus: (message) => { if (!signal.aborted) setStatus(`${sourceName(id)} · ${message}`) } }).catch(() => {})
+    if (signal.aborted) return
+    setStatus('')
+    shieldedCache.delete(address)
+    setRound((value) => value + 1)
+  }
+  return { pools, status, reveal, rescan, refresh: () => setRound((value) => value + 1) }
+}
+
+// A pool whose first read of a tree covers its recent notes only says so, and
+// offers the full read (protocols/privacycash/recent-scan.js).
+function RecentNotesHint({ entry, assets, onRescan, busy, className }) {
+  const recent = (entry?.state === 'ready' && entry.recent) || []
+  if (!recent.some((asset) => assets.includes(asset))) return null
+  return <p className={className}>Privacy Cash balance read from the pool’s last 100,000 notes. An older deposit is not counted yet.
+    <button type="button" onClick={onRescan} disabled={busy}>Scan all notes</button></p>
 }
 
 // A route runs in the browser only if the protocol ships the module for it and
@@ -1179,6 +1202,17 @@ function PrivacyHome({ walletSession, settings }) {
   const submitted = Boolean(receipt?.depositSignature || receipt?.withdrawals?.length)
   // A shielded payment larger than two notes goes out as several withdrawals, each with the pool's fixed fee.
   const payingPool = chosenOption?.protocol ?? recommended?.protocol
+  // The selected route's SDK and proving files load while the form is being
+  // finished (src/preload.js): for that pool only, once a wallet is connected
+  // and the form is valid, and never while a payment runs. The selection can
+  // change as the quote and the simulation arrive, so it has to hold for a
+  // moment first: a pool picked in passing downloads nothing.
+  const preloadPool = wallet && formValid && !sending && !loading ? payingPool ?? null : null
+  useEffect(() => {
+    if (!preloadPool) return undefined
+    const timer = setTimeout(() => { preloadRoute(preloadPool, { load: loadBrowserAdapter, provider: wallet.provider }) }, 1500)
+    return () => clearTimeout(timer)
+  }, [preloadPool])
   const shieldedSplit = payingShielded && payingPool && receiversValid ? shielded.pools[payingPool]?.plan?.(asset, receiverRaws) : null
   // What the recipient should get after every fee on the recommended route.
   const swapOutput = isSwap ? recommended?.settlement?.output : null
@@ -1293,6 +1327,8 @@ function PrivacyHome({ walletSession, settings }) {
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
       {!chosenOption && !measured && optionResult?.balanceHint && <PrivateHint result={optionResult} prefix="" canReveal={Boolean(wallet) && ['locked', 'error'].includes(shielded.pools[hintPool]?.state)} onReveal={shielded.reveal} />}
+      {(payingShielded || chosenOption?.kind === 'balance') && payingPool === 'privacycash'
+        && <RecentNotesHint className="privHint" entry={shielded.pools.privacycash} assets={[asset]} onRescan={() => shielded.rescan('privacycash')} busy={sending || Boolean(shielded.status)} />}
       {keepsLocally && <p className="privHint">Cloak saves what stays shielded in this browser only. Pay from it here before clearing this site’s data.</p>}
       <div className="sendAction">
         <div className="actionArea">{chosenOption
@@ -1849,7 +1885,7 @@ function WalletPanel({ wallet, onClose, onDisconnect, onPaymentLinks }) {
   // A missing asset is still loading; null means its balance could not be read.
   const [balances, setBalances] = useState({})
   const [copied, setCopied] = useState(false)
-  const { pools, status: scanStatus, reveal } = useShieldedPools(wallet)
+  const { pools, status: scanStatus, reveal, rescan } = useShieldedPools(wallet)
   // Paid payment links not collected yet; locked without a saved merchant credential.
   const [links, setLinks] = useState({ state: 'loading' })
 
@@ -1932,6 +1968,7 @@ function WalletPanel({ wallet, onClose, onDisconnect, onPaymentLinks }) {
         <span>{row.asset}<small>{compact(row.amount, 6)} · {row.sources.map(sourceName).join(', ')}</small></span>
         <b>{usdOf(row.asset, row.amount) === null ? '—' : money(usdOf(row.asset, row.amount))}</b></li>)}</ul>}
       {scanStatus && <p className="walletStatus">{scanStatus}</p>}
+      <RecentNotesHint className="walletEmpty walletRecent" entry={pools.privacycash} assets={ASSETS} onRescan={() => rescan('privacycash')} busy={scanning || Boolean(scanStatus)} />
       {!scanning && locked.length > 0 && <p className="walletEmpty">Reveal signs a message to read your {locked.map(sourceName).join(' and ')} balance. Nothing is sent on-chain.</p>}
       {!scanning && failed.length > 0 && <p className="walletEmpty">Could not read your {failed.map(sourceName).join(' and ')} balance.</p>}
       {!scanning && !shieldedRows.length && !retryable.length && <p className="walletEmpty">No shielded funds.</p>}
