@@ -204,10 +204,14 @@ test('with no common amount to copy, the waits still show, measured as an exact 
   // Nothing reaches 4 of 5, so the page says what a shielded balance would score.
   assert.equal(result.fastest, null)
   assert.deepEqual(result.balanceHint, { protocol: 'privacycash', score: 100, sends: 30, level: 5, known: false })
+  // Every option is 1 of 5, so the page suggests paying from a shielded balance instead.
+  assert.equal(result.weak, true)
+  assert.equal(timedOptions(19.28).weak, false)
   // A balance that covers it is the fastest private one, and the hint goes.
   const funded = timedOptions(4, { shielded: { privacycash: USDC(10) } })
   assert.equal(funded.fastest.id, 'privacycash:balance:now')
   assert.equal(funded.balanceHint, null)
+  assert.equal(funded.weak, false)
 })
 
 test('a 12 h wait shows once the quote measures it', () => {

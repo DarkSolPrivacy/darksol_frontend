@@ -701,7 +701,13 @@ label.privRow { cursor: pointer; }
 .privSwitch:checked::after { background: var(--bg-surface); transform: translateX(18px); }
 .privSwitch:disabled { opacity: .45; cursor: default; }
 .privHint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; padding: 0 4px; color: var(--text-secondary); font-size: 12px; }
-.privHint button { height: 30px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
+/* Every option likely traced: the other way to pay, framed above the list. */
+.privWeak { align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); }
+.privWeak .privMeter { margin-top: 2px; }
+.privWeak > div { min-width: 0; }
+.privWeak span { line-height: 1.45; }
+.privWeakActions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+.privWeakActions button, .privHint button { height: 30px; padding: 0 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); font-size: 12px; }
 /* Payments waiting to go out: small cards, beside the send card on wide screens (below). */
 .privPending { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .privPendingItem { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }

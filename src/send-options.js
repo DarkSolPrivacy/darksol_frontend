@@ -28,6 +28,8 @@ export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h':
 const LATER_WAITS = ['6h', '12h', '24h']
 // "Really private": the step a send must reach to be offered as the fastest private one.
 export const PRIVATE_LEVEL = 4
+// Below this step on every option the page suggests another way to pay.
+export const WEAK_LEVEL = 2
 // k per priority. Fees ranks on the fee alone, privacy breaking ties.
 const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
@@ -258,7 +260,9 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const reason = !suggested ? null : chosen.priority === 'fees' ? 'fees'
     : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
       : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
-  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
+  // Every option the user can pick is likely traced.
+  const weak = levels.length > 0 && top < WEAK_LEVEL
+  return { bucket, usd, suggested, reason, asTyped, fastest, weak, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
 }
 
 /** An optional privacy improvement, even when the fee/time priority leads elsewhere. */

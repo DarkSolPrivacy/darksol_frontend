@@ -51,7 +51,8 @@ function BestBadge({ reason }) {
 // unread (Show reads it). A pool missing from it shows no balance. `reading`:
 // a read is already running, which Show cannot speed up; `status` says how far it got.
 // `more`: the shield-more offer ({ option, base, on, onToggle }), shown beside the meter.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal, more }) {
+// `onShield`: switch to Shield only, offered when every option is likely traced.
+export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal, more, onShield }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -91,8 +92,12 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
     </div>
   }
 
+  const canReveal = !reading && result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined
+  // A shield-more offer always scores higher, so it is the suggestion when there is one.
+  const weak = result.weak && !result.balanceOnly && !more
   return <section className="privOptions" aria-label="How to send">
     {more && <ShieldMore {...more} base={more.on ? more.base : chosen} asset={asset} />}
+    {weak && <WeakSuggestion result={result} canReveal={canReveal} onReveal={onReveal} onShield={onShield} />}
     <div className="privList" role="radiogroup" aria-label="How to send">
       {groups.map(group)}
       {SOON_POOLS.map((id) => <div className="privGroup soon" key={id} aria-disabled="true" title="Not offered yet: it hides a payment from the public, not from the service that runs it">
@@ -102,7 +107,7 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
         </div>
       </div>)}
     </div>
-    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={!reading && result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
+    {!result.fastest && !weak && <PrivateHint result={result} prefix="None of these hides you well." canReveal={canReveal} onReveal={onReveal} />}
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>
@@ -136,6 +141,28 @@ export function ShieldMore({ option, base, asset, on, onToggle }) {
     <span>Keep {tokenText(option.kept, asset)} {asset} shielded for {option.level >= 4 ? 'high' : 'better'} privacy · deposit {tokenText(option.deposit, asset)} {asset}</span>
     <input type="checkbox" role="switch" className="privSwitch" aria-label={`More private shielding ${tokenText(option.kept, asset)} ${asset}. ${detail}`} checked={on} onChange={(event) => onToggle(event.target.checked)} />
   </label>
+}
+
+/**
+ * When every option is below 2 of 5: pay from a shielded balance instead. Its
+ * score assumes a balance older and larger than the payment (darksol-backend
+ * docs/PRIVACY_SIM.md), so shielding just this amount and sending it later
+ * would not earn it; the text says so.
+ */
+export function WeakSuggestion({ result, canReveal, onReveal, onShield }) {
+  const hint = result.balanceHint
+  return <div className="privHero privWeak" role="note">
+    {hint && <Meter option={hint} large />}
+    <div>
+      <b>{hint ? 'Shield first, pay later' : 'Every way to send this is likely traced'}</b>
+      <span>{hint ? `Sending this now is likely traced. Paying from a shielded balance that is older and larger than the payment scores ${hint.level} of 5.`
+        : 'Try a longer wait or another pool in settings.'}</span>
+      {hint && (canReveal || onShield) && <p className="privWeakActions">
+        {canReveal && <button type="button" onClick={onReveal}>Show balance</button>}
+        {onShield && <button type="button" onClick={onShield}>Shield instead</button>}
+      </p>}
+    </div>
+  </div>
 }
 
 /** When nothing reaches 4 of 5: what paying from a shielded balance would score, and a way to read it. */
