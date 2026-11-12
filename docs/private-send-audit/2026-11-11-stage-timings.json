@@ -1,0 +1,513 @@
+{
+ "date": "2026-11-11",
+ "machine": "VPS, 6 logical cores, headless Chromium 141 (Playwright 1.56 image), datacenter link",
+ "method": "scripts/private-send-bench.mjs: a throwaway wallet whose SOL balance is faked in RPC answers; every submission aborted; a new browser context per run; ms from the send's own stage table",
+ "note": "Reaches the signed deposit only (Umbra v2: the registration). Nothing was broadcast. Request interception disables the HTTP cache.",
+ "sets": {
+  "privacycash-baseline": {
+   "what": "Privacy Cash, wallet new to the browser, before any change (stage timings only)",
+   "runs": 3,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 743,
+     "minMs": 725,
+     "maxMs": 781
+    },
+    "deposit / note scan": {
+     "medianMs": 181785,
+     "minMs": 180526,
+     "maxMs": 181823
+    },
+    "deposit / proof": {
+     "medianMs": 7629,
+     "minMs": 7556,
+     "maxMs": 7676
+    },
+    "deposit / circuit download": {
+     "medianMs": 1333,
+     "minMs": 1249,
+     "maxMs": 1341
+    },
+    "total": {
+     "medianMs": 191539,
+     "minMs": 190252,
+     "maxMs": 191723
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 191678,
+    "minMs": 190433,
+    "maxMs": 191859
+   },
+   "megabytesAfterClick": {
+    "app code": 5.8,
+    "pc scan": 80.2,
+    "pc circuit": 19.7
+   }
+  },
+  "privacycash-recent-scan": {
+   "what": "Privacy Cash, after item 2 (first scan reads the last 100,000 notes)",
+   "runs": 3,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 802,
+     "minMs": 723,
+     "maxMs": 940
+    },
+    "send / note scan": {
+     "medianMs": 22136,
+     "minMs": 21861,
+     "maxMs": 22907
+    },
+    "deposit / note scan": {
+     "medianMs": 515,
+     "minMs": 511,
+     "maxMs": 724
+    },
+    "deposit / proof": {
+     "medianMs": 7511,
+     "minMs": 7415,
+     "maxMs": 9376
+    },
+    "deposit / circuit download": {
+     "medianMs": 1199,
+     "minMs": 1163,
+     "maxMs": 1220
+    },
+    "deposit / relay request": {
+     "medianMs": 19,
+     "minMs": 19,
+     "maxMs": 70
+    },
+    "total": {
+     "medianMs": 33076,
+     "minMs": 32415,
+     "maxMs": 33826
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 33223,
+    "minMs": 32571,
+    "maxMs": 33874
+   },
+   "megabytesAfterClick": {
+    "app code": 5.8,
+    "pc scan": 9.0,
+    "pc circuit": 19.7
+   }
+  },
+  "privacycash-recent-scan-20mbit": {
+   "what": "as privacycash-recent-scan, the build's own files on a simulated 20 Mbit/s link",
+   "runs": 3,
+   "linkMbit": 20,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 2531,
+     "minMs": 2529,
+     "maxMs": 2581
+    },
+    "send / note scan": {
+     "medianMs": 21664,
+     "minMs": 21365,
+     "maxMs": 22175
+    },
+    "deposit / note scan": {
+     "medianMs": 472,
+     "minMs": 454,
+     "maxMs": 542
+    },
+    "deposit / proof": {
+     "medianMs": 7496,
+     "minMs": 7161,
+     "maxMs": 9255
+    },
+    "deposit / circuit download": {
+     "medianMs": 9180,
+     "minMs": 9172,
+     "maxMs": 9217
+    },
+    "total": {
+     "medianMs": 41687,
+     "minMs": 41245,
+     "maxMs": 43141
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 41830,
+    "minMs": 41384,
+    "maxMs": 43323
+   },
+   "megabytesAfterClick": {
+    "app code": 5.8,
+    "pc scan": 9.0,
+    "pc circuit": 19.7
+   }
+  },
+  "privacycash-preload-20mbit": {
+   "what": "Privacy Cash, after item 3, preload finished before the click, simulated 20 Mbit/s link",
+   "runs": 3,
+   "linkMbit": 20,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "send / note scan": {
+     "medianMs": 21501,
+     "minMs": 21194,
+     "maxMs": 21540
+    },
+    "deposit / note scan": {
+     "medianMs": 484,
+     "minMs": 455,
+     "maxMs": 840
+    },
+    "deposit / proof": {
+     "medianMs": 7923,
+     "minMs": 7611,
+     "maxMs": 8023
+    },
+    "total": {
+     "medianMs": 30039,
+     "minMs": 29770,
+     "maxMs": 30062
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 30227,
+    "minMs": 30218,
+    "maxMs": 30257
+   },
+   "megabytesAfterClick": {
+    "pc scan": 9.0
+   }
+  },
+  "privacycash-preload-20mbit-click-at-once": {
+   "what": "Privacy Cash, after item 3, clicked before the preload starts, simulated 20 Mbit/s link",
+   "runs": 3,
+   "linkMbit": 20,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 2531,
+     "minMs": 2529,
+     "maxMs": 2531
+    },
+    "send / note scan": {
+     "medianMs": 21728,
+     "minMs": 21560,
+     "maxMs": 21766
+    },
+    "deposit / note scan": {
+     "medianMs": 456,
+     "minMs": 450,
+     "maxMs": 527
+    },
+    "deposit / proof": {
+     "medianMs": 7574,
+     "minMs": 7487,
+     "maxMs": 7883
+    },
+    "deposit / circuit download": {
+     "medianMs": 9134,
+     "minMs": 9069,
+     "maxMs": 9227
+    },
+    "total": {
+     "medianMs": 41503,
+     "minMs": 41164,
+     "maxMs": 42020
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 41657,
+    "minMs": 41269,
+    "maxMs": 42180
+   },
+   "megabytesAfterClick": {
+    "app code": 5.8,
+    "pc scan": 9.0,
+    "pc circuit": 19.7
+   }
+  },
+  "privacycash-final": {
+   "what": "Privacy Cash, final build, preload finished before the click",
+   "runs": 3,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "send / note scan": {
+     "medianMs": 21373,
+     "minMs": 20034,
+     "maxMs": 21655
+    },
+    "deposit / note scan": {
+     "medianMs": 487,
+     "minMs": 423,
+     "maxMs": 492
+    },
+    "deposit / proof": {
+     "medianMs": 8514,
+     "minMs": 7137,
+     "maxMs": 8656
+    },
+    "deposit / relay request": {
+     "medianMs": 23,
+     "minMs": 19,
+     "maxMs": 60
+    },
+    "total": {
+     "medianMs": 30686,
+     "minMs": 27705,
+     "maxMs": 30748
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 30769,
+    "minMs": 27964,
+    "maxMs": 30892
+   },
+   "megabytesAfterClick": {
+    "pc scan": 9.0
+   }
+  },
+  "cloak-baseline": {
+   "what": "Cloak, before item 3",
+   "runs": 8,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 585,
+     "minMs": 506,
+     "maxMs": 634
+    },
+    "deposit / other": {
+     "medianMs": 2218,
+     "minMs": 1922,
+     "maxMs": 2871
+    },
+    "deposit / note scan": {
+     "medianMs": 1558,
+     "minMs": 1324,
+     "maxMs": 1739
+    },
+    "deposit / proof": {
+     "medianMs": 8057,
+     "minMs": 7718,
+     "maxMs": 9252
+    },
+    "deposit / circuit download": {
+     "medianMs": 1749,
+     "minMs": 1524,
+     "maxMs": 11195
+    },
+    "total": {
+     "medianMs": 14292,
+     "minMs": 13511,
+     "maxMs": 24704
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 14440,
+    "minMs": 13658,
+    "maxMs": 24808
+   },
+   "megabytesAfterClick": {
+    "app code": 4.1,
+    "cloak circuit": 22.9
+   }
+  },
+  "cloak-preload": {
+   "what": "Cloak, after item 3, preload finished before the click",
+   "runs": 8,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "deposit / other": {
+     "medianMs": 2352,
+     "minMs": 1882,
+     "maxMs": 3608
+    },
+    "deposit / note scan": {
+     "medianMs": 1763,
+     "minMs": 1380,
+     "maxMs": 2015
+    },
+    "deposit / wallet approval": {
+     "medianMs": 50,
+     "minMs": 29,
+     "maxMs": 79
+    },
+    "deposit / proof": {
+     "medianMs": 8240,
+     "minMs": 7442,
+     "maxMs": 10831
+    },
+    "deposit / relay request": {
+     "medianMs": 23,
+     "minMs": 17,
+     "maxMs": 52
+    },
+    "total": {
+     "medianMs": 12394,
+     "minMs": 10885,
+     "maxMs": 15485
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 12655,
+    "minMs": 11268,
+    "maxMs": 16672
+   },
+   "megabytesAfterClick": {}
+  },
+  "cloak-final": {
+   "what": "Cloak, final build, preload finished before the click",
+   "runs": 3,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "deposit / other": {
+     "medianMs": 2297,
+     "minMs": 2190,
+     "maxMs": 2392
+    },
+    "deposit / note scan": {
+     "medianMs": 1483,
+     "minMs": 1439,
+     "maxMs": 1704
+    },
+    "deposit / proof": {
+     "medianMs": 8023,
+     "minMs": 7672,
+     "maxMs": 8184
+    },
+    "total": {
+     "medianMs": 11726,
+     "minMs": 11530,
+     "maxMs": 12385
+    }
+   },
+   "clickToSignedDeposit": {
+    "medianMs": 11906,
+    "minMs": 11845,
+    "maxMs": 12588
+   },
+   "megabytesAfterClick": {}
+  },
+  "umbrav2-sdk-0.1.1": {
+   "what": "Umbra v2 on SDK 0.1.1, to the registration's refusal (the throwaway wallet has no SOL)",
+   "runs": 3,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "send / other": {
+     "medianMs": 14,
+     "minMs": 9,
+     "maxMs": 245
+    },
+    "send / sdk load": {
+     "medianMs": 550,
+     "minMs": 497,
+     "maxMs": 570
+    },
+    "send / sign-in": {
+     "medianMs": 557,
+     "minMs": 519,
+     "maxMs": 735
+    },
+    "send / registration": {
+     "medianMs": 4175,
+     "minMs": 3552,
+     "maxMs": 7129
+    },
+    "send / circuit download": {
+     "medianMs": 382,
+     "minMs": 370,
+     "maxMs": 482
+    },
+    "total": {
+     "medianMs": 5798,
+     "minMs": 5465,
+     "maxMs": 8524
+    }
+   },
+   "megabytesAfterClick": {
+    "app code": 0.8,
+    "rpc": 0.5,
+    "umbra assets": 2.4,
+    "umbra keys": 12.9
+   }
+  },
+  "umbrav2-sdk-0.5.0": {
+   "what": "Umbra v2 on SDK 0.5.0, to the registration's refusal",
+   "runs": 3,
+   "waitBeforeClickMs": 15000,
+   "stages": {
+    "send / sdk load": {
+     "medianMs": 662,
+     "minMs": 564,
+     "maxMs": 740
+    },
+    "send / sign-in": {
+     "medianMs": 505,
+     "minMs": 490,
+     "maxMs": 559
+    },
+    "send / registration": {
+     "medianMs": 3840,
+     "minMs": 3784,
+     "maxMs": 19014
+    },
+    "send / circuit download": {
+     "medianMs": 432,
+     "minMs": 328,
+     "maxMs": 4031
+    },
+    "total": {
+     "medianMs": 5480,
+     "minMs": 5395,
+     "maxMs": 24110
+    }
+   },
+   "megabytesAfterClick": {
+    "app code": 0.8,
+    "rpc": 0.5,
+    "umbra assets": 2.4,
+    "umbra keys": 12.9
+   }
+  },
+  "umbrav2-preload": {
+   "what": "Umbra v2 on SDK 0.5.0 with the proving files preloaded, to the registration's refusal",
+   "runs": 3,
+   "waitBeforeClickMs": 45000,
+   "stages": {
+    "send / sign-in": {
+     "medianMs": 580,
+     "minMs": 539,
+     "maxMs": 583
+    },
+    "send / registration": {
+     "medianMs": 4092,
+     "minMs": 3534,
+     "maxMs": 38008
+    },
+    "total": {
+     "medianMs": 4687,
+     "minMs": 4141,
+     "maxMs": 38557
+    }
+   },
+   "megabytesAfterClick": {
+    "rpc": 0.5,
+    "umbra assets": 1.1
+   }
+  }
+ },
+ "returningBrowser": {
+  "what": "Privacy Cash, final build, four sends in one browser profile: the first is new to the browser, the rest find a saved scan position",
+  "clickToSignedDepositMs": [
+   28935,
+   14721,
+   8434,
+   7694
+  ],
+  "queuedMs": [
+   1,
+   2304,
+   1,
+   0
+  ]
+ }
+}
