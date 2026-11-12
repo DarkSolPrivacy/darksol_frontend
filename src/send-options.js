@@ -12,7 +12,7 @@
 // meter, and options on the same step of value are a tie: the cheaper one wins,
 // then the sooner one.
 import { PROTOCOLS } from '../protocols/registry.js'
-import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
+import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
 
 export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
@@ -189,33 +189,42 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     if (fee === null) continue
     // Privacy Cash charges its fixed part per recipient.
     if (recipients > 1 && manifest.fees.fixedBasis === 'recipient') fee += poolFee(protocol, asset, 0n, prices) * BigInt(recipients - 1)
-    const feeUsd = toNumber(fee, asset) * prices[asset]
     // A fresh deposit also pays its network fee and rent (per token where it differs, as for NEAR Confidential Intents).
     const depositUsd = (manifest.fees.depositCostSolByToken?.[asset] ?? manifest.fees.depositCostSol ?? 0) * (prices.SOL ?? 0)
     const runs = canRun(protocol) && (protocol !== 'cloakc' || raw >= PAYMENT_ASSETS[asset].cloakMin)
+    // A suggested top-up pays the recipient exactly what was typed: it withdraws
+    // that plus the pool's fee, and only the rest of the deposit stays shielded.
+    // The send recomputes the fee from the pool's live terms (`exact`).
+    const payout = withdrawalFor(raw, (units) => poolFee(protocol, asset, units, prices))
     const add = (kind, wait, deposit, extra) => {
       const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket, deposit)
       if (!privacy) return
-      const cost = feeUsd + (kind === 'balance' ? 0 : depositUsd)
+      const exact = fixed === null && kind !== 'balance' && deposit > raw && recipients === 1
+      const optionFee = exact ? payout - raw : fee
+      const cost = toNumber(optionFee, asset) * prices[asset] + (kind === 'balance' ? 0 : depositUsd)
       // A pool that paused deposits can still pay from its shielded balance.
       const paused = kind !== 'balance' && stopped[protocol] ? stopped[protocol] : null
       options.push({
         id: `${protocol}:${kind}:${wait}`, protocol, kind, wait, waitSeconds: WAITS[wait],
         score: privacy.score, sends: privacy.sends, simulated: privacy.simulated, level: overwhelmed(pool, amount, wait) ? 0 : meterLevel(privacy.score),
-        fee, feeUsd: cost, feePct: 100 * cost / usd, receives: raw > fee ? raw - fee : 0n,
-        deposit, kept: deposit - raw, executable: runs && !paused, paused, ...extra,
+        fee: optionFee, feeUsd: cost, feePct: 100 * cost / usd, receives: exact ? raw : raw > fee ? raw - fee : 0n,
+        deposit, kept: deposit - (exact ? payout : raw), exact, executable: runs && !paused, paused, ...extra,
       })
     }
     const depositFor = (wait) => {
       if (fixed !== null) return fixed
       if (!topUp || chosen.keepNothing || !send.keepShielded) return raw
-      if (pool.amountMode !== 'gross') return popularDeposit(pool.popular, raw) ?? raw
+      // A top-up must cover the payout and its fee, and leave something shielded.
+      if (pool.amountMode !== 'gross') {
+        const common = popularDeposit(pool.popular, raw)
+        return common !== null && common > payout ? common : raw
+      }
       // Each candidate was tested with this withdrawal and this deposit. Pick
       // separately for each permitted wait; a 24 h winner need not win at 6 h.
       if (recipients > 1) return raw
       const level = (cell) => meterLevel(Math.round(100 * (1 - cell.traced / cell.sends)))
       const candidates = pool.cells.filter((cell) => cell.bucket === bucket && cell.strategy === 'keep' && cell.wait === wait
-        && cell.sends >= MIN_SENDS && cell.deposit && BigInt(cell.deposit) > raw && BigInt(cell.deposit) <= raw * 3n / 2n)
+        && cell.sends >= MIN_SENDS && cell.deposit && BigInt(cell.deposit) > payout && BigInt(cell.deposit) <= raw * 3n / 2n)
         .sort((a, b) => level(b) - level(a) || Number(BigInt(a.deposit) - BigInt(b.deposit)))
       return candidates.length ? BigInt(candidates[0].deposit) : raw
     }

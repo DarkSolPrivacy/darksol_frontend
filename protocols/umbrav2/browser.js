@@ -20,7 +20,7 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { MINTS } from '../addresses.js'
-import { TOKEN_DECIMALS } from '../shared/units.js'
+import { TOKEN_DECIMALS, withdrawalFor } from '../shared/units.js'
 import { SWAP_MINIMUM, finishSwap, ultraSwap } from '../shared/swap-wallet.js'
 import { swapEligibility } from '../../src/swap-routes.js'
 import manifest from './manifest.js'
@@ -431,7 +431,12 @@ async function send({ provider, asset, totalBaseUnits, recipient, recipients, so
   if (!mint) throw new Error(`Umbra v2 does not support ${asset}`)
   if (recipients?.length > 1) throw new Error('Umbra v2 sends to one recipient')
   const amount = BigInt(totalBaseUnits)
-  const payout = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : amount
+  // A recipient marked `net` gets exactly its baseUnits: the withdrawal adds the
+  // protocol fee (each fee is the ceiling of its rate), which a suggested
+  // top-up pays from what stays shielded.
+  const rate = BigInt(Math.round(manifest.fees.variableRate * 1e6))
+  const fee = (units) => (units * rate + 999_999n) / 1_000_000n
+  const payout = recipients ? recipients.reduce((sum, item) => sum + (item.net ? withdrawalFor(BigInt(item.baseUnits), fee) : BigInt(item.baseUnits)), 0n) : amount
   if (source === 'shielded' ? !payout : payout > amount) throw new Error(source === 'shielded' ? 'Nothing to pay' : 'The recipient gets more than the deposit')
 
   // The bar's plan: guessed from what this browser remembers, then fixed once
