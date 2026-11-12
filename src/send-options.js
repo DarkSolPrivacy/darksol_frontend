@@ -10,7 +10,7 @@
 // Ranking. value = privacy − k × fee as a % of the payment, so a fee that is a
 // big share of a small payment counts for more. Privacy shows as a 5-step
 // meter, and options on the same step of value are a tie: the cheaper one wins,
-// then the sooner one. 4 and 5 of 5 rank as one step (rankLevel).
+// then the sooner one.
 import { PROTOCOLS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
@@ -28,12 +28,6 @@ export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h':
 const LATER_WAITS = ['6h', '12h', '24h']
 // "Really private": the step a send must reach to be offered as the fastest private one.
 export const PRIVATE_LEVEL = 4
-// Ranking counts 4 and 5 of 5 as one step, private enough: the cheaper, then the
-// sooner, option leads, so the largest pool does not win every time it scores a
-// step higher. The meter still shows the measured step.
-export const rankLevel = (level) => Math.min(level, PRIVATE_LEVEL)
-// Below this step on every option the page suggests another way to pay.
-export const WEAK_LEVEL = 2
 // k per priority. Fees ranks on the fee alone, privacy breaking ties.
 const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
@@ -183,9 +177,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const usd = amount * prices[asset]
   const bucket = bucketFor(usd, quote.buckets)
   const options = []
-  // The hint's pool: the best balance score, the cheaper pool on the same step, as the options rank.
   let balanceHint = null
-  let hintFee = Infinity
   for (const protocol of QUOTE_POOLS) {
     const pool = quote.pools[protocol]
     const manifest = PROTOCOLS[protocol]
@@ -239,11 +231,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       else {
         // Not read yet, or too small: say what paying from a balance would score.
         const privacy = privacyOf(pool, 'balance', 'now', bucket)
-        const level = privacy ? meterLevel(privacy.score) : 0
-        if (level >= PRIVATE_LEVEL && (!balanceHint || rankLevel(level) > rankLevel(balanceHint.level) || (rankLevel(level) === rankLevel(balanceHint.level) && feeUsd < hintFee))) {
-          balanceHint = { protocol, ...privacy, level, known: balance !== undefined }
-          hintFee = feeUsd
-        }
+        if (privacy && meterLevel(privacy.score) >= PRIVATE_LEVEL && !balanceHint) balanceHint = { protocol, ...privacy, level: meterLevel(privacy.score), known: balance !== undefined }
       }
     }
   }
@@ -254,7 +242,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   // is sooner: two 5 of 5 waits send in 6 h, not 24 h, even when the longer one
   // scored a few points more.
   const lead = sorted[0]
-  const suggested = (lead && sorted.filter((option) => rankLevel(option.level) >= rankLevel(lead.level) && option.feeUsd <= lead.feeUsd)
+  const suggested = (lead && sorted.filter((option) => option.level >= lead.level && option.feeUsd <= lead.feeUsd)
     .sort((a, b) => a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd)[0]) ?? null
   const ranked = suggested ? [suggested, ...sorted.filter((option) => option !== suggested)] : sorted
   const asTyped = options.filter((option) => option.kind === 'now' && option.executable).sort((a, b) => a.feeUsd - b.feeUsd)[0] ?? null
@@ -270,9 +258,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const reason = !suggested ? null : chosen.priority === 'fees' ? 'fees'
     : suggested.level < top ? (chosen.priority === 'time' ? 'time' : 'fees')
       : levels.some((level) => level < top) || allowed.length === 1 ? 'privacy' : 'fees'
-  // Every option the user can pick is likely traced.
-  const weak = levels.length > 0 && top < WEAK_LEVEL
-  return { bucket, usd, suggested, reason, asTyped, fastest, weak, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
+  return { bucket, usd, suggested, reason, asTyped, fastest, balanceHint: fastest?.kind === 'balance' ? null : balanceHint, balanceOnly, options: [...ranked, ...rest], settings: chosen }
 }
 
 /** An optional privacy improvement, even when the fee/time priority leads elsewhere. */
@@ -289,6 +275,6 @@ function compare(priority) {
   if (priority === 'fees') return (a, b) => a.feeUsd - b.feeUsd || b.score - a.score || a.waitSeconds - b.waitSeconds
   const k = WEIGHT[priority] ?? WEIGHT.auto
   // Not meterLevel: its floor of 1 would hide how far a fee drags a weak option down.
-  const step = (option) => Math.max(0, rankLevel(Math.round((option.score - k * option.feePct) / 20)))
+  const step = (option) => Math.max(0, Math.min(5, Math.round((option.score - k * option.feePct) / 20)))
   return (a, b) => step(b) - step(a) || a.feeUsd - b.feeUsd || a.waitSeconds - b.waitSeconds || b.score - a.score
 }

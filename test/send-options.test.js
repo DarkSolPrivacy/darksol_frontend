@@ -204,34 +204,10 @@ test('with no common amount to copy, the waits still show, measured as an exact 
   // Nothing reaches 4 of 5, so the page says what a shielded balance would score.
   assert.equal(result.fastest, null)
   assert.deepEqual(result.balanceHint, { protocol: 'privacycash', score: 100, sends: 30, level: 5, known: false })
-  // Every option is 1 of 5, so the page suggests paying from a shielded balance instead.
-  assert.equal(result.weak, true)
-  assert.equal(timedOptions(19.28).weak, false)
   // A balance that covers it is the fastest private one, and the hint goes.
   const funded = timedOptions(4, { shielded: { privacycash: USDC(10) } })
   assert.equal(funded.fastest.id, 'privacycash:balance:now')
   assert.equal(funded.balanceHint, null)
-  assert.equal(funded.weak, false)
-})
-
-test('4 and 5 of 5 rank as one step: the cheaper, then the sooner, option leads', () => {
-  // Same pool and fee: 12 h (4 of 5) leads a day's wait (5 of 5).
-  const timedResult = timedOptions(19.28)
-  assert.equal(timedResult.options.find((option) => option.id === 'privacycash:later:24h').level, 5)
-  assert.equal(timedResult.suggested.id, 'privacycash:later:12h')
-  assert.equal(timedResult.reason, 'fees')
-  // From a balance: Cloak at 4 of 5 leads Privacy Cash at 5 of 5 on its lower fee.
-  const pools = {
-    privacycash: { popular: [], cells: [cell('exact', 'now', '10-100', 30, 30), cell('balance', 'now', '10-100', 30, 0)] },
-    cloakc: { popular: [], cells: [cell('exact', 'now', '10-100', 30, 30), cell('balance', 'now', '10-100', 30, 5)] },
-  }
-  const shielded = { privacycash: USDC(50), cloakc: USDC(50) }
-  const balance = sendOptions({ quote: { ...quote, pools }, asset: 'USDC', raw: USDC(19.28), prices, shielded })
-  assert.deepEqual(balance.options.filter((option) => option.kind === 'balance').map((option) => [option.protocol, option.level]).sort(), [['cloakc', 4], ['privacycash', 5]])
-  assert.equal(balance.suggested.id, 'cloakc:balance:now')
-  // Below 4 a step still counts: 3 of 5 never leads 5 of 5 on fee.
-  pools.cloakc.cells[1] = cell('balance', 'now', '10-100', 30, 12)
-  assert.equal(sendOptions({ quote: { ...quote, pools }, asset: 'USDC', raw: USDC(19.28), prices, shielded }).suggested.id, 'privacycash:balance:now')
 })
 
 test('a 12 h wait shows once the quote measures it', () => {
@@ -266,8 +242,7 @@ test('Cloak and Umbra v2 pay from a shielded balance, and wait to send from it, 
   // Unread balances: no option from them, but the hint says what one would score.
   const unread = run()
   assert.ok(!unread.options.some((option) => option.kind === 'balance'))
-  // Both score 5 of 5 from a balance: the hint names the cheaper pool.
-  assert.equal(unread.balanceHint.protocol, 'umbrav2')
+  assert.equal(unread.balanceHint.protocol, 'cloakc')
   assert.deepEqual(unread.options.filter((option) => option.kind === 'later').map((option) => option.id).sort(), ['cloakc:later:24h', 'umbrav2:later:24h'])
   // A balance that covers it in either pool is offered, and the cheaper pool leads.
   const funded = run({ shielded: { cloakc: USDC(30), umbrav2: USDC(20) } })
