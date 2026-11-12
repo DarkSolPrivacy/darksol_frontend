@@ -1,6 +1,7 @@
 import { getAssociatedTokenAddressSync } from '@solana/spl-token'
-import { Connection, PublicKey } from '@solana/web3.js'
+import { PublicKey } from '@solana/web3.js'
 import { MINTS } from '../addresses.js'
+import { pollingConnection } from '../shared/http-confirm.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
 import { TOKEN_DECIMALS } from '../shared/units.js'
 
@@ -45,7 +46,8 @@ function saveUtxos(wallet, sdk, created, spent = []) {
 }
 
 const base64ToBytes = (value) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0))
-const rpcConnection = () => new Connection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
+// Confirms over HTTP: the RPC proxy has no websocket (shared/http-confirm.js).
+const rpcConnection = () => pollingConnection(import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString(), 'confirmed')
 const byAmount = (a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0)
 
 // Every note this browser saved for `wallet`, any mint, spent ones included
@@ -193,8 +195,7 @@ async function depositNote({ provider, asset, totalBaseUnits, onStatus, timings 
   if (asset !== 'SOL' && !MINTS[asset]) throw new Error(`CLOAKC does not support ${asset}`)
   if (asset === 'SOL' && totalBaseUnits < 10_000_000n) throw new Error('CLOAKC requires at least 0.01 SOL for the deposit')
   const publicKey = new PublicKey(String(provider.publicKey))
-  const rpcUrl = import.meta.env.VITE_SOLANA_RPC_URL || new URL('/api/solana-rpc', window.location.origin).toString()
-  const connection = new Connection(rpcUrl, 'confirmed')
+  const connection = rpcConnection()
   if (asset === 'SOL' && BigInt(await connection.getBalance(publicKey, 'confirmed')) < totalBaseUnits) {
     throw new Error('Not enough SOL in the connected wallet')
   }
