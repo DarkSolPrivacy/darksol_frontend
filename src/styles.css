@@ -368,9 +368,6 @@ img.assetLogo { display: block; object-fit: contain; background: transparent; }
 .homeLead b { color: var(--text-primary); font-weight: 500; }
 
 /* Three plain promises under the form, one icon each. */
-.trustStrip { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; margin: 22px 0 0; padding: 0; list-style: none; color: var(--text-tertiary); font-size: 12px; }
-.trustStrip li { display: inline-flex; align-items: center; gap: 7px; }
-.trustStrip svg { width: 14px; height: 14px; color: var(--accent-muted); }
 
 .panel { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
 .sendCard { position: relative; padding: 6px; }

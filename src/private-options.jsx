@@ -47,11 +47,8 @@ function BestBadge({ reason }) {
   return <em className="privBest" data-tooltip={text} aria-label={text}><Icon aria-hidden="true" />Best</em>
 }
 
-// `shielded` holds the balance of each pool DarkSol reads: undefined while
-// unread (Show reads it). A pool missing from it shows no balance. `reading`:
-// a read is already running, which Show cannot speed up; `status` says how far it got.
 // `more`: the shield-more offer ({ option, base, on, onToggle }), shown beside the meter.
-export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {}, reading = false, onReveal, more }) {
+export function PrivateOptions({ result, chosen, onChoose, asset, more }) {
   // Pools opened or closed by hand; the chosen option's pool starts open.
   const [toggled, setToggled] = React.useState({})
   if (!result?.suggested || !chosen) return null
@@ -102,7 +99,6 @@ export function PrivateOptions({ result, chosen, onChoose, asset, shielded = {},
         </div>
       </div>)}
     </div>
-    {!result.fastest && <PrivateHint result={result} prefix="None of these hides you well." canReveal={!reading && result.balanceHint?.protocol in shielded && shielded[result.balanceHint.protocol] === undefined} onReveal={onReveal} />}
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>

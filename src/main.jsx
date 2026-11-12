@@ -1286,9 +1286,7 @@ function PrivacyHome({ walletSession, settings }) {
         if (option && option.protocol !== chosenOption?.protocol) track('protocol_selected', { protocol: option.protocol, where: 'send' })
         setChosenOptionId(id)
       }} asset={asset}
-        more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: shieldMore, onToggle: toggleMore }}
-        shielded={Object.fromEntries(FROM_SHIELDED_IDS.map((id) => [id, !wallet ? 0n : shieldedByPool[id]]))}
-        reading={Boolean(wallet) && Boolean(hintPool) && (!shielded.pools[hintPool] || shielded.pools[hintPool].state === 'loading')} onReveal={shielded.reveal} />
+        more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: shieldMore, onToggle: toggleMore }} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}
@@ -1314,11 +1312,6 @@ function PrivacyHome({ walletSession, settings }) {
       {scheduled.status === 'pending' ? <button type="button" onClick={cancelDelivery}>Cancel</button> : scheduled.status !== 'sent' && <button type="button" onClick={deliverNow} disabled={sending}>Send now</button>}
       {scheduled.status !== 'pending' && <button type="button" aria-label="Dismiss" onClick={() => setScheduled(null)} disabled={sending}><X /></button>}</section>}
     <GasDialog offer={gasOffer} />
-    <ul className="trustStrip" aria-label="How DarkSol handles your funds">
-      <li><Wallet />You sign every step</li>
-      <li><ShieldCheck />We never hold your funds</li>
-      <li><BadgePercent />No DarkSol fee</li>
-    </ul>
   </div>
 }
 
