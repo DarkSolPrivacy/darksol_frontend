@@ -1000,8 +1000,9 @@ function PrivacyHome({ walletSession, settings }) {
       if (option.kind === 'later') {
         const result = await execute({ kind: 'send', provider: wallet.provider, asset, recipients: [], totalBaseUnits: option.deposit, source: 'wallet', onStatus: reportStatus })
         const created = Date.now()
+        // `exact`: a suggested top-up, whose fee comes out of what stays shielded.
         const item = { id: crypto.randomUUID(), protocol: option.protocol, asset, recipient: rows[0].address.sanitized, baseUnits: String(activeValidation.total.baseUnits),
-          recipients: rows.map((row) => ({ address: row.address.sanitized, baseUnits: String(row.amount.baseUnits) })),
+          recipients: rows.map((row) => ({ address: row.address.sanitized, baseUnits: String(row.amount.baseUnits) })), ...(option.exact && { exact: true }),
           deposit: String(option.deposit), depositSignature: result.depositSignature, owner: wallet.address, createdAt: created, readyAt: created + option.waitSeconds * 1000 }
         setPending((items) => [...items, item])
         if (settings.remind && typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
@@ -1016,7 +1017,8 @@ function PrivacyHome({ walletSession, settings }) {
       const fromBalance = option.kind === 'balance'
       const result = await execute({
         kind: 'send', provider: wallet.provider, asset, recipient: rows[0].address.publicKey,
-        recipients: rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })),
+        // A suggested top-up pays the recipient exactly the amount typed (`net`).
+        recipients: rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits, ...(option.exact && { net: true }) })),
         totalBaseUnits: fromBalance ? activeValidation.total.baseUnits : option.deposit, source: fromBalance ? 'shielded' : 'wallet', onStatus: reportStatus,
       })
       if (gas.units) {
@@ -1051,7 +1053,7 @@ function PrivacyHome({ walletSession, settings }) {
     try {
       const { execute } = await loadBrowserAdapter(item.protocol)
       const result = await execute({ kind: 'send', provider: wallet.provider, asset: item.asset, recipient: check.rows[0].address.publicKey,
-        recipients: check.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits })), totalBaseUnits: check.total.baseUnits, source: 'shielded', onStatus: reportStatus })
+        recipients: check.rows.map((row) => ({ publicKey: row.address.publicKey, baseUnits: row.amount.baseUnits, ...(item.exact && { net: true }) })), totalBaseUnits: check.total.baseUnits, source: 'shielded', onStatus: reportStatus })
       setPending((items) => items.filter((entry) => entry.id !== item.id))
       shieldedCache.delete(wallet.address); shielded.refresh()
       setReceipt(result); setSendStatus('Sent')

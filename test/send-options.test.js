@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { withdrawalFor } from '../protocols/shared/units.js'
+import { withdrawalFee } from '../protocols/privacycash/browser.js'
 import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from '../src/send-options.js'
 
 const USDC = (value) => BigInt(Math.round(value * 1e6))
@@ -22,6 +24,17 @@ const quote = {
   },
 }
 const options = (amount, extra = {}) => sendOptions({ quote, asset: 'USDC', raw: USDC(amount), prices, ...extra })
+
+test('a payout that delivers exactly the amount, at Privacy Cash\'s live relayer terms', () => {
+  // The relayer's terms on 2026-11-12: 0.35% plus 0.486153 USDC, a 2 USDC minimum.
+  const terms = { rate: 0.0035, fixed: 486_153n, minimum: 2_000_000n }
+  for (const net of [USDC(14), USDC(12), USDC(22), USDC(1000), 2_500_001n]) {
+    const units = withdrawalFor(net, (amount) => withdrawalFee(terms, amount), terms.minimum)
+    assert.equal(units - withdrawalFee(terms, units), net, `exact for ${net}`)
+    // The smallest that does: one unit less pays short.
+    assert.ok(units - 1n - withdrawalFee(terms, units - 1n) < net)
+  }
+})
 
 test('fees, meter steps, buckets and the copied deposit', () => {
   // 0.35% + 0.006 SOL at $100.
@@ -46,8 +59,17 @@ test('new money: deposit a common amount, keep the rest, send in a day; the plai
   assert.equal(result.suggested.id, 'privacycash:later:24h')
   assert.equal(result.suggested.score, 96)
   assert.equal(result.suggested.deposit, USDC(25))
-  assert.equal(result.suggested.kept, USDC(5.72))
+  // The recipient gets exactly 19.28: the withdrawal adds Privacy Cash's fee,
+  // which comes out of what stays shielded (25 - 19.28 - fee).
+  const { receives, fee, kept } = result.suggested
+  assert.equal(result.suggested.exact, true)
+  assert.equal(receives, USDC(19.28))
+  assert.equal(receives + fee - poolFee('privacycash', 'USDC', receives + fee, prices), USDC(19.28))
+  assert.equal(kept, USDC(25) - USDC(19.28) - fee)
+  assert.equal(kept, 5_050_175n)
   assert.equal(result.asTyped.id, 'umbrav2:now:now')
+  // A plain send still pays the fee from the amount sent.
+  assert.equal(result.asTyped.receives, USDC(19.28) - poolFee('umbrav2', 'USDC', USDC(19.28), prices))
   assert.equal(result.asTyped.score, 0)
   // Umbra v2's keep cell has too few sends, and Umbra v2 cannot keep change anyway.
   assert.ok(!result.options.some((option) => option.id.startsWith('umbrav2:later')))
@@ -98,8 +120,11 @@ test('once two waits show the same meter step at the same fee, the sooner one is
 })
 
 test('a fee that is most of a small payment outweighs the wait', () => {
-  // $1.50: Privacy Cash's fee is half the payment, yet a day's wait still wins a step.
-  assert.equal(options(1.5).suggested.id, 'privacycash:later:24h')
+  // $1.50: the common deposit of 2 cannot pay 1.50 plus Privacy Cash's 0.61 fee,
+  // so there is no top-up: everything is on the lowest step and the cheapest wins.
+  const small = options(1.5)
+  assert.ok(small.options.every((option) => option.kind === 'balance' || option.deposit === USDC(1.5)))
+  assert.equal(small.suggested.id, 'umbrav2:now:now')
   // $1: its fee is three quarters of the payment; every option is on the lowest step, so the cheapest wins.
   assert.equal(options(1).suggested.id, 'umbrav2:now:now')
 })
@@ -338,10 +363,11 @@ test('28 → 30 and 90 → 100 suggest the measured remainder within a six-hour 
     assert.equal(more.suggested.protocol, 'umbrav2')
     const offer = shieldMoreOffer(plain, more)
     assert.equal(offer.deposit, USDC(deposit))
-    assert.equal(offer.kept, USDC(deposit - amount))
+    // The recipient gets the amount typed; the fee comes out of the remainder.
+    assert.equal(offer.receives, USDC(amount))
+    assert.equal(offer.kept + offer.fee, USDC(deposit - amount))
     assert.equal(offer.wait, '6h')
     assert.equal(offer.level, 4)
-    assert.equal(offer.receives + offer.fee, USDC(amount))
     assert.ok([...plain.options, ...more.options].every((option) => option.waitSeconds <= 21_600))
     assert.equal(shieldMoreOffer(plain, run(true, { settings: { ...settings, keepNothing: true } })), null)
     assert.equal(shieldMoreOffer(plain, run(true, { settings: { ...settings, pools: { privacycash: false } } })), null)

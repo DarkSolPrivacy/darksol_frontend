@@ -3,7 +3,7 @@ import { PublicKey } from '@solana/web3.js'
 import { MINTS } from '../addresses.js'
 import { pollingConnection } from '../shared/http-confirm.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
-import { TOKEN_DECIMALS } from '../shared/units.js'
+import { TOKEN_DECIMALS, withdrawalFor } from '../shared/units.js'
 
 // Cloak settles into a public SPL recipient; the mints come from the registry.
 const OUTPUT_MINTS = Object.freeze({ USDC: MINTS.USDC, USDT: MINTS.USDT })
@@ -238,9 +238,28 @@ async function depositNote({ provider, asset, totalBaseUnits, onStatus, timings 
 // public address: all of it, less when part stays shielded (the change note,
 // saved in this browser), nothing when shielding only. `source: 'shielded'`
 // pays from the notes saved here instead, with no deposit.
+// What Cloak takes from a withdrawal of `units` of `asset`, read from the pool's
+// live PoolConfig as the SDK charges it: fixed + floor(units × numerator / denominator).
+// The account: u64 fixed fee at byte 2, numerator at 10, denominator at 18.
+export async function liveWithdrawalFee(asset) {
+  const sdk = await loadSdk()
+  const mint = asset === 'SOL' ? sdk.NATIVE_SOL_MINT : new PublicKey(MINTS[asset])
+  const [config] = PublicKey.findProgramAddressSync([new TextEncoder().encode('pool_config'), mint.toBytes()], sdk.CLOAK_PROGRAM_ID)
+  const account = await rpcConnection().getAccountInfo(config, 'confirmed')
+  if (!account) throw new Error(`Could not read Cloak's ${asset} fee`)
+  const view = new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength)
+  const fixed = view.getBigUint64(2, true)
+  const numerator = view.getBigUint64(10, true)
+  const denominator = view.getBigUint64(18, true)
+  return (units) => fixed + units * numerator / denominator
+}
+
 export async function executeCloakSend({ provider, asset, totalBaseUnits, recipient, recipients, source = 'wallet', onStatus = () => {}, timings = NO_TIMINGS }) {
   if (recipients?.length > 1) throw new Error('CLOAKC sends to one recipient')
-  const payout = recipients ? recipients.reduce((sum, item) => sum + BigInt(item.baseUnits), 0n) : BigInt(totalBaseUnits)
+  // A recipient marked `net` gets exactly its baseUnits: the withdrawal adds the
+  // pool's fee, which a suggested top-up pays from what stays shielded.
+  const fee = recipients?.some((item) => item.net) ? await liveWithdrawalFee(asset) : null
+  const payout = recipients ? recipients.reduce((sum, item) => sum + (item.net ? withdrawalFor(BigInt(item.baseUnits), fee) : BigInt(item.baseUnits)), 0n) : BigInt(totalBaseUnits)
   if (source === 'shielded') {
     if (!payout) throw new Error('Nothing to pay')
     return sendFromSaved({ provider, asset, amount: payout, recipient: new PublicKey(String(recipient)), onStatus, timings })

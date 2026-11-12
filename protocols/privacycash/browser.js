@@ -4,7 +4,7 @@ import { isNoAnswer } from '../shared/network.js'
 import { NO_TIMINGS, withTimings } from '../shared/stage-timings.js'
 import { createCircuitFiles } from './circuit-files.js'
 import { coversRecentOnly, scanKeys, scanOlderNotes, scanRecentFirst, treeSize } from './recent-scan.js'
-import { TOKEN_DECIMALS } from '../shared/units.js'
+import { TOKEN_DECIMALS, withdrawalFor } from '../shared/units.js'
 
 // Re-exported so bridge.js and the older call sites keep one source.
 export const MINTS = Object.freeze({ USDC: REGISTRY_MINTS.USDC, USDT: REGISTRY_MINTS.USDT })
@@ -315,6 +315,14 @@ export async function withdrawalTerms(privacyCash, asset) {
 
 export const withdrawalFee = (terms, units) => BigInt(Math.floor(Number(units) * terms.rate)) + terms.fixed
 
+// A recipient marked `net` gets exactly its baseUnits: the withdrawal adds the
+// relayer's current fee, which a suggested top-up pays from what stays shielded.
+export async function withNetPayouts(asset, recipients) {
+  if (!recipients?.some((item) => item.net)) return recipients
+  const terms = await withdrawalTerms(await import('privacycash/utils'), asset)
+  return recipients.map((item) => item.net ? { ...item, net: false, baseUnits: withdrawalFor(BigInt(item.baseUnits), (units) => withdrawalFee(terms, units), terms.minimum) } : item)
+}
+
 // A SOL withdrawal's fee and minimum, in lamports: what sending a recipient SOL
 // for network fees costs (see withdrawalFor in shared/units.js).
 export async function solWithdrawalFee() {
@@ -389,6 +397,7 @@ async function sendFromShielded({ provider, asset, recipients, onStatus, timings
 // `source: 'shielded'` pays from that balance instead, with no deposit.
 export async function executePrivacyCashTransfer({ provider, asset, totalBaseUnits, recipients, delayMinutes = 0, source = 'wallet', onStatus = () => {}, timings = NO_TIMINGS }) {
   if (delayMinutes && recipients.length !== 1) throw new Error('A delivery deadline supports one recipient')
+  recipients = await withNetPayouts(asset, recipients)
   if (source === 'shielded') {
     if (delayMinutes) throw new Error('A delivery deadline needs a fresh deposit')
     return sendFromShielded({ provider, asset, recipients, onStatus, timings })
