@@ -9,8 +9,10 @@ export default Object.freeze({
   name: 'NEAR Confidential Intents',
   aliases: Object.freeze(['nearci', 'nearconfidentialintents', 'confidentialintents']),
   // Planned, not live (2026-11-09): 1Click and the private chain's validators
-  // see every transfer, so the send page shows CI greyed out as "Soon" and never
-  // ranks it; the analytics page still shows its measured privacy.
+  // see every transfer, so no pool list carries CI. Since 2026-11-14 the send
+  // page ranks it for a user who turns on "Confidential transactions" in the
+  // send settings (CONFIDENTIAL_POOLS, src/send-options.js), and does not show
+  // it otherwise; the analytics page shows its measured privacy either way.
   status: 'planned',
   chain: 'near',
   chainId: null,

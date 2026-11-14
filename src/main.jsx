@@ -23,7 +23,7 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
-import { bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from './send-options.js'
+import { CONFIDENTIAL_POOLS, allWeak, bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, weakOffer, withSimulation } from './send-options.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { preloadRoute } from './preload.js'
@@ -38,6 +38,11 @@ const BRIDGE_PROTOCOL_ID = listProtocols({ capability: 'bridge' })[0]?.id || nul
 const SINGLE_RECIPIENT_IDS = listProtocols().filter(({ recipients }) => !recipients.multi).map(({ id }) => id)
 const SHIELDED_POOL_IDS = listProtocols().filter(({ modules }) => modules.shieldedBalance).map(({ id }) => id)
 const FROM_SHIELDED_IDS = SHIELDED_POOL_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
+// With "Confidential transactions" on in the send settings, the send page also
+// reads and pays from the confidential pools' balances (NEAR Confidential
+// Intents). They are not live pools, so no other page lists them.
+const CONFIDENTIAL_SHIELDED_IDS = [...SHIELDED_POOL_IDS, ...CONFIDENTIAL_POOLS.filter((id) => PROTOCOLS[id].modules.shieldedBalance)]
+const CONFIDENTIAL_FROM_SHIELDED_IDS = CONFIDENTIAL_SHIELDED_IDS.filter((id) => PROTOCOLS[id].send.fromShielded)
 // Shield only offers the payment-link pools and Umbra v2, which deposits into the
 // wallet's own private balance but has no payment links.
 const SHIELD_POOLS = [...POOLS, { id: 'umbrav2', name: 'Umbra v2' }]
@@ -51,7 +56,7 @@ const shieldedCache = new Map()
 // Each pool's shielded balance for `wallet`: { state: loading | ready | locked |
 // error, balances, spendable }, per pool id. Locked means the pool needs a
 // signature: reading never asks the wallet to sign, reveal() does.
-function useShieldedPools(wallet, active = true) {
+function useShieldedPools(wallet, active = true, ids = SHIELDED_POOL_IDS) {
   const address = wallet?.address
   const [state, setState] = useState({ address: null, pools: {} })
   const [status, setStatus] = useState('')
@@ -89,18 +94,18 @@ function useShieldedPools(wallet, active = true) {
     if (!active || !address) return undefined
     const controller = new AbortController()
     scan.current = controller
-    for (const id of SHIELDED_POOL_IDS) read(id, false, controller.signal)
+    for (const id of ids) read(id, false, controller.signal)
     return () => controller.abort()
-  }, [active, address, round])
+  }, [active, address, round, ids])
 
   // Each pool asks the wallet to sign its own message: one prompt at a time,
   // then the reads (a first scan can take minutes) run side by side. A pool
   // whose signature was declined reads as locked again.
   const reveal = async () => {
     const { signal } = scan.current
-    const ids = SHIELDED_POOL_IDS.filter((item) => ['locked', 'error'].includes(pools[item]?.state))
-    for (const id of ids) settle(id, signal, { state: 'loading' })
-    for (const id of ids) {
+    const closed = ids.filter((item) => ['locked', 'error'].includes(pools[item]?.state))
+    for (const id of closed) settle(id, signal, { state: 'loading' })
+    for (const id of closed) {
       const adapter = await loadBrowserAdapter(id).catch(() => null)
       if (!adapter?.unlockShielded) { await read(id, true, signal); continue }
       setStatus(`${sourceName(id)} · Approve the message in your wallet…`)
@@ -530,6 +535,28 @@ function RouteDetails({ estimate, alternatives, asset, amount, delayMinutes, onD
 }
 
 // `settings`: the send settings, which the app keeps and edits from the top bar.
+// The privacy of one exact amount, simulated by the server once typing pauses.
+// `key` is the request body: the amount goes in a POST, never a URL, and the
+// server neither logs nor stores it. Returns { data } once it answered for this
+// key; data is null on a 404 (not deployed), 503 (busy) or failure, which keeps the quote.
+function useSimulation(key) {
+  const [held, setHeld] = useState(null)
+  useEffect(() => {
+    if (!key) return undefined
+    const controller = new AbortController()
+    const { asset } = JSON.parse(key)
+    const settle = (data) => { if (!controller.signal.aborted) setHeld({ key, data: data?.asset === asset ? data : null }) }
+    const timer = setTimeout(() => fetch('/api/privacy-sim', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: key,
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then(settle, () => settle(null)), 400)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [key])
+  return held?.key === key ? held : null
+}
+
 function PrivacyHome({ walletSession, settings }) {
   const { wallet, connecting, connectWallet: connectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
@@ -562,8 +589,6 @@ function PrivacyHome({ walletSession, settings }) {
   // The private options (src/send-options.js): the quote they rank with, the
   // one picked, and the payments whose deposit waits to be sent.
   const [quote, setQuote] = useState(null)
-  // The simulation for one exact amount, with the asset:amount key it was for.
-  const [sim, setSim] = useState(null)
   const [chosenOptionId, setChosenOptionId] = useState(null)
   const [shieldMore, setShieldMore] = useState(false)
   const [pending, setPending] = useState(loadPending)
@@ -600,7 +625,8 @@ function PrivacyHome({ walletSession, settings }) {
   // A send, to one recipient or several, keeping part shielded, paying from
   // shielded funds or neither, picks from the measured private options.
   const optionsMode = !isSwap && !isBridge && !shieldOnly
-  const shielded = useShieldedPools(wallet, payingShielded || optionsMode)
+  const fromShieldedIds = settings.confidential ? CONFIDENTIAL_FROM_SHIELDED_IDS : FROM_SHIELDED_IDS
+  const shielded = useShieldedPools(wallet, payingShielded || optionsMode, settings.confidential ? CONFIDENTIAL_SHIELDED_IDS : SHIELDED_POOL_IDS)
   // Delayed delivery held a proof made right after the deposit, whose root points
   // straight back to it, so it is no longer offered. A payment that waits is
   // proved when it is sent (pending payments below).
@@ -619,6 +645,7 @@ function PrivacyHome({ walletSession, settings }) {
   const simRaw = shieldOnly ? totalRaw : sentRaw
   const simKey = !isSwap && !isBridge && simRaw > 0n && (!keeping || (totalRaw > simRaw))
     ? JSON.stringify(simulationRequest({ asset, raw: simRaw, settings, deposit: keeping ? totalRaw : null })) : null
+  const sim = useSimulation(simKey)
   const keepError = !keeping ? '' : keepRaw === null ? 'Enter a valid amount to keep shielded'
     : !keepRaw ? 'Enter how much to keep shielded' : sentRaw !== null && sentRaw <= 0n ? 'Keep less than the full amount' : ''
   const receiverRaws = receiverAmounts.map((value) => rawTokenAmount(value, asset))
@@ -630,13 +657,13 @@ function PrivacyHome({ walletSession, settings }) {
   const receiversValid = receiverRaws.every((value) => value !== null && value > 0n) && amountsMatch
   const formValid = shieldOnly ? totalRaw > 0n : sentRaw !== null && sentRaw > 0n && receiversValid && !keepError
   // The most one withdrawal can pay from the shielded balance, in the pool holding the most.
-  const shieldedSpendable = FROM_SHIELDED_IDS.map((id) => shielded.pools[id]).filter((entry) => entry?.state === 'ready')
+  const shieldedSpendable = fromShieldedIds.map((id) => shielded.pools[id]).filter((entry) => entry?.state === 'ready')
     .reduce((best, entry) => { const value = BigInt(entry.spendable?.[asset] ?? 0n); return value > best ? value : best }, 0n)
-  const shieldedLocked = FROM_SHIELDED_IDS.some((id) => ['locked', 'error'].includes(shielded.pools[id]?.state))
-  const shieldedReading = FROM_SHIELDED_IDS.some((id) => !shielded.pools[id] || shielded.pools[id].state === 'loading')
+  const shieldedLocked = fromShieldedIds.some((id) => ['locked', 'error'].includes(shielded.pools[id]?.state))
+  const shieldedReading = fromShieldedIds.some((id) => !shielded.pools[id] || shielded.pools[id].state === 'loading')
   // What each pool that pays from a shielded balance can pay of this asset; a pool not read yet is left out.
   // A pool that plans its withdrawals (Privacy Cash: a minimum per withdrawal) counts nothing when it cannot pay these amounts.
-  const shieldedByPool = Object.fromEntries(FROM_SHIELDED_IDS.filter((id) => shielded.pools[id]?.state === 'ready').map((id) => {
+  const shieldedByPool = Object.fromEntries(fromShieldedIds.filter((id) => shielded.pools[id]?.state === 'ready').map((id) => {
     const entry = shielded.pools[id]
     const plannable = !entry.plan || !receiversValid || Boolean(entry.plan(asset, receiverRaws))
     return [id, plannable ? BigInt(entry.spendable?.[asset] ?? 0n) : 0n]
@@ -692,22 +719,6 @@ function PrivacyHome({ walletSession, settings }) {
       .then((data) => setQuote(data?.asset === asset ? data : null), () => {})
     return () => controller.abort()
   }, [asset, isSwap, isBridge])
-
-  // Then the privacy of this exact amount, simulated by the server, once typing
-  // pauses. The amount goes in a POST body, never a URL; the server neither logs
-  // nor stores it. A 404 (not deployed), 503 (busy) or failure keeps the quote.
-  useEffect(() => {
-    if (!simKey) return undefined
-    const controller = new AbortController()
-    const { asset: simAsset } = JSON.parse(simKey)
-    const timer = setTimeout(() => fetch('/api/privacy-sim', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: simKey,
-    })
-      .then((response) => response.ok ? response.json() : null)
-      .then((data) => { if (!controller.signal.aborted && data?.asset === simAsset) setSim({ key: simKey, data }) }, () => {}), 400)
-    return () => { clearTimeout(timer); controller.abort() }
-  }, [simKey])
 
   // A new amount or token starts from the suggestion again.
   useEffect(() => setChosenOptionId(null), [asset, sentAmount, receiverCount, shieldMode])
@@ -1130,32 +1141,48 @@ function PrivacyHome({ walletSession, settings }) {
   // shielded fixes the deposit; several recipients are measured as a split.
   // The quote with this exact amount's simulated cells in place of its bucket's,
   // once they arrive for it. Without a quote, the simulation alone.
-  const amountQuote = useMemo(() => {
-    const data = sim?.key === simKey ? sim.data : null
+  const quoteWith = (data) => {
     const base = quote?.asset === asset ? quote : null
     if (!data) return base
     const bucket = !base?.buckets?.length ? 'exact'
       : prices[asset] > 0 ? bucketFor(Number(rawTokenText(simRaw, asset)) * prices[asset], base.buckets) : null
     return withSimulation(base, data, bucket)
-  }, [sim, simKey, quote, asset, prices, simRaw])
+  }
+  const amountQuote = useMemo(() => quoteWith(sim?.data), [sim, quote, asset, prices, simRaw])
+  const optionInput = { asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
+    recipients: receiverCount, deposit: keeping ? totalRaw : null, paused: PAUSED, shielded: shieldedByPool, balanceOnly: payingShielded }
   // Two sets: the send as typed (deposit only what is sent), and with a common
   // deposit above it, the rest kept shielded. The second is offered, never forced.
   const [plainResult, moreResult] = useMemo(() => {
     if (!(optionsMode && !keepError && sentRaw > 0n && amountQuote)) return [null, null]
-    const run = (topUp) => sendOptions({ quote: amountQuote, asset, raw: sentRaw, prices, settings, canRun: (protocol) => browserCanRun(protocol, 'send'),
-      recipients: receiverCount, deposit: keeping ? totalRaw : null, paused: PAUSED, topUp, shielded: shieldedByPool, balanceOnly: payingShielded })
+    const run = (topUp) => sendOptions({ ...optionInput, quote: amountQuote, topUp })
     return [run(false), keeping || payingShielded ? null : run(true)]
-  // shieldedByPool is rebuilt every render; its content follows shielded.pools, asset and the recipients' amounts.
+  // optionInput is rebuilt every render; shieldedByPool in it follows shielded.pools, asset and the recipients' amounts.
   }, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, shielded.pools, receiverAmounts, receiverCount, keeping, payingShielded, totalRaw])
-  const moreOffer = shieldMoreOffer(plainResult, moreResult)
-  const optionResult = shieldMore && moreOffer ? { ...moreResult, suggested: moreOffer, reason: 'privacy' } : plainResult
+  // Every option below 2 of 5: the suggestion looks further, for the option
+  // closest to what was typed that reaches it. First past the settings' longest
+  // wait, which takes the same amount simulated up to 24 h; a failed request
+  // falls back on the simulation already here.
+  const weak = allWeak(plainResult) && !keeping
+  const wideKey = weak && simKey && plainResult.settings.maxWait !== '24h' ? JSON.stringify({ ...JSON.parse(simKey), maxWait: '24h' }) : null
+  const wideSim = useSimulation(wideKey)
+  const wideQuote = useMemo(() => !wideKey ? amountQuote : wideSim && (wideSim.data ? quoteWith(wideSim.data) : amountQuote),
+    [wideKey, wideSim, amountQuote])
+  const further = useMemo(() => weak && wideQuote ? weakOffer(plainResult, { ...optionInput, quote: wideQuote }) : null, [weak, plainResult, wideQuote])
+  // The suggestion waits for this amount's simulation (answered or failed): the
+  // quote's size bucket often says otherwise, and a card that shows one
+  // suggestion and then another a few seconds later reads as a glitch.
+  const measuredHere = !simKey || Boolean(sim)
+  const moreOffer = !measuredHere || (weak && !wideQuote) ? null : further?.option ?? shieldMoreOffer(plainResult, moreResult)
+  const moreOn = shieldMore && Boolean(moreOffer)
+  const optionResult = moreOn ? { ...(further?.result ?? moreResult), suggested: moreOffer, reason: 'privacy' } : plainResult
   const toggleMore = (on) => { setShieldMore(on); setChosenOptionId(null) }
   const chosenOption = optionResult?.options.find((option) => option.id === chosenOptionId && option.executable) ?? optionResult?.suggested ?? null
   // The pool whose shielded balance the hint below the options scores.
   const hintPool = optionResult?.balanceHint?.protocol
   // Shield only and paying from shielded funds show their measured privacy in the pool they go through.
   // Paying from shielded funds has no planner pick until a balance is read; the pool the hint scores stands in.
-  const manualProtocol = shieldOnly ? shieldPool : recommended?.protocol ?? (payingShielded ? hintPool ?? FROM_SHIELDED_IDS[0] : null)
+  const manualProtocol = shieldOnly ? shieldPool : recommended?.protocol ?? (payingShielded ? hintPool ?? fromShieldedIds[0] : null)
   const measured = useMemo(() => {
     if (chosenOption || isSwap || isBridge || !amountQuote || !manualProtocol) return null
     const measure = (kind, raw, deposit) => measuredPrivacy({ quote: amountQuote, protocol: manualProtocol, asset, raw: raw ?? 0n, prices, kind, deposit })
@@ -1236,7 +1263,7 @@ function PrivacyHome({ walletSession, settings }) {
     ['use', 'Use shielded funds', !wallet ? 'Pay from your private balance'
       : shieldedReading && payingShielded ? 'Reading your private balance…'
         : shieldedSpendable > 0n ? `${rawTokenText(shieldedSpendable, asset)} ${asset} available${shieldedLocked ? ' · sign to read more' : ''}`
-          : shieldedLocked || !FROM_SHIELDED_IDS.some((id) => shielded.pools[id]) ? 'Pay from your private balance · sign to read it'
+          : shieldedLocked || !fromShieldedIds.some((id) => shielded.pools[id]) ? 'Pay from your private balance · sign to read it'
             : `0 ${asset} available`],
   ]
 
@@ -1316,13 +1343,13 @@ function PrivacyHome({ walletSession, settings }) {
       {shieldedSplit && shieldedSplit.withdrawals > receiverCount && <div className="keepSummary">
         <span>Goes out as <b>{shieldedSplit.withdrawals}</b> private withdrawals{receiverCount === 1 ? ' to this address' : ''}, no extra approvals</span>
         <span>≈ <b>{rawTokenText(shieldedSplit.fee, asset)} {asset}</b> in pool fees</span></div>}
-      {moreOffer && !chosenOption && <ShieldMore option={moreOffer} asset={asset} on={shieldMore} onToggle={toggleMore} />}
+      {moreOffer && !chosenOption && <ShieldMore option={moreOffer} asset={asset} on={moreOn} onToggle={toggleMore} />}
       {chosenOption ? <PrivateOptions result={optionResult} chosen={chosenOption} onChoose={(id) => {
         const option = optionResult?.options.find((item) => item.id === id)
         if (option && option.protocol !== chosenOption?.protocol) track('protocol_selected', { protocol: option.protocol, where: 'send' })
         setChosenOptionId(id)
       }} asset={asset}
-        more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: shieldMore, onToggle: toggleMore }} />
+        more={moreOffer && { option: moreOffer, base: plainResult?.suggested, on: moreOn, onToggle: toggleMore }} />
         : measured ? <MeasuredSummary {...measured} onAction={() => chooseShield('off')} />
         : recommended && !shieldOnly && <RouteSummary estimate={recommended} asset={resultAsset} delayMinutes={deadlineMinutes} stale={loading} />}
       {/* No measured option yet (several recipients before the quote measures splits): still say what a shielded balance would score. */}

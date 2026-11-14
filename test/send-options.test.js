@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { withdrawalFor } from '../protocols/shared/units.js'
 import { withdrawalFee } from '../protocols/privacycash/browser.js'
-import { DEFAULT_SETTINGS, MIN_SENDS, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, shieldMoreOffer, simulationRequest, withSimulation } from '../src/send-options.js'
+import { DEFAULT_SETTINGS, MIN_SENDS, allWeak, bucketFor, effectiveSettings, measuredPrivacy, meterLevel, poolFee, popularDeposit, sendOptions, shieldMoreOffer, simulationRequest, weakOffer, withSimulation } from '../src/send-options.js'
 
 const USDC = (value) => BigInt(Math.round(value * 1e6))
 const prices = { USDC: 1, USDT: 1, SOL: 100 }
@@ -52,6 +52,10 @@ test('fees, meter steps, buckets and the copied deposit', () => {
   assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(19.28)), USDC(25))
   assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(18)), USDC(25))
   assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(30)), null)
+  // Up to twice the payment (1.5 times until 2026-11-13).
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(12.5)), USDC(25))
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(12.4)), USDC(20))
+  assert.equal(popularDeposit(quote.pools.privacycash.popular, USDC(9)), null)
 })
 
 test('new money: deposit a common amount, keep the rest, send in a day; the plain send is the cheapest pool now', () => {
@@ -387,6 +391,41 @@ test('each wait selects its own deposit and the same privacy level keeps the sma
   const result = sendOptions({ quote: withSimulation(null, measured, 'exact'), asset: 'USDC', raw: USDC(28), prices })
   assert.equal(result.options.find((option) => option.wait === '6h').deposit, USDC(30))
   assert.equal(result.options.find((option) => option.wait === '24h').deposit, USDC(35))
+})
+
+test('every option below 2 of 5: the suggestion is the closest option that reaches it, past the longest wait', () => {
+  const custom = (maxWait, extra = {}) => ({ ...DEFAULT_SETTINGS, mode: 'custom', maxWait, ...extra })
+  // A plain send is traced at every wait but 24 h, where `day` of 300 are.
+  const exact = (day) => [...['now', '6h', '12h'].map((wait) => simCell('exact', wait, 300, 300)), simCell('exact', '24h', 300, day)]
+  const keep = (wait, traced) => ({ ...simCell('keep', wait, 300, traced), deposit: String(USDC(30)) })
+  const run = (cells, settings) => {
+    const input = { quote: withSimulation(null, { ...sim, pools: { privacycash: { amountMode: 'gross', cells } } }, 'exact'), asset: 'USDC', raw: USDC(28), prices, settings }
+    const plain = sendOptions({ ...input, topUp: false })
+    return { plain, offer: weakOffer(plain, input) }
+  }
+  // Longest wait 12 h, nothing within it reaches 2 of 5. Waiting 24 h with no
+  // extra deposit (2 of 5) is closer to what was typed than 24 h and a deposit of 30 (3 of 5).
+  const waits = run([...exact(200), keep('now', 300), keep('6h', 290), keep('12h', 280), keep('24h', 100)], custom('12h'))
+  assert.ok(allWeak(waits.plain))
+  assert.ok(waits.plain.options.every((option) => option.waitSeconds <= 43_200))
+  assert.equal(waits.offer.option.id, 'privacycash:later:24h')
+  assert.equal(waits.offer.option.kept, 0n)
+  assert.equal(waits.offer.option.level, 2)
+  assert.ok(waits.offer.result.options.includes(waits.offer.option))
+  // 12 h and a deposit of 30 is closer than 24 h, though 24 h hides better.
+  const deposits = [...exact(0), keep('12h', 200)]
+  const kept = run(deposits, custom('6h')).offer.option
+  assert.deepEqual([kept.wait, kept.deposit, kept.level], ['12h', USDC(30), 2])
+  // "Never suggest shielding more" leaves the wait alone.
+  const plainOnly = run(deposits, custom('6h', { keepNothing: true })).offer.option
+  assert.deepEqual([plainOnly.wait, plainOnly.kept], ['24h', 0n])
+  // A pool switched off is never suggested; nothing reaching 2 of 5 suggests nothing.
+  assert.equal(run(deposits, custom('6h', { pools: { privacycash: false } })).offer, null)
+  assert.equal(run(exact(300), custom('6h')).offer, null)
+  // An option that already reaches 2 of 5 within the settings: no change.
+  const fine = run([...exact(0), simCell('exact', '6h', 300, 100)].reverse(), custom('6h'))
+  assert.ok(!allWeak(fine.plain))
+  assert.equal(fine.offer, null)
 })
 
 test('simulation request identity changes with the wait limit and the actual manual deposit', () => {

@@ -4,11 +4,11 @@
 // and the payments waiting to go out. Little text: the meter, the wait and the fee.
 import React from 'react'
 import { ArrowRight, Check, ChevronDown, Coins, ShieldCheck, X, Zap } from 'lucide-react'
-import { LOGOS, PROTOCOLS } from '../protocols/registry.js'
+import { LOGOS } from '../protocols/registry.js'
 import { TOKEN_DECIMALS } from '../protocols/shared/units.js'
-import { SOON_POOLS } from './send-options.js'
+import { QUOTE_POOLS } from './send-options.js'
 
-const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2' }
+const POOL_NAMES = { privacycash: 'Privacy Cash', cloakc: 'Cloak', umbrav2: 'Umbra v2', nearci: 'NEAR Confidential Intents' }
 const WAIT_LABEL = { now: 'Now', '6h': 'In 6 h', '12h': 'In 12 h', '24h': 'In 24 h' }
 const usd = (value) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: value < 0.1 ? 3 : 2 }).format(value)
 
@@ -92,45 +92,34 @@ export function PrivateOptions({ result, chosen, onChoose, asset, more }) {
     {more && <ShieldMore {...more} base={more.on ? more.base : chosen} asset={asset} />}
     <div className="privList" role="radiogroup" aria-label="How to send">
       {groups.map(group)}
-      {SOON_POOLS.map((id) => <div className="privGroup soon" key={id} aria-disabled="true" title="Not offered yet: it hides a payment from the public, not from the service that runs it">
-        <div className="privGroupHead">
-          <img src={LOGOS[id]?.src} alt="" />
-          <span className="privOptionLabel"><b className="privPoolName">{PROTOCOLS[id]?.name ?? id}</b><em className="privSoon">Soon</em></span>
-        </div>
-      </div>)}
     </div>
     <div className="privTiles">
       <div><small>{chosen.kind === 'balance' ? 'From shielded' : 'You deposit'}</small><b>{tokenText(chosen.kind === 'balance' ? chosen.receives + chosen.fee : chosen.deposit, asset)}</b></div>
       <div><small>They get ≈</small><b>{tokenText(chosen.receives, asset)}</b></div>
       <div><small>Stays shielded</small><b className={chosen.kept > 0n ? 'up' : ''}>{chosen.kept > 0n ? `+${tokenText(chosen.kept, asset)}` : tokenText(chosen.kind === 'balance' ? chosen.balanceAfter : 0n, asset)}</b></div>
     </div>
-    {chosen.protocol === 'nearci' && <NearCiNote />}
   </section>
-}
-
-/**
- * What NEAR Confidential Intents does not hide, beside its measured meter
- * (darksol-backend docs/NEAR_CI.md): the meter is how often a public observer
- * pairs the payment with its deposit, for a recipient with no public link to
- * the sender, which is what the measurement assumes.
- */
-export function NearCiNote() {
-  return <p className="privHint privNote">
-    Measured on NEAR's public data. 1Click, which runs both swaps, and the validators of NEAR's private chain can still see who paid whom.
-    {' '}Pay an address that has never received from this wallet: a known address links the payment whatever the pool.
-  </p>
 }
 
 /** Optional: deposit a common amount, send what was typed and keep the rest shielded, for more privacy. */
 // Grey until switched on: today's meter, an arrow, the meter with the extra shielded.
+// When every option is below 2 of 5 the offer is the closest one that reaches it
+// (weakOffer, src/send-options.js), which may only wait longer and keep nothing.
+// It is always a payment: never shielding alone, which sends nothing.
 export function ShieldMore({ option, base, asset, on, onToggle }) {
-  const detail = `Deposit ${tokenText(option.deposit, asset)} ${asset}, send ${tokenText(option.receives, asset)} after fees, keep ${tokenText(option.kept, asset)} shielded. Privacy ${option.level} of 5.`
+  const gain = `${option.level >= 4 ? 'high' : 'better'} privacy`
+  const sends = `Deposit ${tokenText(option.deposit, asset)} ${asset}, send ${tokenText(option.receives, asset)} after fees`
+  const [text, label, detail] = option.kept > 0n
+    ? [`Keep ${tokenText(option.kept, asset)} ${asset} shielded for ${gain} · deposit ${tokenText(option.deposit, asset)} ${asset}`, `More private shielding ${tokenText(option.kept, asset)} ${asset}`,
+      `${sends}, keep ${tokenText(option.kept, asset)} shielded. Privacy ${option.level} of 5.`]
+    : [`Wait ${option.wait.replace('h', ' h')} for ${gain}`, `More private waiting ${option.wait.replace('h', ' h')}`,
+      `${sends} in ${option.wait.replace('h', ' h')}. Privacy ${option.level} of 5.`]
   return <label className={`privHero privMore${on ? ' on' : ''}`} title={detail}>
     {base && <><Meter option={base} large /><b className="privMoreWait">{optionLabel(base)}</b></>}
     <ArrowRight className="privMoreArrow" aria-hidden="true" />
     <Meter option={option} large /><b className="privMoreWait">{optionLabel(option)}</b>
-    <span>Keep {tokenText(option.kept, asset)} {asset} shielded for {option.level >= 4 ? 'high' : 'better'} privacy · deposit {tokenText(option.deposit, asset)} {asset}</span>
-    <input type="checkbox" role="switch" className="privSwitch" aria-label={`More private shielding ${tokenText(option.kept, asset)} ${asset}. ${detail}`} checked={on} onChange={(event) => onToggle(event.target.checked)} />
+    <span>{text}</span>
+    <input type="checkbox" role="switch" className="privSwitch" aria-label={`${label}. ${detail}`} checked={on} onChange={(event) => onToggle(event.target.checked)} />
   </label>
 }
 
@@ -182,9 +171,10 @@ export function SendSettings({ open, settings, onChange, onClose }) {
     </>}
     {toggle('Never suggest shielding more', 'Deposit only what you send', settings.keepNothing, (keepNothing) => set({ keepNothing }))}
     {toggle('Remind me when ready', 'Notify me when a waiting payment can go out', settings.remind, (remind) => set({ remind }))}
+    {toggle('Confidential transactions', 'Its operator can see each transaction and may share it with law enforcement', settings.confidential === true, (confidential) => set({ confidential }))}
     <hr className="privDivider" />
     {row(<b className="privSection">Pools</b>, custom ? null : 'Auto uses every pool. Switch to Custom to choose.', null)}
-    {Object.entries(POOL_NAMES).map(([id, name]) => toggle(name, null, custom ? settings.pools[id] !== false : true,
+    {QUOTE_POOLS.map((id) => toggle(POOL_NAMES[id], null, custom ? settings.pools[id] !== false : true,
       (on) => set({ pools: { ...settings.pools, [id]: on } }), !custom))}
   </dialog>
 }
