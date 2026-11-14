@@ -1446,6 +1446,8 @@ label.privRow { cursor: pointer; }
 .sectionTitle { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 28px 0 12px; }
 .sectionTitle > strong { color: var(--accent); font: 500 14px var(--font-mono); white-space: nowrap; }
 .sectionTitle > span { max-width: 560px; color: var(--text-tertiary); font-size: 12px; text-align: right; }
+.sectionTitle h2 small { margin-left: 8px; color: var(--text-tertiary); font-size: 12px; font-weight: 400; }
+.flowNetwork { color: var(--text-tertiary); font-weight: 400; }
 
 /* Related figures share one strip, separated by hairlines rather than boxes. */
 .poolGrid, .activityMetrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }

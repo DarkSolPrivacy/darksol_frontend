@@ -157,6 +157,13 @@ const FLOW_TYPES = [
   ['deposits', 'Deposits', '#F0F0F0', 'Deposit', undefined], ['withdrawals', 'Withdrawals', '#3E3E3E', 'Withdraw', '8 4'],
   ['swapIn', 'Swap in', '#A0A0A0', 'SwapIn', '2 3'], ['swapOut', 'Swap out', '#666666', 'SwapOut', '12 5 2 5'],
 ]
+// NEAR Confidential Intents: transfers into and out of its Treasury; a solver's are swap legs.
+const CI_FLOW_LABELS = { deposits: 'Entries', withdrawals: 'Exits', swapIn: 'Solver in', swapOut: 'Solver out' }
+const CI_FLOW_TYPES = FLOW_TYPES.map(([key, , ...rest]) => [key, CI_FLOW_LABELS[key], ...rest])
+const CI_TYPE_NAMES = { deposit: 'entry', withdraw: 'exit', swap_in: 'solver in', swap_out: 'solver out' }
+const RANGES = ['90D', '30D', '1D', '6H', '1H']
+// The nearci collector's history starts on 2026-09-29, so CI has no 90-day range.
+const CI_RANGES = RANGES.slice(1)
 const compact = (number, max = 2) => Intl.NumberFormat('en-US', { notation: Math.abs(number || 0) >= 10000 ? 'compact' : 'standard', maximumFractionDigits: max }).format(number || 0)
 const money = (number) => Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: Math.abs(number || 0) >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 2 }).format(number || 0)
 // A token amount at the precision it is paid in: SOL to 5 places, stablecoins to cents unless dust.
@@ -1713,6 +1720,7 @@ const MORE_PAGE = 20
 // /api/activity on demand, each continuing after the last row shown. Rows are
 // merged by id, so a refresh that brings new flows in at the top never repeats one.
 function RecentActivity({ analytics, loading, protocol }) {
+  const ci = protocol === 'nearci'
   const [older, setOlder] = useState([])
   const [more, setMore] = useState('idle') // idle | loading | end | error
   const seen = new Set()
@@ -1731,7 +1739,7 @@ function RecentActivity({ analytics, loading, protocol }) {
       setMore(result.flows.length < MORE_PAGE ? 'end' : 'idle')
     } catch { setMore('error') }
   }
-  return <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!rows.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{rows.map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{flow.flowType.replace('_', ' ')}</span><b>{flowAmount(flow.amount, flow.asset)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div>
+  return <section className="panel recent"><div className="panelHead"><div><h2>Recent activity</h2><p>Latest external flows</p></div><a className="ghost" href={analytics.explorerAccount || `https://solscan.io/account/${analytics.programId || ''}`} target="_blank" rel="noreferrer">{analytics.chain === 'arbitrum' ? 'Arbiscan' : analytics.chain === 'near' ? 'NearBlocks' : 'Solscan'} <ArrowUpRight /></a></div><div className="table"><div className="tr th"><span>Time</span><span>Participant</span><span>Type</span><span>Amount</span><span>Transaction</span></div>{!rows.length && <div className="empty">{loading ? 'Loading stored data…' : 'No external flows in this window'}</div>}{rows.map((flow) => <div className="tr" key={flow.id}><span>{age(flow.timestamp)}</span><code>{short(flow.participant)}</code><span className={`direction ${flow.flowType}`}><i />{ci ? CI_TYPE_NAMES[flow.flowType] : flow.flowType.replace('_', ' ')}</span><b>{flowAmount(flow.amount, flow.asset)} {flow.asset}{flow.counterAsset ? ` → ${flow.counterAsset}` : ''}{ci && flow.network ? <small className="flowNetwork"> {flow.network}</small> : null}</b><a className="tx" href={`${analytics.explorerTransaction || 'https://solscan.io/tx/'}${flow.signature}`} target="_blank" rel="noreferrer">{short(flow.signature)} <ExternalLink /></a></div>)}</div>
     {rows.length >= RECENT_SHOWN && more !== 'end' && <div className="loadMore"><button type="button" className="ghost" onClick={loadMore} disabled={more === 'loading'}>{more === 'loading' ? 'Loading…' : more === 'error' ? 'Could not load, try again' : 'Load more'}</button></div>}
   </section>
 }
@@ -1741,22 +1749,28 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
   const [range, setRange] = useState('30D')
   const [token, setToken] = useState('USDC')
   // Privacy leads; the flow charts are for whoever wants the raw activity.
-  // NEAR Confidential Intents is measured by its own service: privacy only, no dashboard flows.
+  // NEAR Confidential Intents is measured by the backend's `nearci` service,
+  // which also builds its Activity view: the CI Treasury's flows and balances.
   const ci = protocol === 'nearci'
   const traced = PRIVACY_POOLS.includes(protocol) || ci
   const [tab, setTab] = useState('privacy')
-  const view = ci ? 'privacy' : traced ? tab : 'activity'
+  const view = traced ? tab : 'activity'
+  const ranges = ci ? CI_RANGES : RANGES
+  const shownRange = ranges.includes(range) ? range : '30D'
+  const flowTypes = ci ? CI_FLOW_TYPES : FLOW_TYPES
+  // CI's privacy view reads its own endpoint, so its flows load only for Activity.
+  const wantsFlows = !ci || view === 'activity'
   const [analytics, setAnalytics] = useState(EMPTY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (ci) { setAnalytics(EMPTY); setError(''); setLoading(false); return undefined }
+    if (!wantsFlows) { setAnalytics(EMPTY); setError(''); setLoading(false); return undefined }
     const controller = new AbortController()
     async function load() {
       setLoading(true)
       try {
-        const response = await fetch(`/api/analytics?protocol=${protocol}&interval=${range.toLowerCase()}`, { signal: controller.signal })
+        const response = await fetch(`/api/analytics?protocol=${protocol}&interval=${shownRange.toLowerCase()}`, { signal: controller.signal })
         const result = await response.json()
         if (!response.ok) throw new Error(result.detail || 'Analytics request failed')
         setAnalytics(result); setError('')
@@ -1765,9 +1779,9 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     }
     load(); const timer = setInterval(load, 30_000)
     return () => { controller.abort(); clearInterval(timer) }
-  }, [protocol, range])
+  }, [protocol, shownRange, wantsFlows])
 
-  const data = useMemo(() => analytics.buckets.map((bucket) => ({ ...bucket, name: bucketLabel(bucket.timestamp, range) })), [analytics.buckets, range])
+  const data = useMemo(() => analytics.buckets.map((bucket) => ({ ...bucket, name: bucketLabel(bucket.timestamp, shownRange) })), [analytics.buckets, shownRange])
   const state = analytics.poolState || EMPTY.poolState
   const activity = analytics.activity || EMPTY.activity
   // Muted amber marks one bar per histogram: the most common flow size, and the
@@ -1784,21 +1798,21 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
     <div className="analyticsToolbar">
       <div className="viewTabs" role="tablist" aria-label="View">
         <button type="button" role="tab" aria-selected={view === 'privacy'} disabled={!traced} onClick={() => setTab('privacy')}>Privacy{!traced && <em>Soon</em>}</button>
-        <button type="button" role="tab" aria-selected={view === 'activity'} disabled={ci} onClick={() => setTab('activity')}>Activity</button>
+        <button type="button" role="tab" aria-selected={view === 'activity'} onClick={() => setTab('activity')}>Activity</button>
       </div>
-      {!ci && <div className="ranges">{['90D','30D','1D','6H','1H'].map((item) => <button className={range === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>}
+      {wantsFlows && <div className="ranges">{ranges.map((item) => <button className={shownRange === item ? 'on' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>}
     </div>
     {error && <section className="notice error"><CircleAlert /><b className="indexState error">Error</b><span>{error}</span></section>}
     <EstimateAnalytics estimate={selectedEstimate} />
 
     {view === 'privacy' ? (ci ? <NearCiPrivacy /> : <PoolPrivacy protocol={protocol} range={range} />) : <>
-    <div className="sectionTitle"><h2>Current balances</h2><strong>{money(state.totalUsd)} TVL</strong></div>
+    <div className="sectionTitle"><h2>{ci ? <>Treasury balances <small>SOL, USDC and USDT on every chain</small></> : 'Current balances'}</h2><strong>{money(state.totalUsd)} TVL</strong></div>
     <section className="poolGrid">{ASSETS.map((asset) => <Metric key={asset} label={`${asset} balance`} value={`${compact(state.balances?.[asset], asset === 'SOL' ? 4 : 2)} ${asset}`} note={money(state.usd?.[asset])} />)}</section>
 
     <section className="panel chartPanel">
-      <div className="panelHead"><div><h2>External flow</h2><p>{token} pool movements</p></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div></div></div>
-      <div className="flowSummary">{FLOW_TYPES.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[range]}</small></div>
-      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} interval={range === '90D' ? 14 : range === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent-muted)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{FLOW_TYPES.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 1.75 : 1.4} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
+      <div className="panelHead"><div><h2>External flow</h2><p>{ci ? `${token} in and out of the CI Treasury` : `${token} pool movements`}</p></div><div className="controls"><div className="tokenTabs">{ASSETS.map((item) => <button className={token === item ? 'on' : ''} onClick={() => setToken(item)} key={item}>{item}</button>)}</div></div></div>
+      <div className="flowSummary">{flowTypes.map(([key, label, color]) => <div key={key}><i style={{ background: color }} /><span>{label}</span><b>{compact(analytics.externalFlows?.[key]?.[token], token === 'SOL' ? 4 : 2)} {token}</b></div>)}<small>{WINDOW_LABELS[shownRange]}</small></div>
+      <div className="chart"><ResponsiveContainer><AreaChart data={data}><CartesianGrid vertical={false} stroke="#1A1A1A" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} interval={shownRange === '90D' ? 14 : shownRange === '30D' ? 4 : 3} /><YAxis yAxisId="flow" axisLine={false} tickLine={false} tick={{ fill:'#6E6E6E', fontSize:11 }} tickFormatter={compact} width={64} /><YAxis yAxisId="pool" orientation="right" axisLine={false} tickLine={false} tick={{ fill:'var(--accent-muted)', fontSize:11 }} tickFormatter={compact} width={64} /><Tooltip content={<FlowTooltip token={token} />} />{flowTypes.map(([key, label, color, suffix, dash]) => <Area key={key} yAxisId="flow" type="monotone" dataKey={`${token}${suffix}`} name={label} stroke={color} strokeDasharray={dash} fill="transparent" strokeWidth={key === 'deposits' ? 1.75 : 1.4} />)}<Line yAxisId="pool" type="monotone" dataKey={`${token}Pool`} name="Pool balance" stroke="var(--accent)" strokeWidth={2} dot={false} /></AreaChart></ResponsiveContainer></div>
     </section>
 
     <div className="sectionTitle activityTitle"><h2>Behavior inside this window</h2><span>{analytics.flowMethod}</span></div>
@@ -1808,7 +1822,7 @@ function ProtocolDashboard({ protocol, selectedEstimate, onSelectProtocol, onLau
       <section className="panel distribution"><div className="panelHead"><div><h2>Time distribution</h2><p>Transactions by UTC hour, current hour marked</p></div></div><div className="smallChart"><ResponsiveContainer><BarChart data={hourBuckets}><XAxis dataKey="hour" tick={{ fill:'#6E6E6E', fontSize:10 }} axisLine={false} tickLine={false} interval={3} /><YAxis hide /><Bar dataKey="count" radius={[2,2,0,0]}>{hourBuckets.map((bucket) => <Cell key={bucket.hour} fill={bucket.hour === utcHour ? 'var(--accent-muted)' : '#4A4A4A'} />)}</Bar></BarChart></ResponsiveContainer></div></section>
     </div>
 
-    <RecentActivity key={`${protocol}:${range}`} analytics={analytics} loading={loading} protocol={protocol} />
+    <RecentActivity key={`${protocol}:${shownRange}`} analytics={analytics} loading={loading} protocol={protocol} />
     </>}
     {ci ? <footer>Collected from FastNEAR by DarkSol’s nearci service <span>•</span> CI Treasury on intents.near <span>•</span> {PROTOCOLS.nearci.fees.policyLabel} ({PROTOCOLS.nearci.fees.policyDetail})</footer>
       : <footer>Postgres analytics <span>•</span> Indexed by the separate {analytics.indexedVia === 'alchemy' ? 'Alchemy / Arbitrum' : 'Helius / Solana'} backend <span>•</span> {analytics.feePolicy?.label} ({analytics.feePolicy?.detail})</footer>}
