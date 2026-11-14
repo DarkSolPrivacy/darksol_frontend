@@ -9,7 +9,7 @@ import { KEY_MESSAGE_TEXT, accountFromSeed, loginPayload, seedFromSignature, ver
 import { TOKENS, TREASURY, checkUnshieldIntent } from '../protocols/nearci/intent.js'
 import { PROTOCOLS, listProtocols } from '../protocols/registry.js'
 import { validateManifest } from '../protocols/schema.js'
-import { QUOTE_POOLS, SOON_POOLS, poolFee, sendOptions } from '../src/send-options.js'
+import { CONFIDENTIAL_POOLS, DEFAULT_SETTINGS, QUOTE_POOLS, effectiveSettings, poolFee, sendOptions, simulationRequest } from '../src/send-options.js'
 
 const signature = Uint8Array.from({ length: 64 }, (_, i) => (i * 37 + 11) % 256)
 
@@ -71,11 +71,12 @@ test('an unshield signs only the transfer its quote described', () => {
   assert.throws(() => checkUnshieldIntent('not json', expect), /not JSON/)
 })
 
-test('CI is registered but planned: shown as Soon, never ranked, even when the quote measures it', () => {
+test('CI is registered but planned: off by default, ranked only with Confidential transactions on in settings', () => {
   assert.deepEqual(validateManifest(PROTOCOLS.nearci), { valid: true, errors: [] })
   assert.equal(PROTOCOLS.nearci.status, 'planned')
   assert.ok(!listProtocols().some(({ id }) => id === 'nearci'), 'not a live pool: no balance read, no pool lists')
-  assert.deepEqual(SOON_POOLS, ['nearci'])
+  assert.deepEqual(CONFIDENTIAL_POOLS, ['nearci'])
+  assert.equal(DEFAULT_SETTINGS.confidential, false)
   assert.ok(!QUOTE_POOLS.includes('nearci'))
   const prices = { USDC: 1, USDT: 1, SOL: 100 }
   assert.equal(poolFee('nearci', 'USDC', 25_000_000n, prices), 10_005n)
@@ -87,6 +88,25 @@ test('CI is registered but planned: shown as Soon, never ranked, even when the q
       nearci: { cells: [cell('exact', 'now', 300, 300), cell('keep', '6h', 270, 90), cell('keep', '24h', 270, 3), cell('balance', 'now', 300, 0)], popular: [{ amount: '30000000', deposits: 9 }] },
     },
   }
-  // The backend still returns a nearci pool; the page ignores it.
-  assert.deepEqual(sendOptions({ quote, asset: 'USDC', raw: 25_000_000n, prices, shielded: { nearci: 100_000_000n } }).options, [])
+  // Off, the default: the quote's nearci pool is ignored, also when an older stored setting had the pool on.
+  const input = { quote, asset: 'USDC', raw: 25_000_000n, prices, shielded: { nearci: 100_000_000n } }
+  assert.deepEqual(sendOptions(input).options, [])
+  assert.deepEqual(sendOptions({ ...input, settings: { pools: { nearci: true } } }).options, [])
+  assert.equal(effectiveSettings({ mode: 'custom', pools: { nearci: true } }).pools.nearci, false)
+  // On: ranked like any pool, in Auto and in Custom.
+  for (const mode of ['auto', 'custom']) {
+    const result = sendOptions({ ...input, settings: { mode, confidential: true } })
+    const ids = result.options.map((option) => option.id)
+    assert.deepEqual(ids.sort(), ['nearci:balance:now', 'nearci:later:24h', 'nearci:later:6h', 'nearci:now:now'].sort())
+    assert.ok(result.options.every((option) => option.executable))
+    const later = result.options.find((option) => option.id === 'nearci:later:24h')
+    // Keep copies the popular 30 USDC; the fee is 1Click's plus the deposit token account rent.
+    assert.deepEqual([later.deposit, later.kept, later.fee, later.level], [30_000_000n, 5_000_000n, 10_005n, 5])
+    assert.ok(Math.abs(later.feeUsd - (0.010005 + 0.0014934 * 100)) < 1e-9)
+    assert.equal(result.options.find((option) => option.id === 'nearci:now:now').level, 1)
+    assert.equal(result.settings.confidential, true)
+  }
+  // The simulation is asked for the confidential pools only when it is on, and the two requests differ.
+  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: {} }), { asset: 'USDC', amount: '25.000000', maxWait: '24h' })
+  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: { confidential: true } }), { asset: 'USDC', amount: '25.000000', maxWait: '24h', confidential: true })
 })

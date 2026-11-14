@@ -16,10 +16,12 @@ import { TOKEN_DECIMALS, withdrawalFor } from '../protocols/shared/units.js'
 import { PAYMENT_ASSETS } from './payment-assets.js'
 
 export const QUOTE_POOLS = Object.freeze(['privacycash', 'cloakc', 'umbrav2'])
-// Shown under the options, greyed out as "Soon", never ranked: NEAR Confidential
+// Ranked only when the user turns on "Confidential transactions" in settings,
+// off by default, and not shown at all until then: NEAR Confidential
 // Intents hides a payment from the public but not from 1Click or the validators
-// of NEAR's private chain (protocols/nearci/manifest.js).
-export const SOON_POOLS = Object.freeze(['nearci'])
+// of NEAR's private chain (protocols/nearci/manifest.js). Off also spares its
+// simulation, which the server then skips (simulationRequest).
+export const CONFIDENTIAL_POOLS = Object.freeze(['nearci'])
 // A cell with fewer sends says too little to offer the option.
 export const MIN_SENDS = 10
 export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h': 86_400 })
@@ -28,18 +30,26 @@ export const WAITS = Object.freeze({ now: 0, '6h': 21_600, '12h': 43_200, '24h':
 const LATER_WAITS = ['6h', '12h', '24h']
 // "Really private": the step a send must reach to be offered as the fastest private one.
 export const PRIVATE_LEVEL = 4
+// Below this step on every option the suggestion looks further (weakOffer).
+export const WEAK_LEVEL = 2
 // k per priority. Fees ranks on the fee alone, privacy breaking ties.
 const WEIGHT = { auto: 1.5, privacy: 0.5, time: 1.5 }
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  mode: 'auto', priority: 'privacy', maxWait: '24h', keepNothing: false, remind: true,
+  mode: 'auto', priority: 'privacy', maxWait: '24h', keepNothing: false, remind: true, confidential: false,
   pools: Object.freeze({ privacycash: true, cloakc: true, umbrav2: true }),
 })
 
-/** What the ranking uses: Auto is privacy first, a day's wait and every pool; the two switches always apply. */
+/**
+ * What the ranking uses: Auto is privacy first, a day's wait and every pool; the
+ * switches always apply. The confidential pools follow their own switch in
+ * either mode, whatever an older stored `pools` says.
+ */
 export function effectiveSettings(settings = DEFAULT_SETTINGS) {
   const base = { ...DEFAULT_SETTINGS, ...settings, pools: { ...DEFAULT_SETTINGS.pools, ...settings?.pools } }
-  return base.mode === 'custom' ? base : { ...base, priority: 'auto', maxWait: '24h', pools: { ...DEFAULT_SETTINGS.pools } }
+  const chosen = base.mode === 'custom' ? base : { ...base, priority: 'auto', maxWait: '24h', pools: { ...DEFAULT_SETTINGS.pools } }
+  const confidential = chosen.confidential === true
+  return { ...chosen, confidential, pools: { ...chosen.pools, ...Object.fromEntries(CONFIDENTIAL_POOLS.map((id) => [id, confidential])) } }
 }
 
 // Include every setting that changes the simulation in its request identity.
@@ -50,8 +60,10 @@ export function simulationRequest({ asset, raw, settings, deposit = null }) {
     return `${value / scale}.${String(value % scale).padStart(TOKEN_DECIMALS[asset], '0')}`
   }
   if (!(raw > 0n)) return null
-  return { asset, amount: decimal(raw), maxWait: effectiveSettings(settings).maxWait,
-    ...(deposit !== null && { deposit: decimal(deposit) }) }
+  const chosen = effectiveSettings(settings)
+  // `confidential`: also simulate the confidential pools, which the server skips without it.
+  return { asset, amount: decimal(raw), maxWait: chosen.maxWait,
+    ...(deposit !== null && { deposit: decimal(deposit) }), ...(chosen.confidential && { confidential: true }) }
 }
 
 // Never below 1: even a send the red team traced every time leaves no proof that
@@ -83,9 +95,13 @@ export function poolFee(protocol, asset, raw, prices) {
   return variable + fixed
 }
 
-/** The deposit a keep option copies: the most frequent recent amount in [raw, 1.5 raw], or null. */
+// The largest top-up deposit, as a multiple of the payment: the backend measures
+// none above it (MAX_TOP_UP in darksol-backend server/forensics/privacy-quote.js; 1.5 until 2026-11-13).
+const MAX_TOP_UP = 2n
+
+/** The deposit a keep option copies: the most frequent recent amount in [raw, 2 raw], or null. */
 export function popularDeposit(popular = [], raw) {
-  const most = (raw * 3n) / 2n
+  const most = raw * MAX_TOP_UP
   const hit = popular.find(({ amount }) => BigInt(amount) >= raw && BigInt(amount) <= most)
   return hit ? BigInt(hit.amount) : null
 }
@@ -178,7 +194,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
   const bucket = bucketFor(usd, quote.buckets)
   const options = []
   let balanceHint = null
-  for (const protocol of QUOTE_POOLS) {
+  for (const protocol of [...QUOTE_POOLS, ...(chosen.confidential ? CONFIDENTIAL_POOLS : [])]) {
     const pool = quote.pools[protocol]
     const manifest = PROTOCOLS[protocol]
     const send = manifest?.send
@@ -199,7 +215,8 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
     const add = (kind, wait, deposit, extra) => {
       const privacy = privacyOf(pool, strategyOf(pool, kind, recipients, deposit, raw), wait, bucket, deposit)
       if (!privacy) return
-      const exact = fixed === null && kind !== 'balance' && deposit > raw && recipients === 1
+      // Not the confidential pools: NEAR's send pays the amount less 1Click's fee (protocols/nearci/browser.js).
+      const exact = fixed === null && kind !== 'balance' && deposit > raw && recipients === 1 && !CONFIDENTIAL_POOLS.includes(protocol)
       const optionFee = exact ? payout - raw : fee
       const cost = toNumber(optionFee, asset) * prices[asset] + (kind === 'balance' ? 0 : depositUsd)
       // A pool that paused deposits can still pay from its shielded balance.
@@ -224,7 +241,7 @@ export function sendOptions({ quote, asset, raw, prices, shielded = {}, settings
       if (recipients > 1) return raw
       const level = (cell) => meterLevel(Math.round(100 * (1 - cell.traced / cell.sends)))
       const candidates = pool.cells.filter((cell) => cell.bucket === bucket && cell.strategy === 'keep' && cell.wait === wait
-        && cell.sends >= MIN_SENDS && cell.deposit && BigInt(cell.deposit) > payout && BigInt(cell.deposit) <= raw * 3n / 2n)
+        && cell.sends >= MIN_SENDS && cell.deposit && BigInt(cell.deposit) > payout && BigInt(cell.deposit) <= raw * MAX_TOP_UP)
         .sort((a, b) => level(b) - level(a) || Number(BigInt(a.deposit) - BigInt(b.deposit)))
       return candidates.length ? BigInt(candidates[0].deposit) : raw
     }
@@ -278,6 +295,27 @@ export function shieldMoreOffer(plain, more) {
     && option.waitSeconds <= WAITS[more.settings.maxWait] && option.kept > 0n && option.level > base.level)
     .sort((a, b) => b.level - a.level || a.waitSeconds - b.waitSeconds || a.feeUsd - b.feeUsd
       || Number(a.kept - b.kept) || b.score - a.score)[0] ?? null
+}
+
+const open = (result) => result.options.filter((option) => option.executable && result.settings.pools[option.protocol])
+/** Every option the settings allow is below WEAK_LEVEL: likely traced whichever is picked. */
+export const allWeak = (result) => Boolean(result?.suggested) && !result.balanceOnly && !open(result).some((option) => option.level >= WEAK_LEVEL)
+
+/**
+ * When every option is weak: the one closest to what was typed that reaches
+ * WEAK_LEVEL, with the result that lists it, or null. It looks past the
+ * settings' longest wait, up to 24 h, with and without a common deposit;
+ * `input` is sendOptions' own, its quote measured up to 24 h. Closest: the wait
+ * as a share of a day plus the amount kept as a share of the payment, so 12 h
+ * and a deposit of 10 to pay 5 beats 6 h and a deposit of 500. Equally close,
+ * the more private, then the cheaper.
+ */
+export function weakOffer(plain, input) {
+  if (!allWeak(plain)) return null
+  const far = ({ option }) => option.waitSeconds / WAITS['24h'] + Number(option.kept) / Number(input.raw)
+  return [false, true].map((topUp) => sendOptions({ ...input, settings: { ...input.settings, maxWait: '24h' }, topUp }))
+    .flatMap((result) => result ? open(result).filter((option) => option.level >= WEAK_LEVEL).map((option) => ({ option, result })) : [])
+    .sort((a, b) => far(a) - far(b) || b.option.level - a.option.level || a.option.feeUsd - b.option.feeUsd)[0] ?? null
 }
 
 function compare(priority) {

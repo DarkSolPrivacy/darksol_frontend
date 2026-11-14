@@ -1152,7 +1152,7 @@ label.privRow { cursor: pointer; }
 /* The real options list with made-up numbers: only the pools and their bars. */
 .tourExample { margin: 0 0 14px; }
 .tourExample .privOptions { margin: 0; }
-.tourExample :is(.privTiles, .privGroup.soon) { display: none; }
+.tourExample .privTiles { display: none; }
 .tourFoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tourFoot > div { display: flex; gap: 8px; }
 .tourFoot button { height: var(--control-md); padding: 0 12px; font-size: 13px; }
@@ -1933,11 +1933,6 @@ label.privRow { cursor: pointer; }
 .privMore:not(.on) .privMoreArrow ~ .privMoreWait { color: var(--text-tertiary); }
 .privMore:not(.on) .privMeter:not(:first-child) i.on { background: var(--text-disabled); }
 .privMore.on > span { color: var(--text-primary); }
-.privNote { display: block; line-height: 1.45; }
-.privGroup.soon .privGroupHead { cursor: default; opacity: 0.45; }
-.privGroup.soon .privGroupHead:hover { background: transparent; }
-.privGroup.soon img { filter: grayscale(1); }
-.privOptionLabel em.privSoon { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border-default); background: transparent; color: var(--text-secondary); font-style: normal; text-transform: uppercase; letter-spacing: 0.04em; }
 .ciSends { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ciSends th, .ciSends td { padding: 8px 6px; text-align: right; border-bottom: 1px solid var(--border-default); white-space: nowrap; }
 .ciSends thead th { color: var(--text-secondary); font-weight: 500; }
