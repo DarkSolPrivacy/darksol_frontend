@@ -1,6 +1,7 @@
 // Product counters: a fixed event name and a few fixed categories, added to a
-// per-day counter. Never an amount, address, signature, invoice, wallet key,
-// visitor ID or error text, and nothing that links one event to another.
+// per-day counter (the onboarding tour also to a per-hour one). Never an amount,
+// address, signature, invoice, wallet key, visitor ID or error text, and
+// nothing that links one event to another.
 const SAFE = /^[a-z0-9][a-z0-9_]{0,31}$/
 const sent = new Set()
 

@@ -1478,6 +1478,7 @@ function Onboarding({ wallet, ready }) {
     const present = TOUR.filter((item) => document.querySelector(item.target))
     if (!present.length) return
     setSteps(present); setStep(0); dialog.current?.showModal()
+    track('onboarding_shown', {}, { once: true })
   }, [wallet, ready, seen])
 
   // Keep the spotlight on its control through scrolling and resizing.
