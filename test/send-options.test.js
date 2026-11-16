@@ -428,10 +428,11 @@ test('every option below 2 of 5: the suggestion is the closest option that reach
   assert.equal(fine.offer, null)
 })
 
-test('simulation request identity changes with the wait limit and the actual manual deposit', () => {
+test('simulation request identity changes with the wait limit, recipient count and actual manual deposit', () => {
   const input = { asset: 'USDC', raw: USDC(28), settings: { mode: 'custom', maxWait: '6h' } }
-  assert.deepEqual(simulationRequest(input), { asset: 'USDC', amount: '28.000000', maxWait: '6h' })
-  assert.deepEqual(simulationRequest({ ...input, deposit: USDC(30) }), { asset: 'USDC', amount: '28.000000', maxWait: '6h', deposit: '30.000000' })
+  assert.deepEqual(simulationRequest(input), { asset: 'USDC', amount: '28.000000', maxWait: '6h', recipients: 1 })
+  assert.deepEqual(simulationRequest({ ...input, deposit: USDC(30) }), { asset: 'USDC', amount: '28.000000', maxWait: '6h', recipients: 1, deposit: '30.000000' })
+  assert.deepEqual(simulationRequest({ ...input, recipients: 2 }), { asset: 'USDC', amount: '28.000000', maxWait: '6h', recipients: 2 })
   assert.notEqual(JSON.stringify(simulationRequest(input)), JSON.stringify(simulationRequest({ ...input, settings: { mode: 'custom', maxWait: '24h' } })))
   assert.equal(simulationRequest({ ...input, raw: 0n }), null)
 })

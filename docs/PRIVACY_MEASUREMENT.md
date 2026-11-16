@@ -25,17 +25,22 @@ every trial. Tests compare this approximation with full single-send replays. The
 does not change how intervening real withdrawals were linked in the recorded history; later real
 withdrawals that would link back to the hypothetical send are also omitted.
 
-## Two measurement sources
+## Measurement sources
 
 | Source | Coverage and use |
 | --- | --- |
 | `GET /api/privacy-quote` | Daily measurements for broad USD amount buckets over 20 days. Appears first and remains the fallback when exact simulation is unavailable. Full replays contain batches of synthetic sends. |
-| `POST /api/privacy-sim` | Privacy Cash and Cloak: 300 trials per scenario for the entered withdrawal budget over up to 90 days. Replaces their bucket measurements after typing pauses. |
+| `GET /api/privacy-analysis` | Public prepared Privacy Cash/Cloak measurements: 300 trials per scenario over up to 90 days, for a bounded set of exact amounts and deposit candidates. Amount/wait changes are local lookups. |
+| `POST /api/privacy-sim` | Legacy exact-amount endpoint for older clients and diagnostics; the send page no longer calls it. |
 | Umbra v2 | Its shared tree is not supported by the exact-amount simulator yet; the page retains its bucket quote. |
 
-The simulation request contains the token, withdrawal budget, maximum wait and optional manual deposit,
-without sender or recipient addresses. The service does not log or retain these amounts; responses
-are marked `no-store`.
+The send page fetches the prepared table by token, without the withdrawal budget or addresses.
+It never assigns an exact measurement to a nearby amount or an unmeasured manual deposit.
+Uncovered amounts, unsupported pools and expired tables keep the broad bucket estimate; meter
+tooltips/accessibility labels identify these as estimates from similar amounts. The worker prepares
+measurements independently of visitors, coalescing updates on a five-minute schedule. API requests
+only read complete generations. See the backend's [background analysis guide](../../darksol-backend/docs/PRIVACY_ANALYSIS.md)
+for coverage, freshness, checkpoints, the streaming-agent interface and rollout requirements.
 
 ## Score and bars
 
@@ -75,10 +80,11 @@ a larger outright payment's score cannot be copied to a smaller withdrawal.
 | 28 USDC | 30 USDC | 2 USDC | 28 minus withdrawal fees |
 | 90 USDC | 100 USDC | 10 USDC | 90 minus withdrawal fees |
 
-Each trial uses the same deposit and withdrawal budget, including fees. The simulator tests up to three
-common deposits above the budget and at most 1.5 times it, seen at least twice in the latest seven days
-of recorded history. It includes the smallest eligible deposit, then the most frequent candidates.
-A manually chosen deposit replaces this search.
+Each manual trial uses the same deposit and gross withdrawal budget, including fees. Automatic
+top-ups instead pay the requested amount net and take fees from the shielded remainder. The simulator
+selects the nearest common deposit at least 5% above the net payout plus its fee and at most twice
+the requested amount, seen at least twice over the simulated 90-day window. Prepared automatic and
+manual measurements are kept separate; an arbitrary manual deposit may be outside table coverage.
 
 The frontend selects a candidate separately for each permitted wait, preferring the smaller remainder
 at the same privacy level. It offers a top-up when it improves the displayed level over the ordinary
@@ -94,8 +100,8 @@ selects another route. Neither 30 nor 100 is a hardcoded private amount.
 | 12 h | Now, 6 h, 12 h |
 | 24 h | Now, 6 h, 12 h, 24 h |
 
-Auto uses a 24 h maximum; switch to Custom to change it. The backend filters trial loops before they
-run. The frontend also removes longer options, including top-up suggestions. The daily quote's
+Auto uses a 24 h maximum; switch to Custom to change it. Prepared tables contain all four offered waits;
+the frontend selects the permitted ones locally, including top-up suggestions. The daily quote's
 30-minute measurement is not run or offered by this on-demand flow.
 
 “Now” models a withdrawal about one minute after depositing. Allowed waits use the same historical

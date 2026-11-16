@@ -107,6 +107,6 @@ test('CI is registered but planned: off by default, ranked only with Confidentia
     assert.equal(result.settings.confidential, true)
   }
   // The simulation is asked for the confidential pools only when it is on, and the two requests differ.
-  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: {} }), { asset: 'USDC', amount: '25.000000', maxWait: '24h' })
-  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: { confidential: true } }), { asset: 'USDC', amount: '25.000000', maxWait: '24h', confidential: true })
+  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: {} }), { asset: 'USDC', amount: '25.000000', maxWait: '24h', recipients: 1 })
+  assert.deepEqual(simulationRequest({ asset: 'USDC', raw: 25_000_000n, settings: { confidential: true } }), { asset: 'USDC', amount: '25.000000', maxWait: '24h', recipients: 1, confidential: true })
 })

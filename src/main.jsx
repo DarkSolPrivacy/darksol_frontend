@@ -24,6 +24,7 @@ import { NO_SOL_MESSAGE, explainFailure } from '../protocols/shared/network.js'
 import { loadBrowserAdapter } from '../protocols/browser.js'
 import { cancelScheduled, loadScheduled, saveScheduled, scheduledStatus } from './scheduled-send.js'
 import { CONFIDENTIAL_POOLS, allWeak, bucketFor, measuredPrivacy, sendOptions, shieldMoreOffer, simulationRequest, weakOffer, withSimulation } from './send-options.js'
+import { useSimulation } from './use-privacy-analysis.js'
 import { START, awaitsWallet, nextProgress } from './send-progress.js'
 import { loadPending, loadSettings, savePending, saveSettings } from './send-settings.js'
 import { preloadRoute } from './preload.js'
@@ -541,29 +542,6 @@ function RouteDetails({ estimate, alternatives, asset, amount, delayMinutes, onD
   </section>
 }
 
-// `settings`: the send settings, which the app keeps and edits from the top bar.
-// The privacy of one exact amount, simulated by the server once typing pauses.
-// `key` is the request body: the amount goes in a POST, never a URL, and the
-// server neither logs nor stores it. Returns { data } once it answered for this
-// key; data is null on a 404 (not deployed), 503 (busy) or failure, which keeps the quote.
-function useSimulation(key) {
-  const [held, setHeld] = useState(null)
-  useEffect(() => {
-    if (!key) return undefined
-    const controller = new AbortController()
-    const { asset } = JSON.parse(key)
-    const settle = (data) => { if (!controller.signal.aborted) setHeld({ key, data: data?.asset === asset ? data : null }) }
-    const timer = setTimeout(() => fetch('/api/privacy-sim', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: key,
-    })
-      .then((response) => response.ok ? response.json() : null)
-      .then(settle, () => settle(null)), 400)
-    return () => { clearTimeout(timer); controller.abort() }
-  }, [key])
-  return held?.key === key ? held : null
-}
-
 function PrivacyHome({ walletSession, settings }) {
   const { wallet, connecting, connectWallet: connectSession } = walletSession
   const [asset, setAsset] = useState('USDC')
@@ -651,8 +629,8 @@ function PrivacyHome({ walletSession, settings }) {
   // The amount the options measure: what is sent, or for shield only all of it.
   const simRaw = shieldOnly ? totalRaw : sentRaw
   const simKey = !isSwap && !isBridge && simRaw > 0n && (!keeping || (totalRaw > simRaw))
-    ? JSON.stringify(simulationRequest({ asset, raw: simRaw, settings, deposit: keeping ? totalRaw : null })) : null
-  const sim = useSimulation(simKey)
+    ? JSON.stringify(simulationRequest({ asset, raw: simRaw, settings, deposit: keeping ? totalRaw : null, recipients: receiverCount })) : null
+  const sim = useSimulation(simKey, !isSwap && !isBridge ? asset : null)
   const keepError = !keeping ? '' : keepRaw === null ? 'Enter a valid amount to keep shielded'
     : !keepRaw ? 'Enter how much to keep shielded' : sentRaw !== null && sentRaw <= 0n ? 'Keep less than the full amount' : ''
   const receiverRaws = receiverAmounts.map((value) => rawTokenAmount(value, asset))
@@ -798,7 +776,7 @@ function PrivacyHome({ walletSession, settings }) {
     requestSequence.current += 1
     setError('')
     // A shield-only deposit leaves the pool for no one, so there is nothing to score.
-    if (!formValid || shieldOnly) { setLoading(false); return undefined }
+    if (!formValid || shieldOnly || optionsMode) { setLoading(false); return undefined }
     const controller = new AbortController()
     setLoading(true)
     // Scored on what leaves the pool: a kept part never reaches a recipient.
@@ -811,7 +789,7 @@ function PrivacyHome({ walletSession, settings }) {
       privacyTarget,
     }, controller.signal), 350)
     return () => { clearTimeout(timeout); controller.abort() }
-  }, [asset, plannedDestinationAsset, sentAmount, strategy, receiverAmounts, privacyTarget, formValid, shieldOnly])
+  }, [asset, plannedDestinationAsset, sentAmount, strategy, receiverAmounts, privacyTarget, formValid, shieldOnly, optionsMode])
 
   // `raw` split across `count` recipients, the last taking the remainder.
   const shares = (raw, count) => {
@@ -1168,17 +1146,15 @@ function PrivacyHome({ walletSession, settings }) {
   }, [optionsMode, keepError, sentRaw, amountQuote, asset, prices, settings, shielded.pools, receiverAmounts, receiverCount, keeping, payingShielded, totalRaw])
   // Every option below 2 of 5: the suggestion looks further, for the option
   // closest to what was typed that reaches it. First past the settings' longest
-  // wait, which takes the same amount simulated up to 24 h; a failed request
-  // falls back on the simulation already here.
+  // wait. All waits are already in the same prepared table.
   const weak = allWeak(plainResult) && !keeping
   const wideKey = weak && simKey && plainResult.settings.maxWait !== '24h' ? JSON.stringify({ ...JSON.parse(simKey), maxWait: '24h' }) : null
   const wideSim = useSimulation(wideKey)
   const wideQuote = useMemo(() => !wideKey ? amountQuote : wideSim && (wideSim.data ? quoteWith(wideSim.data) : amountQuote),
     [wideKey, wideSim, amountQuote])
   const further = useMemo(() => weak && wideQuote ? weakOffer(plainResult, { ...optionInput, quote: wideQuote }) : null, [weak, plainResult, wideQuote])
-  // The suggestion waits for this amount's simulation (answered or failed): the
-  // quote's size bucket often says otherwise, and a card that shows one
-  // suggestion and then another a few seconds later reads as a glitch.
+  // Resolve the prepared table before offering a top-up. Once loaded, every
+  // amount and wait is a local lookup, including an explicit coverage miss.
   const measuredHere = !simKey || Boolean(sim)
   const moreOffer = !measuredHere || (weak && !wideQuote) ? null : further?.option ?? shieldMoreOffer(plainResult, moreResult)
   const moreOn = shieldMore && Boolean(moreOffer)
