@@ -27,6 +27,23 @@ test('a manual gross deposit uses its own measured cells and an unprepared depos
   for (const deposit of ['31', '27', 'bad']) assert.equal(preparedSimulation(table, { ...request, deposit }, 1000), null)
 })
 
+test('the token table refreshes on every one-minute tick, however long its request took', async () => {
+  let clock = 0
+  const seen = []
+  const resource = createAnalysisResource({ now: () => clock, ttl: 60_000, fetcher: async (url) => {
+    seen.push(clock)
+    clock += 25 // the request takes 25 ms
+    return { ok: true, json: async () => table }
+  } })
+  await resource.load('USDC') // on mount; the page's setInterval starts now
+  clock = 60_000 // the first tick
+  await resource.load('USDC')
+  clock = 120_000
+  await resource.load('USDC')
+  // Counted from the answer, the first tick came 25 ms early and was skipped (seen in a browser, 2026-11-17).
+  assert.deepEqual(seen, [0, 60_000, 120_000])
+})
+
 test('shared resource fetches only the public token table and expires measurements after refresh failures', async () => {
   let clock = 1000, fail = false, seen = []
   const resource = createAnalysisResource({ now: () => clock, ttl: 500, fetcher: async (...args) => {

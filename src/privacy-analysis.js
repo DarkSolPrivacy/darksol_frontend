@@ -48,6 +48,11 @@ export function createAnalysisResource({ fetcher = (...args) => fetch(...args), 
       const held = entry(asset)
       if (held.inflight) return held.inflight
       if (held.loaded && now() - held.value.checkedAt < ttl) return Promise.resolve()
+      // The ttl counts from the request, not its answer: the page's one-minute
+      // timer starts with the request, so a ttl counted from the answer made
+      // every other tick a few milliseconds early and the table refreshed only
+      // every two minutes.
+      const requestedAt = now()
       held.inflight = (async () => {
         let data = held.value.data
         const controller = new AbortController()
@@ -61,7 +66,7 @@ export function createAnalysisResource({ fetcher = (...args) => fetch(...args), 
         } catch { /* Existing snapshots expire in preparedSimulation, even offline. */ }
         finally { clearTimeout(timeout) }
         held.loaded = true
-        held.value = { loading: false, data, checkedAt: now() }
+        held.value = { loading: false, data, checkedAt: requestedAt }
         for (const listener of held.listeners) listener()
       })().finally(() => { held.inflight = null })
       return held.inflight
