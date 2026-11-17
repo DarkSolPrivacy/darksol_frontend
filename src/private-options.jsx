@@ -30,7 +30,7 @@ const TRACE_WORDS = ['Larger than the pool: traced', 'Most likely traced', 'Ofte
 /** Privacy as 5 steps; how likely it is traced is in the label for screen readers and on hover. */
 export function Meter({ option, large = false }) {
   const level = option?.level ?? 0
-  const label = `Privacy ${level} of 5 · ${option ? TRACE_WORDS[level] : 'Not measured'}`
+  const label = `Privacy ${level} of 5 · ${option ? TRACE_WORDS[level] : 'Not measured'}${option ? option.simulated ? ' · Measured for this amount' : ' · Estimate from similar amounts' : ''}`
   return <span className={`privMeter ${meterTone(level)}${large ? ' large' : ''}`} role="img" aria-label={label} title={label}>
     {[1, 2, 3, 4, 5].map((step) => <i key={step} className={step <= level ? 'on' : ''} />)}
   </span>

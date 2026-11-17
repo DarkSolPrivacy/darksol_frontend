@@ -1,8 +1,8 @@
 // The ways to send this amount privately, and the one we suggest. Each option's
 // privacy is measured, not scored: the share of DarkSol sends like it that our
-// tracer linked to the sender. For this exact amount it comes from POST
-// /api/privacy-sim (darksol-backend docs/PRIVACY_SIM.md), good to ±6 points at
-// most (95% interval). Until that answers, or without it, it comes from the
+// tracer linked to the sender. Covered exact amounts use the public prepared
+// /api/privacy-analysis table (darksol-backend docs/PRIVACY_ANALYSIS.md).
+// Uncovered amounts, unavailable tables and unsupported pools use the
 // amount's size bucket in GET /api/privacy-quote (docs/PRIVACY_QUOTE.md), good
 // to about ±10. Pure: the page passes in the quote (merged by withSimulation),
 // prices, shielded balances and settings.
@@ -53,16 +53,17 @@ export function effectiveSettings(settings = DEFAULT_SETTINGS) {
 }
 
 // Include every setting that changes the simulation in its request identity.
-// A late response for another wait limit or manual deposit must never be used.
-export function simulationRequest({ asset, raw, settings, deposit = null }) {
+// Lookup identity includes wait limit, recipient count and manual deposit.
+export function simulationRequest({ asset, raw, settings, deposit = null, recipients = 1 }) {
   const decimal = (value) => {
     const scale = 10n ** BigInt(TOKEN_DECIMALS[asset])
     return `${value / scale}.${String(value % scale).padStart(TOKEN_DECIMALS[asset], '0')}`
   }
   if (!(raw > 0n)) return null
   const chosen = effectiveSettings(settings)
-  // `confidential`: also simulate the confidential pools, which the server skips without it.
-  return { asset, amount: decimal(raw), maxWait: chosen.maxWait,
+  // Recipients select compatible prepared scenarios. Keep the confidential
+  // preference in the identity for callers using the legacy simulation API.
+  return { asset, amount: decimal(raw), maxWait: chosen.maxWait, recipients,
     ...(deposit !== null && { deposit: decimal(deposit) }), ...(chosen.confidential && { confidential: true }) }
 }
 
@@ -114,8 +115,8 @@ export function bucketFor(usd, buckets) {
 }
 
 /**
- * The quote for this exact amount: each pool the simulation (POST
- * /api/privacy-sim) measured has its cells in `bucket`, the amount's bucket,
+ * The quote for this exact amount: each pool the prepared simulation
+ * measured has its cells in `bucket`, the amount's bucket,
  * replaced by the simulated ones, marked `simulated: { days, samples }`. Other
  * buckets, `popular` and the pools it lacks (Umbra v2, pools still loading)
  * stay as quoted. Without a quote, the simulation alone, with buckets [bucket].

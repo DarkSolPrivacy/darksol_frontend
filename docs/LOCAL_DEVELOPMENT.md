@@ -24,6 +24,9 @@ need a database connection.
 ## Frontend, API and simulator together
 
 The backend needs a populated indexed database, including forensic pool history and token prices.
+Apply backend migrations `0023_privacy_analysis.sql` and `0024_forensic_progress.sql` before running the background worker.
+Prepared measurements also require the indexer's `syncedThrough` watermark to be less than
+15 minutes old; a saved database without a running indexer will eventually fall back to estimates.
 An empty Postgres instance cannot produce privacy measurements. Configure the backend's Git-ignored
 `~/darksol-backend/.env` with real connection details, for example:
 
@@ -82,12 +85,17 @@ From another WSL terminal:
 ```bash
 curl --fail-with-body http://127.0.0.1:8787/api/health
 curl --fail-with-body http://127.0.0.1:8788/health
+curl --fail-with-body 'http://localhost:5173/api/privacy-analysis?asset=USDC'
 curl --fail-with-body http://localhost:5173/api/privacy-sim \
   -H 'Content-Type: application/json' \
   -d '{"asset":"USDC","amount":"28","maxWait":"6h","deposit":"30"}'
 ```
 
-The last request goes through Vite, checking the complete path to the local API. A ready Privacy Cash
+The public GET is the current send page's data source. It returns `privacy-analysis/1` and prepared
+`pools`; changing an amount uses this table locally. Inspect a pool's `coverage`, `entries` and
+`validUntil` to confirm the amount is prepared and current. An empty table uses the daily bucket estimate.
+
+The last POST is retained for simulator diagnostics and older clients. A ready Privacy Cash
 or Cloak response uses `model: "privacy-sim/2"`, with only `now` and `6h` in `waits`. Keep cells carry
 `deposit: "30000000"` (30 USDC in base units). Scores depend on the database; this example does not
 promise a particular privacy level.
