@@ -27,21 +27,21 @@ test('a manual gross deposit uses its own measured cells and an unprepared depos
   for (const deposit of ['31', '27', 'bad']) assert.equal(preparedSimulation(table, { ...request, deposit }, 1000), null)
 })
 
-test('the token table refreshes on every one-minute tick, however long its request took', async () => {
+test('the token table refreshes on every one-minute tick, however late a tick or long a request', async () => {
   let clock = 0
   const seen = []
-  const resource = createAnalysisResource({ now: () => clock, ttl: 60_000, fetcher: async (url) => {
+  const resource = createAnalysisResource({ now: () => clock, fetcher: async () => {
     seen.push(clock)
     clock += 25 // the request takes 25 ms
     return { ok: true, json: async () => table }
   } })
   await resource.load('USDC') // on mount; the page's setInterval starts now
-  clock = 60_000 // the first tick
-  await resource.load('USDC')
-  clock = 120_000
-  await resource.load('USDC')
-  // Counted from the answer, the first tick came 25 ms early and was skipped (seen in a browser, 2026-11-17).
-  assert.deepEqual(seen, [0, 60_000, 120_000])
+  // Ticks as Chrome fired them on 2026-11-17: on a fixed grid, one 3 ms late.
+  for (const tick of [60_003, 120_001, 180_000]) { clock = tick; await resource.load('USDC') }
+  assert.deepEqual(seen, [0, 60_003, 120_001, 180_000])
+  // Several hooks loading at once still share one request.
+  await Promise.all([resource.load('USDC'), resource.load('USDC')])
+  assert.equal(seen.length, 4)
 })
 
 test('shared resource fetches only the public token table and expires measurements after refresh failures', async () => {

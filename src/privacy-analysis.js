@@ -35,7 +35,11 @@ export function preparedSimulation(table, request, now = Date.now()) {
   return Object.keys(pools).length ? { asset: request.asset, model: 'privacy-sim/2', days: 90, samples: 300, pools } : null
 }
 
-export function createAnalysisResource({ fetcher = (...args) => fetch(...args), now = Date.now, ttl = 60_000 } = {}) {
+// `ttl` only stops several hooks of one page from fetching the same table at
+// once. It is shorter than the page's one-minute timer: Chrome keeps
+// setInterval ticks on a fixed grid, so a tick that fires a few ms late makes
+// the next one come a few ms short of a minute, and a 60 s ttl skipped it.
+export function createAnalysisResource({ fetcher = (...args) => fetch(...args), now = Date.now, ttl = 50_000 } = {}) {
   const assets = new Map()
   const entry = (asset) => {
     if (!assets.has(asset)) assets.set(asset, { value: { loading: true, data: null, checkedAt: 0 }, listeners: new Set(), inflight: null, loaded: false })
@@ -48,10 +52,7 @@ export function createAnalysisResource({ fetcher = (...args) => fetch(...args), 
       const held = entry(asset)
       if (held.inflight) return held.inflight
       if (held.loaded && now() - held.value.checkedAt < ttl) return Promise.resolve()
-      // The ttl counts from the request, not its answer: the page's one-minute
-      // timer starts with the request, so a ttl counted from the answer made
-      // every other tick a few milliseconds early and the table refreshed only
-      // every two minutes.
+      // Counted from the request, not its answer, like the page's timer.
       const requestedAt = now()
       held.inflight = (async () => {
         let data = held.value.data
