@@ -1120,7 +1120,8 @@ label.privRow { cursor: pointer; }
 .paymentDanger:hover:not(:disabled) { border-color: var(--negative); background: var(--negative-tint); }
 .walletPicker { width: min(380px, calc(100% - 32px)); }
 .walletChoices { display: grid; gap: 6px; margin: 14px 0 18px; }
-.walletChoices > button { height: 48px; justify-content: flex-start; gap: 12px; padding: 0 12px; font-size: 13px; }
+.walletPicker p + .walletChoices { margin-top: 0; }
+.walletChoices > button, .walletChoices > a { height: 48px; justify-content: flex-start; gap: 12px; padding: 0 12px; font-size: 13px; }
 .walletChoices img { width: 26px; height: 26px; border-radius: 6px; }
 
 /* SOL for a recipient's network fees: one amount, what it costs, where it comes from. */

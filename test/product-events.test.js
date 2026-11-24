@@ -25,6 +25,10 @@ test('events send a fixed name and safe categories only, without credentials or 
   assert.equal(requests.filter(({ url }) => url.includes('route_details_opened')).length, 1)
   track('send_started', { kind: 'send' }); track('send_started', { kind: 'send' })
   assert.equal(requests.filter(({ url }) => url.includes('send_started')).length, 2)
+  // Once per cause: a second no-wallet tap is not counted, another cause still is.
+  for (const reason of ['no_wallet', 'no_wallet']) track('wallet_connect_failed', { reason }, { once: reason })
+  track('wallet_connect_failed', { reason: 'rejected' })
+  assert.deepEqual(requests.filter(({ url }) => url.includes('wallet_connect_failed')).map(({ url }) => new URL(url, 'https://darksol.app').searchParams.get('reason')), ['no_wallet', 'rejected'])
 })
 
 test('events respect opt-outs, skip other hosts and cannot break the page', (t) => {
@@ -42,11 +46,20 @@ test('events respect opt-outs, skip other hosts and cannot break the page', (t) 
 })
 
 test('failures and wallets reduce to a few categories', () => {
-  for (const [message, reason] of [['Install a Solana wallet such as Phantom or Solflare', 'no_wallet'], ['User rejected the request.', 'rejected'],
-    ['Approval Denied', 'rejected'], ['Transaction cancelled', 'rejected'], ['403 Forbidden: access denied', 'network'],
+  for (const [message, reason] of [['User rejected the request.', 'rejected'],
+    ['Approval Denied', 'rejected'], ['Transaction cancelled', 'rejected'], ['The Umbra v2 unlock message was declined.', 'rejected'],
+    ['403 Forbidden: access denied', 'network'], ['TypeError: Failed to fetch', 'network'], ['Umbra v2 could not finish reading your notes (scan)', 'network'],
     ['Attempt to debit an account but found no record of a prior credit.', 'insufficient_funds'], ['insufficient lamports 5000, need 9000', 'insufficient_funds'],
-    ['custom program error: 0x1771', 'slippage'], ['TypeError: Failed to fetch', 'network'], ['block height exceeded', 'network'],
-    ['Transaction was not confirmed in 60.00 seconds', 'network'], ['Unsupported payment pool', 'other'], ['', 'other']]) {
+    ['This wallet has no Umbra v2 private balance yet', 'insufficient_funds'], ['custom program error: 0x1771', 'slippage'],
+    ['Umbra v2 needs the page reloaded before it can send. Reload DarkSol and try again.', 'page_reload'],
+    ['The requested method and/or account has not been authorized by the user.', 'wallet'], ['Switch the wallet back to the connected account and try again.', 'wallet'],
+    ['The wallet did not connect to Umbra v2.', 'wallet'], ['Unexpected error', 'wallet'],
+    ['Error generating proof: witness out of bounds', 'proof'],
+    ['the relayer did not take the withdrawal (rejected)', 'relayer'], ['the withdrawal failed (0x1)', 'relayer'],
+    ['Umbra v2 did not see the deposit within three minutes', 'timeout'], ['block height exceeded', 'timeout'],
+    ['Transaction was not confirmed in 60.00 seconds', 'timeout'],
+    ['The Umbra v2 deposit did not land (failed)', 'tx_failed'], ['Transaction simulation failed: Error processing Instruction 2: custom program error: 0x1', 'tx_failed'],
+    ['Unsupported payment pool', 'other'], ['', 'other']]) {
     assert.equal(failureReason(new Error(message)), reason, message)
   }
   assert.equal(failureReason('User rejected'), 'rejected'); assert.equal(failureReason(undefined), 'other')

@@ -1,7 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Keypair, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js'
-import { standardProvider } from '../src/wallet-session.js'
+import { noWalletLinks, standardProvider } from '../src/wallet-session.js'
+
+test('with no wallet, a phone opens this very page inside a wallet app; a computer gets where to install one', () => {
+  const page = 'https://darksol.app/pay/abc?x=1#top'
+  const iphone = noWalletLinks(page, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1')
+  assert.equal(iphone.phone, true)
+  assert.deepEqual(iphone.links.map((link) => link.href), [
+    'https://phantom.app/ul/browse/https%3A%2F%2Fdarksol.app%2Fpay%2Fabc%3Fx%3D1%23top?ref=https%3A%2F%2Fdarksol.app',
+    'https://solflare.com/ul/v1/browse/https%3A%2F%2Fdarksol.app%2Fpay%2Fabc%3Fx%3D1%23top?ref=https%3A%2F%2Fdarksol.app'])
+  // iPadOS asks for desktop pages as a Mac; only touch gives it away.
+  assert.equal(noWalletLinks(page, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15', 5).phone, true)
+  const desktop = noWalletLinks(page, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/131.0 Safari/537.36', 0)
+  assert.equal(desktop.phone, false)
+  assert.deepEqual(desktop.links.map((link) => link.href), ['https://phantom.com/download', 'https://solflare.com/download'])
+})
 
 // A Wallet Standard wallet that signs with a local keypair, as Solflare or Phantom would.
 function fakeWallet() {
