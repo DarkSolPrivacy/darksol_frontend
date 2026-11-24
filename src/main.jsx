@@ -11,7 +11,7 @@ import PoolPrivacy, { NearCiPrivacy } from './pool-privacy.jsx'
 import { PRIVACY_POOLS } from './pool-privacy.js'
 import { dropCampaignTags, recordPageView } from './page-views.js'
 import { failureReason, track } from './product-events.js'
-import { useWalletSession } from './wallet-session.js'
+import { noWalletLinks, useWalletSession } from './wallet-session.js'
 import { sanitizeAmount, sanitizeSolanaAddress, validateTransfer } from './transfer-validation.js'
 import { swapEligibility } from './swap-routes.js'
 import { usdText, useUsdPrices } from './token-price.js'
@@ -1877,17 +1877,24 @@ function PaymentLinksPage({ walletSession }) {
   return <PaymentLinks summary={summary} walletSession={walletSession} />
 }
 
-// Opens when Connect finds more than one installed wallet.
+// Opens when Connect finds more than one installed wallet, or none: then a phone
+// opens this page inside a wallet app, a computer gets where to install one.
 function WalletPicker({ picker }) {
   const dialog = useRef(null)
   useEffect(() => { picker ? dialog.current?.showModal() : dialog.current?.close() }, [picker])
+  const none = picker && !picker.options.length ? noWalletLinks(window.location.href, navigator.userAgent, navigator.maxTouchPoints) : null
   return <dialog className="paymentDialog walletPicker" ref={dialog} aria-labelledby="walletPickerTitle" onClose={() => picker?.resolve(null)}>
     {picker && <>
-      <h3 id="walletPickerTitle">Connect a wallet</h3>
-      <div className="walletChoices">{picker.options.map((option) => <button key={option.name} className="ghost" type="button" onClick={() => picker.resolve(option)}>
-        {option.icon && <img src={option.icon} alt="" />}{option.name}
-      </button>)}</div>
-      <div className="paymentDialogActions"><button className="ghost" type="button" onClick={() => dialog.current.close()}>Cancel</button></div>
+      <h3 id="walletPickerTitle">{none ? 'No Solana wallet found' : 'Connect a wallet'}</h3>
+      {none && <p>{none.phone ? 'On a phone, DarkSol connects from inside your wallet app.' : 'Install a wallet extension, then reload this page.'}</p>}
+      <div className="walletChoices">{none
+        ? none.links.map((link) => <a key={link.name} className="ghost" href={link.href} {...(!none.phone && { target: '_blank', rel: 'noopener noreferrer' })}>
+          {none.phone ? `Open in ${link.name}` : `Install ${link.name}`}
+        </a>)
+        : picker.options.map((option) => <button key={option.name} className="ghost" type="button" onClick={() => picker.resolve(option)}>
+          {option.icon && <img src={option.icon} alt="" />}{option.name}
+        </button>)}</div>
+      <div className="paymentDialogActions"><button className="ghost" type="button" onClick={() => dialog.current.close()}>{none ? 'Close' : 'Cancel'}</button></div>
     </>}
   </dialog>
 }

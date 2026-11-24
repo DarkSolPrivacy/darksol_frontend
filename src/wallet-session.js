@@ -73,13 +73,24 @@ function walletChoices() {
   return choices.length || !injected ? choices : [{ name: 'Browser wallet', icon: null, provider: injected }]
 }
 
+// With no wallet in this browser: on a phone, open this page inside a wallet app's
+// own browser (their universal links, which also lead to the app store); on a
+// computer, where to install one. iPadOS reports a Mac, with touch.
+export function noWalletLinks(href, userAgent = '', touchPoints = 0) {
+  const phone = /Android|iPhone|iPad|iPod/i.test(userAgent) || (/Macintosh/.test(userAgent) && touchPoints > 1)
+  const page = encodeURIComponent(href), ref = encodeURIComponent(new URL(href).origin)
+  return { phone, links: phone
+    ? [{ name: 'Phantom', href: `https://phantom.app/ul/browse/${page}?ref=${ref}` }, { name: 'Solflare', href: `https://solflare.com/ul/v1/browse/${page}?ref=${ref}` }]
+    : [{ name: 'Phantom', href: 'https://phantom.com/download' }, { name: 'Solflare', href: 'https://solflare.com/download' }] }
+}
+
 const remembered = () => { try { return localStorage.getItem(LAST_WALLET) } catch { return null } }
 const remember = (name) => { try { name ? localStorage.setItem(LAST_WALLET, name) : localStorage.removeItem(LAST_WALLET) } catch { /* Pick again next visit. */ } }
 
 export function useWalletSession() {
   const [wallet, setWallet] = useState(null)
   const [connecting, setConnecting] = useState(false)
-  // Set while the user picks between several installed wallets.
+  // Set while the user picks between several installed wallets, or, with none, reads where to get one.
   const [picker, setPicker] = useState(null)
   const pending = useRef(null)
   const generation = useRef(0)
@@ -136,7 +147,13 @@ export function useWalletSession() {
     pending.current = (async () => {
       await mobileWallet
       const options = walletChoices()
-      if (!options.length) throw new Error('Install a Solana wallet such as Phantom or Solflare')
+      if (!options.length) {
+        // Nothing to connect: the picker offers a wallet app instead. Counted once
+        // per page load, so tapping Connect again is not another visitor.
+        track('wallet_connect_failed', { reason: 'no_wallet' }, { once: 'no_wallet' })
+        await new Promise((resolve) => setPicker({ options, resolve }))
+        return null
+      }
       const choice = options.length === 1 ? options[0] : await new Promise((resolve) => setPicker({ options, resolve }))
       if (!choice) { track('wallet_connect_failed', { reason: 'cancelled' }); return null }
       const { provider } = choice
